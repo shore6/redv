@@ -89,11 +89,17 @@ pub struct Instance {
     pub out_ports: Vec<(String, usize)>,
 }
 
-struct Elaborator<'c> {
+struct Elaborator<'c, 'p> {
     c: &'c mut Circuit,
+    /// 階層インスタンス化の解決に使う logic 定義表
+    logics: &'p HashMap<String, LogicDef>,
+    /// 現在エラボレート中の logic 名(再帰インスタンス化検出用)
+    stack: Vec<String>,
+    /// サブインスタンスのノード名を一意化する連番
+    counter: usize,
 }
 
-impl Elaborator<'_> {
+impl<'p> Elaborator<'_, 'p> {
     fn apply_elem(
         &mut self,
         node_id: usize,
@@ -151,27 +157,72 @@ impl Elaborator<'_> {
         Ok(())
     }
 
+    /// sim から呼ばれる最上位エラボレート。入力ポートは sim 変数で駆動する
+    /// `Input` ノードになる。
     fn build(
         &mut self,
-        l: &LogicDef,
+        l: &'p LogicDef,
         prefix: &str,
         arg_vars: &[String],
         call_line: i32,
     ) -> RvResult<Instance> {
+        let (in_nodes, outs) = self.elaborate(l, prefix, true, call_line, arg_vars.len())?;
+        Ok(Instance {
+            in_vars: arg_vars.to_vec(),
+            in_nodes,
+            out_ports: outs,
+        })
+    }
+
+    /// logic 定義 1 つを回路ノード群へ展開する。
+    ///
+    /// - `top_level == true` … 入力ポートは sim 変数で駆動する `Input` ノード。
+    /// - `top_level == false` … 階層インスタンス。入力ポートは親ノードから駆動される
+    ///   `Plain` ノードで、結線は呼び出し側が行う。
+    ///
+    /// 返り値は (ポート順の入力ノード列, 出力ポート列)。
+    fn elaborate(
+        &mut self,
+        l: &'p LogicDef,
+        prefix: &str,
+        top_level: bool,
+        call_line: i32,
+        arg_count: usize,
+    ) -> RvResult<(Vec<usize>, Vec<(String, usize)>)> {
+        if self.stack.iter().any(|n| n == &l.name) {
+            self.stack.push(l.name.clone());
+            return fail(
+                call_line,
+                format!(
+                    "recursive logic instantiation: {}",
+                    self.stack.join(" -> ")
+                ),
+            );
+        }
+        self.stack.push(l.name.clone());
+
         let mut scope: HashMap<String, usize> = HashMap::new();
         let mut qual_of: HashMap<String, Qual> = HashMap::new();
         let mut wire_names: HashSet<String> = HashSet::new();
         let mut in_order: Vec<String> = Vec::new();
         let mut outs: Vec<(String, usize)> = Vec::new();
+        // 階層インスタンス文(全ノード確定後にまとめて結線する)
+        let mut instances: Vec<(i32, String, String, Vec<String>)> = Vec::new();
 
         for p in &l.ports {
             if scope.contains_key(&p.name) {
                 return fail(p.line, format!("duplicate port name: {}", p.name));
             }
-            let id = self.c.new_node(
-                format!("{}.{}", prefix, p.name),
-                if p.input { NodeKind::Input } else { NodeKind::Plain },
-            );
+            let kind = if p.input {
+                if top_level {
+                    NodeKind::Input
+                } else {
+                    NodeKind::Plain
+                }
+            } else {
+                NodeKind::Plain
+            };
+            let id = self.c.new_node(format!("{}.{}", prefix, p.name), kind);
             if !p.input {
                 self.c.nodes[id].is_out_port = true;
             }
@@ -182,14 +233,14 @@ impl Elaborator<'_> {
                 outs.push((p.name.clone(), id));
             }
         }
-        if arg_vars.len() != in_order.len() {
+        if arg_count != in_order.len() {
             return fail(
                 call_line,
                 format!(
                     "{}: expected {} input argument(s), got {}",
                     l.name,
                     in_order.len(),
-                    arg_vars.len()
+                    arg_count
                 ),
             );
         }
@@ -200,6 +251,14 @@ impl Elaborator<'_> {
 
         for st in &l.stmts {
             match st {
+                LogicStmt::Instance {
+                    line,
+                    output,
+                    callee,
+                    args,
+                } => {
+                    instances.push((*line, output.clone(), callee.clone(), args.clone()));
+                }
                 LogicStmt::DeclWire { line, names } => {
                     for n in names {
                         if scope.contains_key(n) || wire_names.contains(n) {
@@ -360,6 +419,63 @@ impl Elaborator<'_> {
             self.c.add_edge(prev, ti, decay);
         }
 
+        // 階層インスタンスの結線(親ノード <-> サブ logic のポート)
+        for (line, output, callee, args) in &instances {
+            let sub = match self.logics.get(callee) {
+                Some(s) => s,
+                None => return fail(*line, format!("unknown logic: {}", callee)),
+            };
+            // 親側の結線端点を解決(reg / ポートのみ。wire は不可)
+            if wire_names.contains(output) {
+                return fail(
+                    *line,
+                    format!("logic instance output '{}' must be a reg/port, not a wire", output),
+                );
+            }
+            let out_node = match scope.get(output) {
+                Some(n) => *n,
+                None => return fail(*line, format!("unknown instance output target: {}", output)),
+            };
+            let mut arg_nodes: Vec<usize> = Vec::new();
+            for a in args {
+                if wire_names.contains(a) {
+                    return fail(
+                        *line,
+                        format!("logic instance argument '{}' must be a reg/port, not a wire", a),
+                    );
+                }
+                match scope.get(a) {
+                    Some(n) => arg_nodes.push(*n),
+                    None => {
+                        return fail(*line, format!("unknown logic instance argument: {}", a))
+                    }
+                }
+            }
+            // サブ logic を展開(入力ポートは Plain ノードになる)
+            self.counter += 1;
+            let sub_prefix = format!("{}/{}#{}", prefix, callee, self.counter);
+            let (sub_in, sub_out) =
+                self.elaborate(sub, &sub_prefix, false, *line, args.len())?;
+            if sub_out.is_empty() {
+                return fail(*line, format!("{} has no output port to bind", callee));
+            }
+            if sub_out.len() > 1 {
+                return fail(
+                    *line,
+                    format!(
+                        "{} has multiple output ports; the binding form 'out = logic(...)' supports exactly one",
+                        callee
+                    ),
+                );
+            }
+            // 親の引数ノード -> サブ入力ポート(減衰なし直結)
+            for (pa, si) in arg_nodes.iter().zip(sub_in.iter()) {
+                self.c.add_edge(*pa, *si, 0);
+            }
+            // サブ出力ポート -> 親の出力先(減衰なし直結)
+            self.c.add_edge(sub_out[0].1, out_node, 0);
+        }
+
         // 未接続 output ポート検査(仕様: エラー)
         for (name, node) in &outs {
             let r = self.c.find(*node);
@@ -374,12 +490,9 @@ impl Elaborator<'_> {
             }
         }
 
+        self.stack.pop();
         let in_nodes = in_order.iter().map(|n| scope[n]).collect();
-        Ok(Instance {
-            in_vars: arg_vars.to_vec(),
-            in_nodes,
-            out_ports: outs,
-        })
+        Ok((in_nodes, outs))
     }
 }
 
@@ -667,7 +780,12 @@ impl<'a> ModuleExec<'a> {
                 }
             }
             let inst = {
-                let mut el = Elaborator { c: &mut self.c };
+                let mut el = Elaborator {
+                    c: &mut self.c,
+                    logics: &prog.logics,
+                    stack: Vec::new(),
+                    counter: 0,
+                };
                 el.build(lit, &key, bind_args, line)?
             };
             self.insts.insert(key.clone(), inst);
