@@ -265,6 +265,31 @@ impl Parser {
         // assignment
         let target = self.expect_ident("assignment target")?;
         self.expect_punct("=")?;
+        // 階層インスタンス化:  output = callee(args...)
+        if self.cur().k == Tk::Ident && self.peek(1).k == Tk::Punct && self.peek(1).s == "(" {
+            let callee = self.cur().s.clone();
+            self.i += 2; // ident '('
+            let mut args = Vec::new();
+            if !self.is_punct(")") {
+                loop {
+                    args.push(self.expect_ident("logic input (reg/port name)")?);
+                    if self.is_punct(",") {
+                        self.i += 1;
+                        continue;
+                    }
+                    break;
+                }
+            }
+            self.expect_punct(")")?;
+            self.expect_punct(";")?;
+            stmts.push(LogicStmt::Instance {
+                line: ln,
+                output: target,
+                callee,
+                args,
+            });
+            return Ok(());
+        }
         if self.cur().k == Tk::Num {
             let strength = self.cur().num as i32;
             self.i += 1;
