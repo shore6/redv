@@ -1,8 +1,9 @@
 //! ゴールデンテスト: examples/*.rv を実行し、tests/expected/*.txt と
 //! 標準出力がバイト一致することを検証する(オリジナル tests/run.sh 相当)。
 
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// リリース/デバッグどちらでも cargo がビルドした redv バイナリのパス。
 /// CARGO_BIN_EXE_<name> は統合テスト実行時に cargo が自動設定する。
@@ -68,6 +69,52 @@ fn counter_test() {
 #[test]
 fn clock() {
     run_golden("clock");
+}
+
+/// stdin を流し込んで stdout がゴールデンと一致するか検証する。
+fn run_golden_stdin(name: &str, input: &str) {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let rv = format!("{manifest}/examples/{name}.rv");
+    let expected_path = format!("{manifest}/tests/expected/{name}.txt");
+
+    assert!(Path::new(&rv).exists(), "missing example: {rv}");
+    let expected =
+        std::fs::read(&expected_path).unwrap_or_else(|e| panic!("read {expected_path}: {e}"));
+
+    let mut child = Command::new(bin())
+        .arg(&rv)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn redv: {e}"));
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(input.as_bytes())
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait redv");
+
+    assert!(
+        out.status.success(),
+        "{name}: exit {:?}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    if out.stdout != expected {
+        panic!(
+            "{name}: stdout mismatch\n--- expected ---\n{}\n--- got ---\n{}",
+            String::from_utf8_lossy(&expected),
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
+#[test]
+fn scan_and() {
+    run_golden_stdin("scan_and", "15 0\n");
 }
 
 /// CLI 動作: 引数なしは usage を出して終了コード 2。

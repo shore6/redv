@@ -73,6 +73,9 @@ module test() {
 - `monitor(fmt, ...)` … その場で出力。`%` / `%d` / `%t` が次の引数を消費、`%2d` のような幅指定可、
   `%%` で `%`
 - `wait(n)` … `$time` を進めず、monitor も発火させずに n tick 待つ(発振回路用)
+- `v = scan()` … **stdin** から空白/改行区切りの整数を 1 つ読み、変数 `v` に代入する。
+  EOF(入力切れ)・非数値は **エラー**。回路へ束縛した変数は読み取り後も 0–15 にクランプされる。
+  テストでは `redv foo.rv < input.txt` のように入力を固定すれば決定的に再現できる
 - `$time` … `#init` 完了時(未使用なら sim 開始時)を 0 とした経過 tick
 - `if` / `while` / `for` … C 準拠(`for (i = 0; i < 4; i = i + 1) { ... }`)
 
@@ -128,6 +131,7 @@ module test() {
 | `examples/decay.rv` | ダスト減衰 / リピータ再増幅 / コンパレータの強度パススルーの比較 |
 | `examples/counter_test.rv` | `for` / `if` で AND の真理値表を自動検証 |
 | `examples/clock.rv` | トーチ + リピータ 4 のクロック(周期 10)。`wait()` の使用例 |
+| `examples/scan_and.rv` | `scan()` で stdin から 2 値を読んで AND に通す |
 
 ---
 
