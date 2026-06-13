@@ -68,6 +68,14 @@ pub enum LogicStmt {
         strength: i32,
         rhs: String,
     },
+    /// `output = callee(args...)` — 別 logic の階層インスタンス化。
+    /// `output` は親の reg / ポート、`args` は親の reg / ポート名。
+    Instance {
+        line: i32,
+        output: String,
+        callee: String,
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone)]

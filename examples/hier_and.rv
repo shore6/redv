@@ -1,0 +1,47 @@
+/* 階層化のデモ: 既存の not_gate / or_gate を組み合わせて AND を構成。
+   ド・モルガン則  a AND b = NOT( (NOT a) OR (NOT b) )  を logic の入れ子で記述する。 */
+
+logic not_gate(input a, output y) {
+    wire w;
+    w = a-t-y;          // トーチ 1 本で NOT
+}
+
+logic or_gate(input a, input b, output y) {
+    wire w1, w2;
+    w1 = a-r-y;         // a をリピータ経由で y へ
+    w2 = b-r-y;         // b をリピータ経由で y へ(y で合流 = 最大値)
+}
+
+/* 下位 logic を 4 個インスタンス化して AND を組む */
+logic and2(input a, input b, output y) {
+    reg na, nb, o;      // 中間ノード(階層インスタンスの結線端点)
+    na = not_gate(a);   // na = !a
+    nb = not_gate(b);   // nb = !b
+    o  = or_gate(na, nb);   // o = na | nb = !a | !b
+    y  = not_gate(o);   // y = !o = a & b
+}
+
+module sweep_and()
+{
+    var a, b, y;
+    var i, ng;
+    sim {
+        a = 0; b = 0; ng = 0;
+        y = and2(a, b);
+        #init
+        for (i = 0; i < 4; i = i + 1) {
+            a = (i / 2) * 15;
+            b = (i % 2) * 15;
+            #6                          // 階層 4 段(トーチ/リピータ)の伝搬を待つ
+            monitor("a=%2d b=%2d -> y=%2d", a, b, y);
+            if ((a > 0 && b > 0) != (y > 0)) {
+                monitor("   <- NG!\n");
+                ng = ng + 1;
+            } else {
+                monitor("   ok\n");
+            }
+        }
+        if (ng == 0) { monitor("hierarchical AND: all passed\n"); }
+        else         { monitor("hierarchical AND: % failure(s)\n", ng); }
+    }
+}

@@ -70,6 +70,11 @@ fn clock() {
     run_golden("clock");
 }
 
+#[test]
+fn hier_and() {
+    run_golden("hier_and");
+}
+
 /// CLI 動作: 引数なしは usage を出して終了コード 2。
 #[test]
 fn no_args_exits_2() {
