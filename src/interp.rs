@@ -746,6 +746,20 @@ impl<'a> ModuleExec<'a> {
         Ok(())
     }
 
+    /// `x = scan();` — stdin から空白/改行区切りの整数を 1 つ読み、変数に代入する。
+    /// EOF・非数値はエラー(厳しめ診断)。
+    fn do_scan(&mut self, line: i32, target: &str, bind_args: &[String]) -> RvResult<()> {
+        if !bind_args.is_empty() {
+            return fail(line, "scan() takes no arguments");
+        }
+        if !self.vars.contains_key(target) {
+            return fail(line, format!("undeclared variable: {}", target));
+        }
+        let v = read_stdin_int(line)?;
+        self.vars.insert(target.to_string(), v);
+        Ok(())
+    }
+
     fn do_call_bind(
         &mut self,
         line: i32,
@@ -836,7 +850,11 @@ impl<'a> ModuleExec<'a> {
                 callee,
                 bind_args,
             } => {
-                self.do_call_bind(*line, target, callee, bind_args)?;
+                if callee == "scan" {
+                    self.do_scan(*line, target, bind_args)?;
+                } else {
+                    self.do_call_bind(*line, target, callee, bind_args)?;
+                }
             }
             SimStmt::WaitTicks { ticks, .. } => {
                 self.run_ticks(*ticks, true)?;
@@ -916,6 +934,47 @@ impl<'a> ModuleExec<'a> {
             }
         }
         Ok(())
+    }
+}
+
+/// stdin から空白/改行区切りの整数トークンを 1 つ読む。
+/// 先読みは区切り 1 バイトのみなので、scan() を複数回呼んでもトークン境界は保たれる。
+fn read_stdin_int(line: i32) -> RvResult<i64> {
+    use std::io::Read;
+    let mut stdin = std::io::stdin();
+    let mut buf = [0u8; 1];
+    let mut s = String::new();
+    loop {
+        let n = match stdin.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => return fail(line, format!("scan(): failed to read stdin: {}", e)),
+        };
+        if n == 0 {
+            // EOF
+            if s.is_empty() {
+                return fail(line, "scan(): unexpected end of input (no more integers on stdin)");
+            }
+            break;
+        }
+        let c = buf[0] as char;
+        if s.is_empty() {
+            if c.is_whitespace() {
+                continue; // 先頭の空白は読み飛ばす
+            }
+            if c == '-' || c == '+' || c.is_ascii_digit() {
+                s.push(c);
+            } else {
+                return fail(line, format!("scan(): expected an integer but found '{}'", c));
+            }
+        } else if c.is_ascii_digit() {
+            s.push(c);
+        } else {
+            break; // 区切り文字でトークン終了(この 1 バイトは捨てる)
+        }
+    }
+    match s.parse::<i64>() {
+        Ok(v) => Ok(v),
+        Err(_) => fail(line, format!("scan(): invalid integer literal '{}'", s)),
     }
 }
 
