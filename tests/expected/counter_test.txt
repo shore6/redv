@@ -1,0 +1,5 @@
+a= 0 b= 0 -> y= 0   ok
+a= 0 b=15 -> y= 0   ok
+a=15 b= 0 -> y= 0   ok
+a=15 b=15 -> y=15   ok
+AND truth table: all passed

@@ -1,0 +1,28 @@
+/* NOT回路: トーチ1本で反転 */
+logic not_gate(input a, output y)
+{
+    wire w;        // ワイヤーを初期化
+    w = a-t-y;     // トーチを通じて a と y を接続 (これだけでNOT)
+}
+
+module test_not_gate()
+{
+    var a;
+    var y;
+    sim {
+        a = 0;
+        y = not_gate(a);   // 接続(初回のみインスタンス化、以降は束縛のみ)
+        #init              // 定常状態まで待つ (時刻0)
+
+        a = 10;
+        #1                 // 時刻1: トーチ未反応(出力は1tick遅れ)
+        #1                 // 時刻2: 反転が反映
+        #1                 // 時刻3
+
+        a = 0;
+        #1                 // 時刻4
+        #1                 // 時刻5: 再点灯
+
+        ?monitor("時刻=%t | a=% | 出力y=%\n", $time, a, y);
+    }
+}

@@ -1,0 +1,26 @@
+/* AND回路: NOT(NOT a OR NOT b) をトーチ3本で構成 */
+logic and_gate(input a, input b, output y)
+{
+    reg m;
+    m = d;          // NOR合流点
+    wire w1, w2, w3;
+    w1 = a-t-m;
+    w2 = b-t-m;
+    w3 = m-t-y;
+}
+
+module test_and_gate()
+{
+    var a, b;
+    var y;
+    sim {
+        a = 0; b = 0;
+        y = and_gate(a, b);
+        #init
+        ?monitor("t=%t | a=%2d b=%2d | y=%2d\n", $time, a, b, y);
+
+        a = 15;          #3     // トーチ2段 = 遅延2tick + 入力反映1tick
+        b = 15;          #3     // 両方ON -> y=15
+        a = 0;           #3     // 片方OFF -> y=0
+    }
+}

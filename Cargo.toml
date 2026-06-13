@@ -1,0 +1,12 @@
+[package]
+name = "redv"
+version = "0.1.0"
+edition = "2021"
+description = "Minecraft redstone circuit HDL simulator (element-level)"
+
+[[bin]]
+name = "redv"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2

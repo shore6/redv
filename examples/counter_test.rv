@@ -1,0 +1,35 @@
+/* for/while/if を使ったスイープテスト: 全入力組み合わせでANDを検証 */
+logic and_gate(input a, input b, output y)
+{
+    reg m;
+    m = d;
+    wire w1, w2, w3;
+    w1 = a-t-m;
+    w2 = b-t-m;
+    w3 = m-t-y;
+}
+
+module sweep_and()
+{
+    var a, b, y;
+    var i, ng;
+    sim {
+        a = 0; b = 0; ng = 0;
+        y = and_gate(a, b);
+        #init
+        for (i = 0; i < 4; i = i + 1) {
+            a = (i / 2) * 15;
+            b = (i % 2) * 15;
+            #3                          // 伝搬を待つ(トーチ2段=2tick+余裕)
+            monitor("a=%2d b=%2d -> y=%2d", a, b, y);
+            if ((a > 0 && b > 0) != (y > 0)) {
+                monitor("   <- NG!\n");
+                ng = ng + 1;
+            } else {
+                monitor("   ok\n");
+            }
+        }
+        if (ng == 0) { monitor("AND truth table: all passed\n"); }
+        else         { monitor("AND truth table: % failure(s)\n", ng); }
+    }
+}

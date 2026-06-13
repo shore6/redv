@@ -1,0 +1,38 @@
+/* 信号強度の減衰:
+ *  - ダスト1個につき強度が1減衰する
+ *  - リピータは強度を15に再増幅する(遅延1tick)
+ *  - コンパレータ(比較モード)は強度を「そのまま」通す(遅延1tick) */
+logic via_d8(input a, output y)
+{
+    wire w;
+    w = a-d8-y;        // ダスト8個 (= dddddddd): 15 -> 7
+}
+
+logic via_rep(input a, output y)
+{
+    wire w;
+    w = a-d4rd4-y;     // 途中で再増幅: 15 -> 11, 5 -> 11
+}
+
+logic via_cmp(input a, output y)
+{
+    wire w;
+    w = a-d4ccd4-y;    // 強度を保持して中継(アナログ値を運べる): 15 -> 7
+}
+
+module test_decay()
+{
+    var a;
+    var y1, y2, y3;
+    sim {
+        a = 15;
+        y1 = via_d8(a);
+        y2 = via_rep(a);
+        y3 = via_cmp(a);
+        #init
+        ?monitor("t=%t | a=%2d | d8: y1=%2d | d4rd4: y2=%2d | d4ccd4: y3=%2d\n", $time, a, y1, y2, y3);
+
+        a = 5;  #3
+        a = 0;  #3
+    }
+}

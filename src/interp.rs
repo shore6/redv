@@ -1,0 +1,832 @@
+//! redv - elaboration & module/sim interpreter
+//!
+//! C++ 版 `interp.hpp` の移植。logic 定義を回路グラフへエラボレートし、module の sim を実行する。
+//! `?monitor` は sim 開始時にホイストされ、各ウェイト完了直後に発火する(Verilog $monitor 風)。
+//!
+//! 借用検査の都合上、`insts` / `out_bind` を走査しつつ回路を書き換える箇所は、
+//! 必要な値を一旦ローカルへ集めてから適用する(結果は原実装と同一)。
+
+use crate::ast::*;
+use crate::circuit::{Circuit, Config, NodeKind, SeqKind};
+use crate::diag::{fail, warn, RvResult};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::Write;
+
+// ---- element chunk parsing: "ddr2brdccbr4d3" -> element list -----------
+
+pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'd' {
+            i += 1;
+            if i < b.len() && b[i] == b'x' {
+                out.push(Elem { k: 'x', n: 1, line });
+                i += 1;
+            } else if i < b.len() && b[i].is_ascii_digit() {
+                let mut n = 0i32;
+                while i < b.len() && b[i].is_ascii_digit() {
+                    n = n * 10 + (b[i] - b'0') as i32;
+                    i += 1;
+                }
+                if n <= 0 {
+                    return fail(line, "dust count must be >= 1");
+                }
+                for _ in 0..n {
+                    out.push(Elem { k: 'd', n: 1, line });
+                }
+            } else {
+                out.push(Elem { k: 'd', n: 1, line });
+            }
+        } else if c == b'r' {
+            i += 1;
+            let mut n = 1i32;
+            if i < b.len() && b[i].is_ascii_digit() {
+                n = (b[i] - b'0') as i32;
+                i += 1;
+                if !(1..=4).contains(&n) || (i < b.len() && b[i].is_ascii_digit()) {
+                    return fail(line, format!("repeater delay must be 1-4 in \"{}\"", s));
+                }
+            }
+            out.push(Elem { k: 'r', n, line });
+        } else if c == b't' {
+            out.push(Elem { k: 't', n: 1, line });
+            i += 1;
+        } else if c == b'b' {
+            out.push(Elem { k: 'b', n: 1, line });
+            i += 1;
+        } else if c == b'c' {
+            if i + 1 >= b.len() {
+                return fail(
+                    line,
+                    "comparator must be written 'cc' (compare) or 'cd' (subtract)",
+                );
+            }
+            let m = b[i + 1];
+            if m == b'c' {
+                out.push(Elem { k: 'C', n: 1, line });
+            } else if m == b'd' {
+                out.push(Elem { k: 'S', n: 1, line });
+            } else {
+                return fail(line, format!("comparator must be written 'cc' or 'cd' in \"{}\"", s));
+            }
+            i += 2;
+        } else {
+            return fail(line, format!("unknown element '{}' in \"{}\"", c as char, s));
+        }
+    }
+    Ok(out)
+}
+
+// ---- logic instance ----------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct Instance {
+    pub in_vars: Vec<String>,
+    pub in_nodes: Vec<usize>,
+    pub out_ports: Vec<(String, usize)>,
+}
+
+struct Elaborator<'c> {
+    c: &'c mut Circuit,
+}
+
+impl Elaborator<'_> {
+    fn apply_elem(
+        &mut self,
+        node_id: usize,
+        tok: &str,
+        strength: i32,
+        qual: Qual,
+        line: i32,
+    ) -> RvResult<()> {
+        let es = parse_chunk(tok, line)?;
+        if es.len() != 1 {
+            return fail(line, format!("a reg must hold exactly one element: \"{}\"", tok));
+        }
+        let e = es[0];
+        let root = self.c.find(node_id);
+        if self.c.nodes[root].elem_assigned {
+            if self.c.nodes[root].is_const_qual {
+                return fail(line, "cannot reassign element of a const reg");
+            }
+            warn(line, "reg element reassigned (last assignment wins)");
+        }
+        if e.k == 'r' || e.k == 't' || e.k == 'C' || e.k == 'S' {
+            return fail(
+                line,
+                format!(
+                    "element \"{}\" cannot be placed in a reg (sequential elements belong inside wires)",
+                    tok
+                ),
+            );
+        }
+        if qual == Qual::Const {
+            if strength < 0 {
+                return fail(line, "const reg requires a signal strength (e.g. 15b)");
+            }
+            if strength > 15 {
+                return fail(
+                    line,
+                    format!("const signal strength out of range 0-15: {}", strength),
+                );
+            }
+            let nd = &mut self.c.nodes[root];
+            nd.kind = NodeKind::Const;
+            nd.base = strength;
+            nd.is_const_qual = true;
+        } else {
+            if strength >= 0 {
+                return fail(line, "signal-strength literals are only allowed on const reg");
+            }
+            self.c.nodes[root].kind = if e.k == 'b' {
+                NodeKind::Block
+            } else {
+                NodeKind::Plain
+            };
+        }
+        self.c.nodes[root].elem_assigned = true;
+        Ok(())
+    }
+
+    fn build(
+        &mut self,
+        l: &LogicDef,
+        prefix: &str,
+        arg_vars: &[String],
+        call_line: i32,
+    ) -> RvResult<Instance> {
+        let mut scope: HashMap<String, usize> = HashMap::new();
+        let mut qual_of: HashMap<String, Qual> = HashMap::new();
+        let mut wire_names: HashSet<String> = HashSet::new();
+        let mut in_order: Vec<String> = Vec::new();
+        let mut outs: Vec<(String, usize)> = Vec::new();
+
+        for p in &l.ports {
+            if scope.contains_key(&p.name) {
+                return fail(p.line, format!("duplicate port name: {}", p.name));
+            }
+            let id = self.c.new_node(
+                format!("{}.{}", prefix, p.name),
+                if p.input { NodeKind::Input } else { NodeKind::Plain },
+            );
+            if !p.input {
+                self.c.nodes[id].is_out_port = true;
+            }
+            scope.insert(p.name.clone(), id);
+            if p.input {
+                in_order.push(p.name.clone());
+            } else {
+                outs.push((p.name.clone(), id));
+            }
+        }
+        if arg_vars.len() != in_order.len() {
+            return fail(
+                call_line,
+                format!(
+                    "{}: expected {} input argument(s), got {}",
+                    l.name,
+                    in_order.len(),
+                    arg_vars.len()
+                ),
+            );
+        }
+
+        // wire の最終代入記録(再代入 -> 警告、最後が勝つ)
+        let mut wfinal: HashMap<String, &LogicStmt> = HashMap::new();
+        let mut worder: Vec<String> = Vec::new();
+
+        for st in &l.stmts {
+            match st {
+                LogicStmt::DeclWire { line, names } => {
+                    for n in names {
+                        if scope.contains_key(n) || wire_names.contains(n) {
+                            return fail(*line, format!("duplicate name: {}", n));
+                        }
+                        wire_names.insert(n.clone());
+                    }
+                }
+                LogicStmt::DeclReg {
+                    line,
+                    name,
+                    qual,
+                    init,
+                } => {
+                    if scope.contains_key(name) || wire_names.contains(name) {
+                        return fail(*line, format!("duplicate name: {}", name));
+                    }
+                    let id = self.c.new_node(format!("{}.{}", prefix, name), NodeKind::Plain);
+                    scope.insert(name.clone(), id);
+                    qual_of.insert(name.clone(), *qual);
+                    match init {
+                        Some(ri) => self.apply_elem(id, &ri.tok, ri.strength, *qual, *line)?,
+                        None => {
+                            if *qual == Qual::Const {
+                                return fail(*line, "const reg requires an initializer");
+                            }
+                        }
+                    }
+                }
+                LogicStmt::AssignSingle {
+                    line,
+                    target,
+                    strength,
+                    rhs,
+                } => {
+                    if wire_names.contains(target) {
+                        return fail(*line, "a wire must be assigned a chain like a-...-b");
+                    }
+                    let tnode = match scope.get(target) {
+                        Some(n) => *n,
+                        None => {
+                            return fail(*line, format!("unknown assignment target: {}", target))
+                        }
+                    };
+                    let troot = self.c.find(tnode);
+                    if self.c.nodes[troot].kind == NodeKind::Input
+                        && !scope.contains_key(rhs)
+                        && *strength < 0
+                    {
+                        return fail(
+                            *line,
+                            format!("cannot assign an element to input port '{}'", target),
+                        );
+                    }
+                    if *strength < 0 && scope.contains_key(rhs) {
+                        self.c.merge(tnode, scope[rhs], *line)?; // alias
+                    } else {
+                        let q = qual_of.get(target).copied().unwrap_or(Qual::Plain);
+                        self.apply_elem(tnode, rhs, *strength, q, *line)?;
+                    }
+                }
+                LogicStmt::AssignChain { line, target, .. } => {
+                    if !wire_names.contains(target) {
+                        return fail(
+                            *line,
+                            format!("chain assignment target must be a wire: {}", target),
+                        );
+                    }
+                    if wfinal.contains_key(target) {
+                        warn(
+                            *line,
+                            format!("wire '{}' reassigned (last assignment wins)", target),
+                        );
+                    } else {
+                        worder.push(target.clone());
+                    }
+                    wfinal.insert(target.clone(), st);
+                }
+            }
+        }
+
+        // wire 構築(端点はここまでに存在しているはず)
+        for wn in &worder {
+            let st = wfinal[wn];
+            let (line, from, to, chunks) = match st {
+                LogicStmt::AssignChain {
+                    line,
+                    from,
+                    to,
+                    chunks,
+                    ..
+                } => (*line, from, to, chunks),
+                _ => unreachable!(),
+            };
+            let fi = match scope.get(from) {
+                Some(n) => *n,
+                None => return fail(line, format!("unknown wire endpoint: {}", from)),
+            };
+            let ti = match scope.get(to) {
+                Some(n) => *n,
+                None => return fail(line, format!("unknown wire endpoint: {}", to)),
+            };
+            let mut es: Vec<Elem> = Vec::new();
+            for tok in chunks {
+                if scope.contains_key(tok) || wire_names.contains(tok) {
+                    return fail(
+                        line,
+                        format!(
+                            "named node '{}' cannot appear inside a wire chain (a wire connects exactly two points)",
+                            tok
+                        ),
+                    );
+                }
+                es.extend(parse_chunk(tok, line)?);
+            }
+            let mut prev = fi;
+            let mut decay = 0;
+            let mut idx = 0;
+            for e in &es {
+                idx += 1;
+                match e.k {
+                    'd' | 'x' => decay += 1,
+                    'b' => {
+                        let nn = self
+                            .c
+                            .new_node(format!("{}.{}#b{}", prefix, wn, idx), NodeKind::Block);
+                        self.c.add_edge(prev, nn, decay);
+                        prev = nn;
+                        decay = 0;
+                    }
+                    'r' | 't' | 'C' | 'S' => {
+                        let ni = self
+                            .c
+                            .new_node(format!("{}.{}#i{}", prefix, wn, idx), NodeKind::Plain);
+                        let no = self
+                            .c
+                            .new_node(format!("{}.{}#o{}", prefix, wn, idx), NodeKind::Plain);
+                        self.c.add_edge(prev, ni, decay);
+                        let kind = match e.k {
+                            'r' => SeqKind::Rep,
+                            't' => SeqKind::Torch,
+                            _ => SeqKind::Comp,
+                        };
+                        let dly = if e.k == 'r' { e.n } else { 1 };
+                        self.c.add_seq(
+                            kind,
+                            dly,
+                            ni,
+                            no,
+                            format!("{}.{}[{}]", prefix, wn, idx),
+                        );
+                        prev = no;
+                        decay = 0;
+                    }
+                    _ => {}
+                }
+            }
+            self.c.add_edge(prev, ti, decay);
+        }
+
+        // 未接続 output ポート検査(仕様: エラー)
+        for (name, node) in &outs {
+            let r = self.c.find(*node);
+            if !self.c.nodes[r].has_incoming && self.c.nodes[r].kind != NodeKind::Const {
+                return fail(
+                    call_line,
+                    format!(
+                        "output port '{}' of logic '{}' is not driven (unconnected port)",
+                        name, l.name
+                    ),
+                );
+            }
+        }
+
+        let in_nodes = in_order.iter().map(|n| scope[n]).collect();
+        Ok(Instance {
+            in_vars: arg_vars.to_vec(),
+            in_nodes,
+            out_ports: outs,
+        })
+    }
+}
+
+// ---- module execution --------------------------------------------------
+
+pub struct ModuleExec<'a> {
+    prog: &'a Program,
+    m: &'a ModuleDef,
+    c: Circuit,
+    vars: HashMap<String, i64>,
+    insts: BTreeMap<String, Instance>,
+    out_bind: BTreeMap<String, usize>,
+    mons: Vec<(i32, &'a CallData)>,
+    clamp_warned: HashSet<String>,
+    sim_time: i64,
+}
+
+impl<'a> ModuleExec<'a> {
+    pub fn new(prog: &'a Program, m: &'a ModuleDef, cfg: Config, trace: bool) -> Self {
+        ModuleExec {
+            prog,
+            m,
+            c: Circuit::new(cfg, trace),
+            vars: HashMap::new(),
+            insts: BTreeMap::new(),
+            out_bind: BTreeMap::new(),
+            mons: Vec::new(),
+            clamp_warned: HashSet::new(),
+            sim_time: 0,
+        }
+    }
+
+    pub fn run(&mut self) -> RvResult<()> {
+        let m = self.m;
+        self.exec_list(&m.pre)?;
+        Self::collect_monitors(&m.sim, &mut self.mons);
+        self.exec_list(&m.sim)?;
+        Ok(())
+    }
+
+    fn collect_monitors(body: &'a [SimStmt], out: &mut Vec<(i32, &'a CallData)>) {
+        for s in body {
+            match s {
+                SimStmt::MonReg { line, call } => out.push((*line, call)),
+                SimStmt::If {
+                    body, else_body, ..
+                } => {
+                    Self::collect_monitors(body, out);
+                    Self::collect_monitors(else_body, out);
+                }
+                SimStmt::While { body, .. } | SimStmt::For { body, .. } => {
+                    Self::collect_monitors(body, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn eval_e(&self, e: &Expr) -> RvResult<i64> {
+        match e {
+            Expr::Num { num, .. } => Ok(*num),
+            Expr::Time { .. } => Ok(self.sim_time),
+            Expr::Var { line, name } => match self.vars.get(name) {
+                Some(v) => Ok(*v),
+                None => fail(*line, format!("undeclared variable: {}", name)),
+            },
+            Expr::Un { op, a, .. } => {
+                let v = self.eval_e(a)?;
+                Ok(match op.as_str() {
+                    "-" => -v,
+                    "!" => (v == 0) as i64,
+                    _ => v,
+                })
+            }
+            Expr::Bin { line, op, a, b } => {
+                if op == "&&" {
+                    return Ok(((self.eval_e(a)? != 0) && (self.eval_e(b)? != 0)) as i64);
+                }
+                if op == "||" {
+                    return Ok(((self.eval_e(a)? != 0) || (self.eval_e(b)? != 0)) as i64);
+                }
+                let a = self.eval_e(a)?;
+                let b = self.eval_e(b)?;
+                Ok(match op.as_str() {
+                    "+" => a + b,
+                    "-" => a - b,
+                    "*" => a * b,
+                    "/" => {
+                        if b == 0 {
+                            return fail(*line, "division by zero");
+                        }
+                        a / b
+                    }
+                    "%" => {
+                        if b == 0 {
+                            return fail(*line, "modulo by zero");
+                        }
+                        a % b
+                    }
+                    "<" => (a < b) as i64,
+                    "<=" => (a <= b) as i64,
+                    ">" => (a > b) as i64,
+                    ">=" => (a >= b) as i64,
+                    "==" => (a == b) as i64,
+                    "!=" => (a != b) as i64,
+                    _ => return fail(*line, format!("unknown operator: {}", op)),
+                })
+            }
+        }
+    }
+
+    fn apply_inputs(&mut self) -> RvResult<()> {
+        let mut pairs: Vec<(usize, String)> = Vec::new();
+        for inst in self.insts.values() {
+            for k in 0..inst.in_nodes.len() {
+                pairs.push((inst.in_nodes[k], inst.in_vars[k].clone()));
+            }
+        }
+        for (node, var) in pairs {
+            let v = match self.vars.get(&var) {
+                Some(v) => *v,
+                None => {
+                    return fail(0, format!("undeclared variable bound to logic input: {}", var))
+                }
+            };
+            let mut vv = v;
+            if !(0..=15).contains(&v) {
+                let cv = if v < 0 { 0 } else { 15 };
+                if !self.clamp_warned.contains(&var) {
+                    warn(
+                        0,
+                        format!(
+                            "variable '{}' value {} is outside signal range 0-15; clamped to {}",
+                            var, v, cv
+                        ),
+                    );
+                    self.clamp_warned.insert(var.clone());
+                }
+                vv = cv;
+            }
+            self.c.set_input(node, vv as i32);
+        }
+        Ok(())
+    }
+
+    fn apply_outputs(&mut self) {
+        let pairs: Vec<(String, usize)> =
+            self.out_bind.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        for (var, node) in pairs {
+            let val = self.c.read(node) as i64;
+            self.vars.insert(var, val);
+        }
+    }
+
+    fn tick_once(&mut self) -> RvResult<bool> {
+        self.apply_inputs()?;
+        let ch = self.c.step();
+        self.apply_outputs();
+        Ok(ch)
+    }
+
+    fn run_ticks(&mut self, n: i64, advance_time: bool) -> RvResult<()> {
+        for _ in 0..n {
+            self.tick_once()?;
+            if advance_time {
+                self.sim_time += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn do_init(&mut self, line: i32) -> RvResult<()> {
+        let mut t = 0i64;
+        loop {
+            let ch = self.tick_once()?;
+            t += 1;
+            if !ch {
+                break;
+            }
+            if t > self.c.cfg.init_timeout {
+                return fail(
+                    line,
+                    format!(
+                        "#init did not reach a steady state within {} ticks (oscillating circuit? raise INIT_TIMEOUT or use wait(n) instead)",
+                        self.c.cfg.init_timeout
+                    ),
+                );
+            }
+        }
+        self.sim_time = 0;
+        Ok(())
+    }
+
+    fn do_monitor(&self, line: i32, call: &CallData) -> RvResult<()> {
+        if !call.has_fmt {
+            return fail(line, "monitor() requires a format string as its first argument");
+        }
+        let mut av: Vec<i64> = Vec::new();
+        for a in &call.args {
+            av.push(self.eval_e(a)?);
+        }
+        let f: Vec<char> = call.fmt.chars().collect();
+        let mut out = String::new();
+        let mut ai = 0usize;
+        let mut i = 0usize;
+        while i < f.len() {
+            let c = f[i];
+            if c == '%' {
+                let mut j = i + 1;
+                if j < f.len() && f[j] == '%' {
+                    out.push('%');
+                    i = j;
+                    i += 1;
+                    continue;
+                }
+                let mut width = 0usize;
+                while j < f.len() && f[j].is_ascii_digit() {
+                    width = width * 10 + (f[j] as usize - '0' as usize);
+                    j += 1;
+                }
+                if j < f.len() && (f[j] == 't' || f[j] == 'd') {
+                    j += 1;
+                }
+                let mut v = if ai < av.len() {
+                    let s = av[ai].to_string();
+                    ai += 1;
+                    s
+                } else {
+                    "<?>".to_string()
+                };
+                while v.chars().count() < width {
+                    v.insert(0, ' ');
+                }
+                out.push_str(&v);
+                i = j;
+            } else {
+                out.push(c);
+                i += 1;
+            }
+        }
+        print!("{}", out);
+        std::io::stdout().flush().ok();
+        Ok(())
+    }
+
+    fn fire_monitors(&mut self) -> RvResult<()> {
+        let mons = self.mons.clone();
+        for (line, call) in mons {
+            self.do_monitor(line, call)?;
+        }
+        Ok(())
+    }
+
+    fn do_call_bind(
+        &mut self,
+        line: i32,
+        target: &str,
+        callee: &str,
+        bind_args: &[String],
+    ) -> RvResult<()> {
+        let prog: &'a Program = self.prog;
+        let lit = match prog.logics.get(callee) {
+            Some(l) => l,
+            None => return fail(line, format!("unknown logic: {}", callee)),
+        };
+        let key = format!("{}({})", callee, bind_args.join(","));
+        if !self.insts.contains_key(&key) {
+            for a in bind_args {
+                if !self.vars.contains_key(a) {
+                    return fail(line, format!("undeclared variable passed to logic: {}", a));
+                }
+            }
+            let inst = {
+                let mut el = Elaborator { c: &mut self.c };
+                el.build(lit, &key, bind_args, line)?
+            };
+            self.insts.insert(key.clone(), inst);
+        }
+        let (out_node, ports_len) = {
+            let inst = self.insts.get(&key).unwrap();
+            (inst.out_ports.first().map(|p| p.1), inst.out_ports.len())
+        };
+        if ports_len == 0 {
+            return fail(line, format!("{} has no output port to bind", callee));
+        }
+        if ports_len > 1 {
+            return fail(
+                line,
+                format!(
+                    "{} has multiple output ports; the binding form 'v = logic(...)' supports exactly one",
+                    callee
+                ),
+            );
+        }
+        if !self.vars.contains_key(target) {
+            return fail(line, format!("undeclared variable: {}", target));
+        }
+        let node = out_node.unwrap();
+        self.out_bind.insert(target.to_string(), node);
+        let val = self.c.read(node) as i64;
+        self.vars.insert(target.to_string(), val);
+        Ok(())
+    }
+
+    fn exec_list(&mut self, body: &'a [SimStmt]) -> RvResult<()> {
+        for s in body {
+            self.exec(s)?;
+        }
+        Ok(())
+    }
+
+    fn exec(&mut self, s: &'a SimStmt) -> RvResult<()> {
+        match s {
+            SimStmt::DeclVar { line, decls } => {
+                for (name, e) in decls {
+                    if self.vars.contains_key(name) {
+                        return fail(*line, format!("duplicate variable: {}", name));
+                    }
+                    let v = match e {
+                        Some(ex) => self.eval_e(ex)?,
+                        None => 0,
+                    };
+                    self.vars.insert(name.clone(), v);
+                }
+            }
+            SimStmt::Assign { line, target, value } => {
+                if !self.vars.contains_key(target) {
+                    return fail(*line, format!("undeclared variable: {}", target));
+                }
+                let v = self.eval_e(value)?;
+                self.vars.insert(target.clone(), v);
+            }
+            SimStmt::CallBind {
+                line,
+                target,
+                callee,
+                bind_args,
+            } => {
+                self.do_call_bind(*line, target, callee, bind_args)?;
+            }
+            SimStmt::WaitTicks { ticks, .. } => {
+                self.run_ticks(*ticks, true)?;
+                self.fire_monitors()?;
+            }
+            SimStmt::WaitInit { line } => {
+                self.do_init(*line)?;
+                self.fire_monitors()?;
+            }
+            SimStmt::MonReg { .. } => {} // hoisted at sim start
+            SimStmt::Call { line, call } => {
+                if call.callee == "monitor" {
+                    self.do_monitor(*line, call)?;
+                } else if call.callee == "wait" {
+                    if call.args.len() != 1 || call.has_fmt {
+                        return fail(*line, "wait(n) takes exactly one numeric argument");
+                    }
+                    let n = self.eval_e(&call.args[0])?;
+                    if n < 0 {
+                        return fail(*line, "wait(n): n must be >= 0");
+                    }
+                    self.run_ticks(n, false)?; // $time を進めず、monitor も発火しない
+                } else {
+                    return fail(*line, format!("unknown system function: {}", call.callee));
+                }
+            }
+            SimStmt::If {
+                cond,
+                body,
+                else_body,
+                ..
+            } => {
+                if self.eval_e(cond)? != 0 {
+                    self.exec_list(body)?;
+                } else {
+                    self.exec_list(else_body)?;
+                }
+            }
+            SimStmt::While { line, cond, body } => {
+                let mut guard: i64 = 10_000_000;
+                while self.eval_e(cond)? != 0 {
+                    self.exec_list(body)?;
+                    guard -= 1;
+                    if guard == 0 {
+                        return fail(*line, "while loop exceeded iteration limit");
+                    }
+                }
+            }
+            SimStmt::For {
+                line,
+                init,
+                cond,
+                post,
+                body,
+            } => {
+                if let Some(b) = init {
+                    self.exec(b)?;
+                }
+                let mut guard: i64 = 10_000_000;
+                loop {
+                    let go = match cond {
+                        Some(c) => self.eval_e(c)? != 0,
+                        None => true,
+                    };
+                    if !go {
+                        break;
+                    }
+                    self.exec_list(body)?;
+                    if let Some(p) = post {
+                        self.exec(p)?;
+                    }
+                    guard -= 1;
+                    if guard == 0 {
+                        return fail(*line, "for loop exceeded iteration limit");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn run_program(prog: &Program, trace: bool) -> RvResult<()> {
+    let mut cfg = Config::default();
+    if let Some(v) = prog.defines.get("INIT_TIMEOUT") {
+        cfg.init_timeout = *v;
+    }
+    if let Some(v) = prog.defines.get("BURNOUT_LIMIT") {
+        cfg.burnout_limit = *v as i32;
+    }
+    if let Some(v) = prog.defines.get("BURNOUT_WINDOW") {
+        cfg.burnout_window = *v as i32;
+    }
+    if let Some(v) = prog.defines.get("BURNOUT_COOLDOWN") {
+        cfg.burnout_cooldown = *v as i32;
+    }
+
+    if prog.modules.is_empty() {
+        warn(0, "no module to run");
+        return Ok(());
+    }
+    let many = prog.modules.len() > 1;
+    for m in &prog.modules {
+        if many {
+            println!("=== module {} ===", m.name);
+        }
+        let mut ex = ModuleExec::new(prog, m, cfg, trace);
+        ex.run()?;
+    }
+    Ok(())
+}

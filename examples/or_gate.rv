@@ -1,0 +1,32 @@
+/* OR回路: リピータ2本でダストに合流 (合流点は最大値をとる) */
+logic or_gate(input a, input b, output y)
+{
+    wire w1, w2;
+    reg o;
+    w1 = a-r-o;    // リピータで a と o を接続
+    w2 = b-r-o;    // リピータで b と o を接続
+    o = d;         // 合流点はダスト (max合成 = OR)
+    y = o;         // 出力ポートを o に接続(長さ0)
+}
+
+module test_or_gate()
+{
+    var a, b;
+    var y;
+    sim {
+        a = 0; b = 0;
+        y = or_gate(a, b);
+        #init              // (時刻0)
+
+        a = 1; b = 0;
+        #1                 // (時刻1)
+        #1                 // (時刻2)
+        #1                 // (時刻3)
+
+        a = 0; b = 12;
+        #1                 // (時刻4)
+        #1                 // (時刻5)
+
+        ?monitor("時刻=%t | a=%, b=% | 出力y=%\n", $time, a, b, y);
+    }
+}

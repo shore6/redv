@@ -1,0 +1,24 @@
+/* クロック(発振)回路: トーチ + リピータ遅延4 のループ -> 周期10rstick
+ * 発振回路に #init は使えない(定常状態にならずエラーになる)ので wait() で待つ */
+#define INIT_TIMEOUT 200
+
+logic osc(output y)
+{
+    reg o;
+    o = d;
+    wire w1, w2;
+    w1 = o-t-y;     // o を反転して y へ
+    w2 = y-r4-o;    // y を遅延4で o に戻す(フィードバック)
+}
+
+module test_osc()
+{
+    var y;
+    sim {
+        y = osc();
+        wait(20);                       // $time を進めずに20tick待つ
+        ?monitor("t=%t y=%\n", $time, y);
+        #1 #1 #1 #1 #1 #1 #1 #1 #1 #1
+        #1 #1
+    }
+}
