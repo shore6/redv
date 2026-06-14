@@ -84,6 +84,7 @@ cargo test                                        # Golden tests for all example
 | `examples/clock.rv` | A torch + repeater-4 clock (period 10). Example of `wait()` |
 | `examples/scan_and.rv` | Reads 2 values from stdin with `scan()` and feeds them into an AND |
 | `examples/hier_and.rv` | A hierarchical AND nesting `not_gate` / `or_gate` (De Morgan) |
+| `examples/comparator_side.rv` | Comparator side input (`cd` subtract / `cc` compare) |
 
 ## Project Layout
 
