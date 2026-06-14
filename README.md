@@ -1,10 +1,12 @@
-# redv (rv) — Minecraft レッドストーン回路 HDL シミュレータ
+# redv (rv) — レッドストーン回路 HDL シミュレータ
 
 [![Rust](https://img.shields.io/badge/Rust-edition_2021-orange.svg)](https://www.rust-lang.org/)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](#ライセンス)
 
-Verilog のように Minecraft のレッドストーン回路を **文字で** 設計し、コマンドラインで
+*[English README here](README.en.md)*
+
+Verilog のようにレッドストーン回路を **文字で** 設計し、コマンドラインで
 コンパイル + シミュレーションできる処理系です。素子レベル(ゲートレベルよりさらに低レイヤー)で、
 **「任意の2点を素子列のワイヤーでつなぐ」** ことで回路を記述します。
 
@@ -112,13 +114,6 @@ logic or_gate(input a, input b, output y) {
     w2 = b-r-y;     // b をリピータ経由で y へ(y で合流 = 最大値)
 }
 ```
-
-## 既知の制限・今後
-
-- コンパレータのサイド入力(減算 / 比較の第 2 入力)は未対応。チェーン内では強度パススルー動作
-- ワイヤーは記述方向への単方向伝搬(双方向ダストは未対応)
-- `#define MODE logic` + `stdlogic`(ロジックレベル記法)は未対応(警告して無視)
-- ゲームティック粒度・0tick パルス・準接続(QC)などの実機挙動は対象外
 
 ## ライセンス
 

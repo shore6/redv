@@ -1,4 +1,4 @@
-//! redv - Minecraft redstone HDL simulator (CLI)
+//! redv - redstone HDL simulator (CLI)
 //!
 //! C++ 版 `main.cpp` の移植。`-t/--trace`, `-h/--help`, `-v/--version` を受け付ける。
 
@@ -17,7 +17,7 @@ fn usage() {
     print!(
         "usage: redv [options] <file.rv>\n\
 \n\
-Minecraft redstone circuit HDL simulator.\n\
+Redstone circuit HDL simulator.\n\
 \n\
 options:\n\
 \x20 -t, --trace    dump named node values to stderr every tick\n\
