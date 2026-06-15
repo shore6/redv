@@ -262,28 +262,44 @@ impl Parser {
             return fail(ln, "'const'/'mutable' must be followed by 'reg'");
         }
 
-        // 先頭の識別子を読む。次が '=' なら代入/インスタンス、'-' なら無名チェーン。
-        let head = self.expect_ident("assignment target or chain endpoint")?;
+        // 先頭の識別子(端点には `.side` が付き得る)を読む。
+        // 次が '-' ならチェーン接続文、'=' なら代入/インスタンス。
+        let head = self.parse_chain_part()?;
         if self.is_punct("-") {
-            // 無名チェーン:  from -chunks...- to
-            let mut parts = vec![head];
+            // チェーン接続文:  from -chunks...- to
+            let mut parts: Vec<(String, bool)> = vec![head];
             while self.is_punct("-") {
                 self.i += 1;
-                parts.push(self.expect_ident("element chunk or endpoint")?);
+                parts.push(self.parse_chain_part()?);
             }
             self.expect_punct(";")?;
-            let from = parts.first().unwrap().clone();
-            let to = parts.last().unwrap().clone();
-            let chunks = parts[1..parts.len() - 1].to_vec();
+            // 中間チャンク(素子列 / wire 名)に `.side` は付けられない
+            for (tok, side) in &parts[1..parts.len() - 1] {
+                if *side {
+                    return fail(
+                        ln,
+                        format!("'.side' cannot appear on a mid-chain chunk '{}'", tok),
+                    );
+                }
+            }
+            let (from, from_side) = parts.first().unwrap().clone();
+            let (to, to_side) = parts.last().unwrap().clone();
+            let chunks: Vec<String> =
+                parts[1..parts.len() - 1].iter().map(|(t, _)| t.clone()).collect();
             stmts.push(LogicStmt::Chain {
                 line: ln,
                 from,
+                from_side,
                 to,
+                to_side,
                 chunks,
             });
             return Ok(());
         }
-        let target = head;
+        let (target, target_side) = head;
+        if target_side {
+            return fail(ln, "'.side' is only valid as a chain endpoint");
+        }
         self.expect_punct("=")?;
         // 階層インスタンス化:  output = callee(args...)
         if self.cur().k == Tk::Ident && self.peek(1).k == Tk::Punct && self.peek(1).s == "(" {
