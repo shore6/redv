@@ -2,14 +2,12 @@
    ド・モルガン則  a AND b = NOT( (NOT a) OR (NOT b) )  を logic の入れ子で記述する。 */
 
 logic not_gate(input a, output y) {
-    wire w;
-    w = a-t-y;          // トーチ 1 本で NOT
+    a-t-y;              // トーチ 1 本で NOT
 }
 
 logic or_gate(input a, input b, output y) {
-    wire w1, w2;
-    w1 = a-r-y;         // a をリピータ経由で y へ
-    w2 = b-r-y;         // b をリピータ経由で y へ(y で合流 = 最大値)
+    a-r-y;              // a をリピータ経由で y へ
+    b-r-y;              // b をリピータ経由で y へ(y で合流 = 最大値)
 }
 
 /* 下位 logic を 4 個インスタンス化して AND を組む */

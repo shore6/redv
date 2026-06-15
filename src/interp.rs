@@ -208,6 +208,8 @@ impl<'p> Elaborator<'_, 'p> {
         let mut outs: Vec<(String, usize)> = Vec::new();
         // 階層インスタンス文(全ノード確定後にまとめて結線する)
         let mut instances: Vec<(i32, String, String, Vec<String>)> = Vec::new();
+        // 無名チェーン文(wire 名を介さない直結。全ノード確定後にまとめて構築)
+        let mut anon_chains: Vec<(i32, String, String, Vec<String>)> = Vec::new();
 
         for p in &l.ports {
             if scope.contains_key(&p.name) {
@@ -337,22 +339,45 @@ impl<'p> Elaborator<'_, 'p> {
                     }
                     wfinal.insert(target.clone(), st);
                 }
+                LogicStmt::Chain {
+                    line,
+                    from,
+                    to,
+                    chunks,
+                } => {
+                    anon_chains.push((*line, from.clone(), to.clone(), chunks.clone()));
+                }
             }
         }
 
-        // wire 構築(端点はここまでに存在しているはず)
+        // チェーン構築(端点はここまでに存在しているはず)。
+        // 名前付き wire(worder/wfinal)と無名チェーン(anon_chains)を同じ手順で構築する。
+        // label は内部ノード名に使う識別子(無名チェーンは '#chN' で trace 非表示)。
+        let mut jobs: Vec<(String, i32, String, String, Vec<String>)> = Vec::new();
         for wn in &worder {
-            let st = wfinal[wn];
-            let (line, from, to, chunks) = match st {
+            match wfinal[wn] {
                 LogicStmt::AssignChain {
                     line,
                     from,
                     to,
                     chunks,
                     ..
-                } => (*line, from, to, chunks),
+                } => jobs.push((wn.clone(), *line, from.clone(), to.clone(), chunks.clone())),
                 _ => unreachable!(),
-            };
+            }
+        }
+        for (k, (line, from, to, chunks)) in anon_chains.iter().enumerate() {
+            jobs.push((
+                format!("#ch{}", k + 1),
+                *line,
+                from.clone(),
+                to.clone(),
+                chunks.clone(),
+            ));
+        }
+
+        for (wn, line, from, to, chunks) in &jobs {
+            let (line, from, to, chunks) = (*line, from, to, chunks);
             let fi = match scope.get(from) {
                 Some(n) => *n,
                 None => return fail(line, format!("unknown wire endpoint: {}", from)),

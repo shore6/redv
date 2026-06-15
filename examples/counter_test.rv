@@ -3,10 +3,9 @@ logic and_gate(input a, input b, output y)
 {
     reg m;
     m = d;
-    wire w1, w2, w3;
-    w1 = a-t-m;
-    w2 = b-t-m;
-    w3 = m-t-y;
+    a-t-m;
+    b-t-m;
+    m-t-y;
 }
 
 module sweep_and()

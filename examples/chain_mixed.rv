@@ -1,0 +1,25 @@
+/* 接続記法のデモ: 無名チェーン(主)と named wire(従)を併用する。
+ * 同じ点 m に 2 経路が合流し、強度の最大値をとる(OR 的な振る舞い)。 */
+logic mix(input a, input b, output y)
+{
+    reg m;
+    a-d-r-m;            // 無名チェーン: ダスト1個 -> リピータ -> m
+    wire w;
+    w = b-r-m;          // named wire でも同じ m に合流(max 合成)
+    m-d2-y;             // m から y へダスト2個ぶん減衰させて出力
+}
+
+module test_mix()
+{
+    var a, b, y;
+    sim {
+        a = 0; b = 0;
+        y = mix(a, b);
+        #init
+        ?monitor("t=%t | a=%2d b=%2d | y=%2d\n", $time, a, b, y);
+
+        a = 15;  #3     // a 経由 ON
+        b = 8;   #3     // b も ON(m は max=15 のまま)
+        a = 0;   #3     // a OFF(b=8 が残る)
+    }
+}
