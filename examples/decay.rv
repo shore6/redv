@@ -4,20 +4,17 @@
  *  - コンパレータ(比較モード)は強度を「そのまま」通す(遅延1tick) */
 logic via_d8(input a, output y)
 {
-    wire w;
-    w = a-d8-y;        // ダスト8個 (= dddddddd): 15 -> 7
+    a-d8-y;            // ダスト8個 (= dddddddd): 15 -> 7
 }
 
 logic via_rep(input a, output y)
 {
-    wire w;
-    w = a-d4rd4-y;     // 途中で再増幅: 15 -> 11, 5 -> 11
+    a-d4rd4-y;         // 途中で再増幅: 15 -> 11, 5 -> 11
 }
 
 logic via_cmp(input a, output y)
 {
-    wire w;
-    w = a-d4ccd4-y;    // 強度を保持して中継(アナログ値を運べる): 15 -> 7
+    a-d4ccd4-y;        // 強度を保持して中継(アナログ値を運べる): 15 -> 7
 }
 
 module test_decay()

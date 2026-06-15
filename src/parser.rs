@@ -262,8 +262,28 @@ impl Parser {
             return fail(ln, "'const'/'mutable' must be followed by 'reg'");
         }
 
-        // assignment
-        let target = self.expect_ident("assignment target")?;
+        // 先頭の識別子を読む。次が '=' なら代入/インスタンス、'-' なら無名チェーン。
+        let head = self.expect_ident("assignment target or chain endpoint")?;
+        if self.is_punct("-") {
+            // 無名チェーン:  from -chunks...- to
+            let mut parts = vec![head];
+            while self.is_punct("-") {
+                self.i += 1;
+                parts.push(self.expect_ident("element chunk or endpoint")?);
+            }
+            self.expect_punct(";")?;
+            let from = parts.first().unwrap().clone();
+            let to = parts.last().unwrap().clone();
+            let chunks = parts[1..parts.len() - 1].to_vec();
+            stmts.push(LogicStmt::Chain {
+                line: ln,
+                from,
+                to,
+                chunks,
+            });
+            return Ok(());
+        }
+        let target = head;
         self.expect_punct("=")?;
         // 階層インスタンス化:  output = callee(args...)
         if self.cur().k == Tk::Ident && self.peek(1).k == Tk::Punct && self.peek(1).s == "(" {

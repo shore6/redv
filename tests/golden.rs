@@ -127,6 +127,12 @@ fn hier_and() {
     run_golden("hier_and");
 }
 
+/// 無名チェーン(`a-d-r-m;`)と named wire 形の併用 + 合流(max)。
+#[test]
+fn chain_mixed() {
+    run_golden("chain_mixed");
+}
+
 /// CLI 動作: 引数なしは usage を出して終了コード 2。
 #[test]
 fn no_args_exits_2() {

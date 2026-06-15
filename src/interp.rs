@@ -232,6 +232,8 @@ impl<'p> Elaborator<'_, 'p> {
         let mut outs: Vec<(String, usize)> = Vec::new();
         // 階層インスタンス文(全ノード確定後にまとめて結線する)
         let mut instances: Vec<(i32, String, String, Vec<String>)> = Vec::new();
+        // 無名チェーン文(wire 名を介さない直結。全ノード確定後にまとめて構築)
+        let mut anon_chains: Vec<(i32, String, String, Vec<String>)> = Vec::new();
 
         for p in &l.ports {
             if scope.contains_key(&p.name) {
@@ -396,13 +398,23 @@ impl<'p> Elaborator<'_, 'p> {
                     }
                     wfinal.insert(target.clone(), st);
                 }
+                LogicStmt::Chain {
+                    line,
+                    from,
+                    to,
+                    chunks,
+                } => {
+                    anon_chains.push((*line, from.clone(), to.clone(), chunks.clone()));
+                }
             }
         }
 
-        // wire 構築(端点はここまでに存在しているはず)
+        // チェーン構築(端点はここまでに存在しているはず)。
+        // 名前付き wire(worder/wfinal)と無名チェーン(anon_chains)を同じ手順で構築する。
+        // label は内部ノード名に使う識別子(無名チェーンは '#chN' で trace 非表示)。
+        let mut jobs: Vec<(String, i32, String, bool, String, bool, Vec<String>)> = Vec::new();
         for wn in &worder {
-            let st = wfinal[wn];
-            let (line, from, from_side, to, to_side, chunks) = match st {
+            match wfinal[wn] {
                 LogicStmt::AssignChain {
                     line,
                     from,
@@ -411,9 +423,33 @@ impl<'p> Elaborator<'_, 'p> {
                     to_side,
                     chunks,
                     ..
-                } => (*line, from, *from_side, to, *to_side, chunks),
+                } => jobs.push((
+                    wn.clone(),
+                    *line,
+                    from.clone(),
+                    *from_side,
+                    to.clone(),
+                    *to_side,
+                    chunks.clone(),
+                )),
                 _ => unreachable!(),
-            };
+            }
+        }
+        // 無名チェーンは端点に `.side` を取らない(常に後ろ入力)。
+        for (k, (line, from, to, chunks)) in anon_chains.iter().enumerate() {
+            jobs.push((
+                format!("#ch{}", k + 1),
+                *line,
+                from.clone(),
+                false,
+                to.clone(),
+                false,
+                chunks.clone(),
+            ));
+        }
+
+        for (wn, line, from, from_side, to, to_side, chunks) in &jobs {
+            let (line, from_side, to_side) = (*line, *from_side, *to_side);
             // 始端(信号源)。`.side` は入力専用なので源にはできない。
             if from_side {
                 return fail(

@@ -13,8 +13,7 @@ with a wire made of a chain of components**.
 
 ```rv
 logic not_gate(input a, output y) {
-    wire w;
-    w = a-t-y;          // Connect a and y with a single torch → that alone is a NOT
+    a-t-y;              // Connect a and y with a single torch → that alone is a NOT
 }
 
 module test() {
@@ -84,6 +83,7 @@ cargo test                                        # Golden tests for all example
 | `examples/clock.rv` | A torch + repeater-4 clock (period 10). Example of `wait()` |
 | `examples/scan_and.rv` | Reads 2 values from stdin with `scan()` and feeds them into an AND |
 | `examples/hier_and.rv` | A hierarchical AND nesting `not_gate` / `or_gate` (De Morgan) |
+| `examples/chain_mixed.rv` | Mixing anonymous chains with named wires + merge (max) |
 | `examples/comparator_side.rv` | Comparator side input (`cd` subtract / `cc` compare) |
 
 ## Project Layout
@@ -114,9 +114,8 @@ Minimal example:
 
 ```rv
 logic or_gate(input a, input b, output y) {
-    wire w1, w2;
-    w1 = a-r-y;     // a to y via a repeater
-    w2 = b-r-y;     // b to y via a repeater (merges at y = max value)
+    a-r-y;          // a to y via a repeater
+    b-r-y;          // b to y via a repeater (merges at y = max value)
 }
 ```
 

@@ -66,6 +66,14 @@ pub enum LogicStmt {
         to_side: bool,
         chunks: Vec<String>,
     },
+    /// `from -chunks...- to` — 無名チェーン(wire 名を介さず 2 点を直結する)。
+    /// `target =` を伴わない接続文。`AssignChain` の wire 名なし版。
+    Chain {
+        line: i32,
+        from: String,
+        to: String,
+        chunks: Vec<String>,
+    },
     /// `target = [strength] rhs` (strength == -1 は未指定)
     AssignSingle {
         line: i32,
