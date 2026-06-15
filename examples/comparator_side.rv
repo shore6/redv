@@ -1,0 +1,40 @@
+/* コンパレータのサイド入力:
+ *  - cd(減算): out = max(0, back - side)
+ *  - cc(比較): out = back >= side ? back : 0
+ * reg にコンパレータを代入して名前付きの点にし、後ろ入力(無印)と
+ * 横入力(.side)を別々のワイヤーで結線する。前(out)は r を始端に取り出す。 */
+logic sub_gate(input a, input b, output y)
+{
+    reg r = cd;        // 減算コンパレータ
+    wire wa, wb, wo;
+    wa = a-r;          // 後ろ(被減算)入力
+    wb = b-r.side;     // 横(減算)入力
+    wo = r-y;          // 前(出力)
+}
+
+logic cmp_gate(input a, input b, output y)
+{
+    reg r = cc;        // 比較コンパレータ
+    wire wa, wb, wo;
+    wa = a-r;          // 後ろ入力
+    wb = b-r.side;     // 横(しきい)入力
+    wo = r-y;          // 前(出力)
+}
+
+module test_comparator_side()
+{
+    var a, b;
+    var s, c;
+    sim {
+        a = 12;
+        b = 5;
+        s = sub_gate(a, b);   // max(0, 12-5) = 7
+        c = cmp_gate(a, b);   // 12 >= 5 -> 12
+        #init
+        ?monitor("t=%t | a=%2d b=%2d | sub=%2d | cmp=%2d\n", $time, a, b, s, c);
+
+        b = 12;  #2           // sub: max(0,12-12)=0,  cmp: 12>=12 -> 12
+        b = 15;  #2           // sub: max(0,12-15)=0,  cmp: 12>=15 -> 0
+        a = 15;  #2           // sub: max(0,15-15)=0,  cmp: 15>=15 -> 15
+    }
+}

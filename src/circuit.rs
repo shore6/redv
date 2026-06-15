@@ -93,7 +93,10 @@ pub struct CEdge {
 pub enum SeqKind {
     Rep,
     Torch,
-    Comp,
+    /// コンパレータ(比較モード): out = back >= side ? back : 0
+    CompCmp,
+    /// コンパレータ(減算モード): out = max(0, back - side)
+    CompSub,
 }
 
 #[derive(Debug, Clone)]
@@ -102,8 +105,12 @@ pub struct CSeq {
     pub delay: i32,
     pub in_: usize,
     pub out: usize,
-    /// サンプルした入力。front = 最古
+    /// サンプルした(後ろ)入力。front = 最古
     pub hist: VecDeque<i32>,
+    /// コンパレータの横入力ノード。None なら横入力なし(= side 0)
+    pub side_in: Option<usize>,
+    /// サンプルした横入力。`side_in` がある時のみ使う。front = 最古
+    pub side_hist: VecDeque<i32>,
     pub outv: i32,
     pub prev_out: i32,
     /// トグルした tick の履歴(トーチ)
@@ -215,6 +222,8 @@ impl Circuit {
             in_,
             out,
             hist,
+            side_in: None,
+            side_hist: VecDeque::new(),
             outv: 0,
             prev_out: 0,
             togg: VecDeque::new(),
@@ -225,24 +234,64 @@ impl Circuit {
         self.nodes[r].has_incoming = true;
     }
 
-    fn seq_out_of(kind: SeqKind, h: i32) -> i32 {
+    /// コンパレータ素子(遅延 1 tick)。`side_in` が None なら横入力 0(= パススルー)。
+    pub fn add_comp(
+        &mut self,
+        kind: SeqKind,
+        in_: usize,
+        side_in: Option<usize>,
+        out: usize,
+        label: String,
+    ) {
+        let mut hist = VecDeque::new();
+        hist.push_back(0);
+        let mut side_hist = VecDeque::new();
+        if side_in.is_some() {
+            side_hist.push_back(0);
+        }
+        self.seqs.push(CSeq {
+            kind,
+            delay: 1,
+            in_,
+            out,
+            hist,
+            side_in,
+            side_hist,
+            outv: 0,
+            prev_out: 0,
+            togg: VecDeque::new(),
+            cooldown: 0,
+            label,
+        });
+        let r = self.find(out);
+        self.nodes[r].has_incoming = true;
+    }
+
+    fn seq_out_of(kind: SeqKind, back: i32, side: i32) -> i32 {
         match kind {
             SeqKind::Rep => {
-                if h > 0 {
+                if back > 0 {
                     15
                 } else {
                     0
                 }
             }
             SeqKind::Torch => {
-                if h > 0 {
+                if back > 0 {
                     0
                 } else {
                     15
                 }
             }
-            // comparator chain pass-through
-            SeqKind::Comp => h,
+            // 横入力なし(side=0)なら両モードとも back のパススルーに退化する
+            SeqKind::CompCmp => {
+                if back >= side {
+                    back
+                } else {
+                    0
+                }
+            }
+            SeqKind::CompSub => (back - side).max(0),
         }
     }
 
@@ -287,7 +336,8 @@ impl Circuit {
         for i in 0..self.seqs.len() {
             let kind = self.seqs[i].kind;
             let front = *self.seqs[i].hist.front().unwrap_or(&0);
-            let mut o = Self::seq_out_of(kind, front);
+            let side_front = *self.seqs[i].side_hist.front().unwrap_or(&0);
+            let mut o = Self::seq_out_of(kind, front, side_front);
             if kind == SeqKind::Torch && self.seqs[i].cooldown > 0 {
                 o = 0;
                 self.seqs[i].cooldown -= 1;
@@ -376,7 +426,14 @@ impl Circuit {
             let v = self.nodes[in_node].value;
             self.seqs[i].hist.push_back(v);
             self.seqs[i].hist.pop_front();
+            if let Some(sn) = self.seqs[i].side_in {
+                let side_node = self.find(sn);
+                let sv = self.nodes[side_node].value;
+                self.seqs[i].side_hist.push_back(sv);
+                self.seqs[i].side_hist.pop_front();
+            }
             let back = *self.seqs[i].hist.back().unwrap();
+            let side = *self.seqs[i].side_hist.back().unwrap_or(&0);
             let mut uniform = true;
             for &h in &self.seqs[i].hist {
                 if h != back {
@@ -384,7 +441,13 @@ impl Circuit {
                     break;
                 }
             }
-            if !uniform || self.seqs[i].outv != Self::seq_out_of(self.seqs[i].kind, back) {
+            for &h in &self.seqs[i].side_hist {
+                if h != side {
+                    uniform = false;
+                    break;
+                }
+            }
+            if !uniform || self.seqs[i].outv != Self::seq_out_of(self.seqs[i].kind, back, side) {
                 changed = true;
             }
         }

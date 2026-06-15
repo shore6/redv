@@ -80,6 +80,28 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
     Ok(out)
 }
 
+/// reg 初期化子トークンがコンパレータ(`cc`/`cd`)ちょうど 1 個なら、その
+/// SeqKind を返す。コンパレータでなければ None。複合チャンクはエラー。
+fn comparator_mode(tok: &str, line: i32) -> RvResult<Option<SeqKind>> {
+    let es = parse_chunk(tok, line)?;
+    match es.first() {
+        Some(e) if e.k == 'C' || e.k == 'S' => {
+            if es.len() != 1 {
+                return fail(
+                    line,
+                    format!("a comparator reg must hold exactly one comparator: \"{}\"", tok),
+                );
+            }
+            Ok(Some(if e.k == 'S' {
+                SeqKind::CompSub
+            } else {
+                SeqKind::CompCmp
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
 // ---- logic instance ----------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -203,6 +225,8 @@ impl<'p> Elaborator<'_, 'p> {
 
         let mut scope: HashMap<String, usize> = HashMap::new();
         let mut qual_of: HashMap<String, Qual> = HashMap::new();
+        // コンパレータ reg の (back, side) ノード。scope[name] は out ノード。
+        let mut comp_regs: HashMap<String, (usize, usize)> = HashMap::new();
         let mut wire_names: HashSet<String> = HashSet::new();
         let mut in_order: Vec<String> = Vec::new();
         let mut outs: Vec<(String, usize)> = Vec::new();
@@ -278,14 +302,49 @@ impl<'p> Elaborator<'_, 'p> {
                     if scope.contains_key(name) || wire_names.contains(name) {
                         return fail(*line, format!("duplicate name: {}", name));
                     }
-                    let id = self.c.new_node(format!("{}.{}", prefix, name), NodeKind::Plain);
-                    scope.insert(name.clone(), id);
-                    qual_of.insert(name.clone(), *qual);
-                    match init {
-                        Some(ri) => self.apply_elem(id, &ri.tok, ri.strength, *qual, *line)?,
-                        None => {
-                            if *qual == Qual::Const {
-                                return fail(*line, "const reg requires an initializer");
+                    // コンパレータ reg(`reg r = cd;` / `cc`)は back/side/out の 3 ノード束。
+                    let comp_kind = match init {
+                        Some(ri) => comparator_mode(&ri.tok, *line)?,
+                        None => None,
+                    };
+                    if let Some(ck) = comp_kind {
+                        let ri = init.as_ref().unwrap();
+                        if *qual != Qual::Plain {
+                            return fail(
+                                *line,
+                                "comparator reg must be plain (const/mutable not allowed)",
+                            );
+                        }
+                        if ri.strength >= 0 {
+                            return fail(*line, "comparator reg cannot take a signal strength");
+                        }
+                        let back = self
+                            .c
+                            .new_node(format!("{}.{}#back", prefix, name), NodeKind::Plain);
+                        let side = self
+                            .c
+                            .new_node(format!("{}.{}#side", prefix, name), NodeKind::Plain);
+                        let out = self.c.new_node(format!("{}.{}", prefix, name), NodeKind::Plain);
+                        self.c.add_comp(
+                            ck,
+                            back,
+                            Some(side),
+                            out,
+                            format!("{}.{}", prefix, name),
+                        );
+                        scope.insert(name.clone(), out);
+                        comp_regs.insert(name.clone(), (back, side));
+                        qual_of.insert(name.clone(), Qual::Plain);
+                    } else {
+                        let id = self.c.new_node(format!("{}.{}", prefix, name), NodeKind::Plain);
+                        scope.insert(name.clone(), id);
+                        qual_of.insert(name.clone(), *qual);
+                        match init {
+                            Some(ri) => self.apply_elem(id, &ri.tok, ri.strength, *qual, *line)?,
+                            None => {
+                                if *qual == Qual::Const {
+                                    return fail(*line, "const reg requires an initializer");
+                                }
                             }
                         }
                     }
@@ -353,38 +412,73 @@ impl<'p> Elaborator<'_, 'p> {
         // チェーン構築(端点はここまでに存在しているはず)。
         // 名前付き wire(worder/wfinal)と無名チェーン(anon_chains)を同じ手順で構築する。
         // label は内部ノード名に使う識別子(無名チェーンは '#chN' で trace 非表示)。
-        let mut jobs: Vec<(String, i32, String, String, Vec<String>)> = Vec::new();
+        let mut jobs: Vec<(String, i32, String, bool, String, bool, Vec<String>)> = Vec::new();
         for wn in &worder {
             match wfinal[wn] {
                 LogicStmt::AssignChain {
                     line,
                     from,
+                    from_side,
                     to,
+                    to_side,
                     chunks,
                     ..
-                } => jobs.push((wn.clone(), *line, from.clone(), to.clone(), chunks.clone())),
+                } => jobs.push((
+                    wn.clone(),
+                    *line,
+                    from.clone(),
+                    *from_side,
+                    to.clone(),
+                    *to_side,
+                    chunks.clone(),
+                )),
                 _ => unreachable!(),
             }
         }
+        // 無名チェーンは端点に `.side` を取らない(常に後ろ入力)。
         for (k, (line, from, to, chunks)) in anon_chains.iter().enumerate() {
             jobs.push((
                 format!("#ch{}", k + 1),
                 *line,
                 from.clone(),
+                false,
                 to.clone(),
+                false,
                 chunks.clone(),
             ));
         }
 
-        for (wn, line, from, to, chunks) in &jobs {
-            let (line, from, to, chunks) = (*line, from, to, chunks);
+        for (wn, line, from, from_side, to, to_side, chunks) in &jobs {
+            let (line, from_side, to_side) = (*line, *from_side, *to_side);
+            // 始端(信号源)。`.side` は入力専用なので源にはできない。
+            if from_side {
+                return fail(
+                    line,
+                    format!("'{}.side' cannot be a wire source (side is an input terminal)", from),
+                );
+            }
             let fi = match scope.get(from) {
                 Some(n) => *n,
                 None => return fail(line, format!("unknown wire endpoint: {}", from)),
             };
-            let ti = match scope.get(to) {
-                Some(n) => *n,
-                None => return fail(line, format!("unknown wire endpoint: {}", to)),
+            // 終端(信号先)。コンパレータ reg は `.side`=横入力 / 無印=後ろ入力。
+            let ti = if to_side {
+                match comp_regs.get(to) {
+                    Some((_back, side)) => *side,
+                    None => {
+                        return fail(
+                            line,
+                            format!("'.side' is only valid on a comparator reg, but '{}' is not", to),
+                        )
+                    }
+                }
+            } else if let Some((back, _side)) = comp_regs.get(to) {
+                *back
+            } else {
+                match scope.get(to) {
+                    Some(n) => *n,
+                    None => return fail(line, format!("unknown wire endpoint: {}", to)),
+                }
             };
             let mut es: Vec<Elem> = Vec::new();
             for tok in chunks {
@@ -414,7 +508,7 @@ impl<'p> Elaborator<'_, 'p> {
                         prev = nn;
                         decay = 0;
                     }
-                    'r' | 't' | 'C' | 'S' => {
+                    'r' | 't' => {
                         let ni = self
                             .c
                             .new_node(format!("{}.{}#i{}", prefix, wn, idx), NodeKind::Plain);
@@ -422,16 +516,40 @@ impl<'p> Elaborator<'_, 'p> {
                             .c
                             .new_node(format!("{}.{}#o{}", prefix, wn, idx), NodeKind::Plain);
                         self.c.add_edge(prev, ni, decay);
-                        let kind = match e.k {
-                            'r' => SeqKind::Rep,
-                            't' => SeqKind::Torch,
-                            _ => SeqKind::Comp,
+                        let kind = if e.k == 'r' {
+                            SeqKind::Rep
+                        } else {
+                            SeqKind::Torch
                         };
                         let dly = if e.k == 'r' { e.n } else { 1 };
                         self.c.add_seq(
                             kind,
                             dly,
                             ni,
+                            no,
+                            format!("{}.{}[{}]", prefix, wn, idx),
+                        );
+                        prev = no;
+                        decay = 0;
+                    }
+                    // インライン(チェーン内)コンパレータ: 横入力なし = パススルー
+                    'C' | 'S' => {
+                        let ni = self
+                            .c
+                            .new_node(format!("{}.{}#i{}", prefix, wn, idx), NodeKind::Plain);
+                        let no = self
+                            .c
+                            .new_node(format!("{}.{}#o{}", prefix, wn, idx), NodeKind::Plain);
+                        self.c.add_edge(prev, ni, decay);
+                        let kind = if e.k == 'S' {
+                            SeqKind::CompSub
+                        } else {
+                            SeqKind::CompCmp
+                        };
+                        self.c.add_comp(
+                            kind,
+                            ni,
+                            None,
                             no,
                             format!("{}.{}[{}]", prefix, wn, idx),
                         );

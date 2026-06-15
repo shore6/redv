@@ -321,33 +321,70 @@ impl Parser {
                 rhs,
             });
         } else {
-            let mut parts = vec![self.expect_ident("value")?];
+            // 各パートは「素子チャンク or 端点」。端点には `.side` が付き得る。
+            let mut parts: Vec<(String, bool)> = vec![self.parse_chain_part()?];
             while self.is_punct("-") {
                 self.i += 1;
-                parts.push(self.expect_ident("element chunk or endpoint")?);
+                parts.push(self.parse_chain_part()?);
             }
             if parts.len() == 1 {
+                let (rhs, side) = parts.into_iter().next().unwrap();
+                if side {
+                    return fail(ln, "'.side' is only valid as a wire endpoint");
+                }
                 stmts.push(LogicStmt::AssignSingle {
                     line: ln,
                     target,
                     strength: -1,
-                    rhs: parts.into_iter().next().unwrap(),
+                    rhs,
                 });
             } else {
-                let from = parts.first().unwrap().clone();
-                let to = parts.last().unwrap().clone();
-                let chunks = parts[1..parts.len() - 1].to_vec();
+                // 中間チャンク(素子列)に `.side` は付けられない
+                for (tok, side) in &parts[1..parts.len() - 1] {
+                    if *side {
+                        return fail(
+                            ln,
+                            format!("'.side' cannot appear on a mid-wire element chunk '{}'", tok),
+                        );
+                    }
+                }
+                let (from, from_side) = parts.first().unwrap().clone();
+                let (to, to_side) = parts.last().unwrap().clone();
+                let chunks: Vec<String> =
+                    parts[1..parts.len() - 1].iter().map(|(t, _)| t.clone()).collect();
                 stmts.push(LogicStmt::AssignChain {
                     line: ln,
                     target,
                     from,
+                    from_side,
                     to,
+                    to_side,
                     chunks,
                 });
             }
         }
         self.expect_punct(";")?;
         Ok(())
+    }
+
+    /// ワイヤーチェーンの 1 パート(素子チャンク or 端点)を読む。
+    /// 端点には `.side`(コンパレータの横入力端子)が付き得る。
+    fn parse_chain_part(&mut self) -> RvResult<(String, bool)> {
+        let name = self.expect_ident("element chunk or endpoint")?;
+        let mut side = false;
+        if self.is_punct(".") {
+            let ln = self.cur().line;
+            self.i += 1;
+            let suf = self.expect_ident("terminal name after '.'")?;
+            if suf != "side" {
+                return fail(
+                    ln,
+                    format!("unknown terminal '.{}' (only '.side' is supported)", suf),
+                );
+            }
+            side = true;
+        }
+        Ok((name, side))
     }
 
     // ---- module ------------------------------------------------------------

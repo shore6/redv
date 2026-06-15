@@ -54,11 +54,16 @@ pub enum LogicStmt {
         init: Option<RegInit>,
     },
     /// `target = from -chunks...- to`
+    ///
+    /// `from_side` / `to_side` は端点に `.side` サフィックスが付いていたか
+    /// (コンパレータの横入力端子指定)。
     AssignChain {
         line: i32,
         target: String,
         from: String,
+        from_side: bool,
         to: String,
+        to_side: bool,
         chunks: Vec<String>,
     },
     /// `from -chunks...- to` — 無名チェーン(wire 名を介さず 2 点を直結する)。

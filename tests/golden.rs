@@ -67,6 +67,11 @@ fn counter_test() {
 }
 
 #[test]
+fn comparator_side() {
+    run_golden("comparator_side");
+}
+
+#[test]
 fn clock() {
     run_golden("clock");
 }
