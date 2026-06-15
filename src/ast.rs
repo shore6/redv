@@ -53,10 +53,12 @@ pub enum LogicStmt {
         qual: Qual,
         init: Option<RegInit>,
     },
-    /// `target = from -chunks...- to`
+    /// `target = elem-chunks...` — wire への **素子列定義**。
     ///
-    /// `from_side` / `to_side` は端点に `.side` サフィックスが付いていたか
-    /// (コンパレータの横入力端子指定)。
+    /// 端点を持たない再利用可能な素子列を wire に束縛する(接続ではない)。
+    /// パーサ段階では `target = a-b-c` 一般を受け、interp が target が wire の場合に
+    /// `[from] + chunks + [to]` を素子トークン列として解釈する(reg target はエラー)。
+    /// `from_side` / `to_side` は素子列定義では不可(`.side` は接続のみ)。
     AssignChain {
         line: i32,
         target: String,
@@ -66,12 +68,16 @@ pub enum LogicStmt {
         to_side: bool,
         chunks: Vec<String>,
     },
-    /// `from -chunks...- to` — 無名チェーン(wire 名を介さず 2 点を直結する)。
-    /// `target =` を伴わない接続文。`AssignChain` の wire 名なし版。
+    /// `from -chunks...- to` — チェーン接続文(2 点を素子列でつなぐ)。
+    ///
+    /// 中間チャンクには素子に加えて **wire 名** を書け、その素子列が各箇所に
+    /// 独立展開される。`from_side` / `to_side` は端点の `.side`(コンパレータ横入力)。
     Chain {
         line: i32,
         from: String,
+        from_side: bool,
         to: String,
+        to_side: bool,
         chunks: Vec<String>,
     },
     /// `target = [strength] rhs` (strength == -1 は未指定)

@@ -6,19 +6,17 @@
 logic sub_gate(input a, input b, output y)
 {
     reg r = cd;        // 減算コンパレータ
-    wire wa, wb, wo;
-    wa = a-r;          // 後ろ(被減算)入力
-    wb = b-r.side;     // 横(減算)入力
-    wo = r-y;          // 前(出力)
+    a-r;               // 後ろ(被減算)入力
+    b-r.side;          // 横(減算)入力
+    r-y;               // 前(出力)
 }
 
 logic cmp_gate(input a, input b, output y)
 {
     reg r = cc;        // 比較コンパレータ
-    wire wa, wb, wo;
-    wa = a-r;          // 後ろ入力
-    wb = b-r.side;     // 横(しきい)入力
-    wo = r-y;          // 前(出力)
+    a-r;               // 後ろ入力
+    b-r.side;          // 横(しきい)入力
+    r-y;               // 前(出力)
 }
 
 module test_comparator_side()

@@ -127,10 +127,16 @@ fn hier_and() {
     run_golden("hier_and");
 }
 
-/// 無名チェーン(`a-d-r-m;`)と named wire 形の併用 + 合流(max)。
+/// チェーン文で 2 経路を同じ点に合流(max)。
 #[test]
 fn chain_mixed() {
     run_golden("chain_mixed");
+}
+
+/// wire を再利用可能な素子列として定義し、複数箇所で使い回す(各箇所で独立展開)。
+#[test]
+fn wire_reuse() {
+    run_golden("wire_reuse");
 }
 
 /// CLI 動作: 引数なしは usage を出して終了コード 2。

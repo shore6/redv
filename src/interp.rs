@@ -12,6 +12,58 @@ use crate::diag::{fail, warn, RvResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 
+// ---- chain token expansion ---------------------------------------------
+
+/// チェーンの中間チャンク列を Elem 列へ展開する。
+/// 各トークンは「素子チャンク(`d4ccd4` 等)」または「wire 名(再利用素子列)」。
+/// wire 名は `wire_seq` を引いて再帰展開する(`visited` で循環を検出)。
+/// reg / ポート名は中間に置けない(端点専用)ためエラー。
+#[allow(clippy::too_many_arguments)]
+fn expand_chain_tokens(
+    tokens: &[String],
+    wire_seq: &HashMap<String, (i32, Vec<String>)>,
+    scope: &HashMap<String, usize>,
+    wire_names: &HashSet<String>,
+    line: i32,
+    visited: &mut Vec<String>,
+    out: &mut Vec<Elem>,
+) -> RvResult<()> {
+    for tok in tokens {
+        if scope.contains_key(tok) {
+            return fail(
+                line,
+                format!(
+                    "named node '{}' cannot appear inside a chain (endpoints go at the two ends)",
+                    tok
+                ),
+            );
+        }
+        if wire_names.contains(tok) {
+            if visited.iter().any(|v| v == tok) {
+                return fail(
+                    line,
+                    format!("recursive wire definition involving '{}'", tok),
+                );
+            }
+            let seq = match wire_seq.get(tok) {
+                Some((_def_line, s)) => s,
+                None => {
+                    return fail(
+                        line,
+                        format!("wire '{}' is used but never assigned an element sequence", tok),
+                    )
+                }
+            };
+            visited.push(tok.clone());
+            expand_chain_tokens(seq, wire_seq, scope, wire_names, line, visited, out)?;
+            visited.pop();
+        } else {
+            out.extend(parse_chunk(tok, line)?);
+        }
+    }
+    Ok(())
+}
+
 // ---- element chunk parsing: "ddr2brdccbr4d3" -> element list -----------
 
 pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
@@ -233,7 +285,7 @@ impl<'p> Elaborator<'_, 'p> {
         // 階層インスタンス文(全ノード確定後にまとめて結線する)
         let mut instances: Vec<(i32, String, String, Vec<String>)> = Vec::new();
         // 無名チェーン文(wire 名を介さない直結。全ノード確定後にまとめて構築)
-        let mut anon_chains: Vec<(i32, String, String, Vec<String>)> = Vec::new();
+        let mut anon_chains: Vec<(i32, String, bool, String, bool, Vec<String>)> = Vec::new();
 
         for p in &l.ports {
             if scope.contains_key(&p.name) {
@@ -271,9 +323,11 @@ impl<'p> Elaborator<'_, 'p> {
             );
         }
 
-        // wire の最終代入記録(再代入 -> 警告、最後が勝つ)
-        let mut wfinal: HashMap<String, &LogicStmt> = HashMap::new();
-        let mut worder: Vec<String> = Vec::new();
+        // wire 素子列定義(端点を持たない再利用可能な素子トークン列)。
+        // 他 wire 名を含み得るため、Elem への展開はチェーン構築時に遅延する。
+        // 再代入は警告し、最後の定義が勝つ。
+        let mut wire_seq: HashMap<String, (i32, Vec<String>)> = HashMap::new();
+        let mut wseq_seen: HashSet<String> = HashSet::new();
 
         for st in &l.stmts {
             match st {
@@ -356,7 +410,22 @@ impl<'p> Elaborator<'_, 'p> {
                     rhs,
                 } => {
                     if wire_names.contains(target) {
-                        return fail(*line, "a wire must be assigned a chain like a-...-b");
+                        // wire への素子列定義(単一トークン)。例: `w = r4;`
+                        if *strength >= 0 {
+                            return fail(
+                                *line,
+                                "a wire element sequence cannot take a signal strength",
+                            );
+                        }
+                        if wseq_seen.contains(target) {
+                            warn(
+                                *line,
+                                format!("wire '{}' reassigned (last assignment wins)", target),
+                            );
+                        }
+                        wseq_seen.insert(target.clone());
+                        wire_seq.insert(target.clone(), (*line, vec![rhs.clone()]));
+                        continue;
                     }
                     let tnode = match scope.get(target) {
                         Some(n) => *n,
@@ -381,69 +450,100 @@ impl<'p> Elaborator<'_, 'p> {
                         self.apply_elem(tnode, rhs, *strength, q, *line)?;
                     }
                 }
-                LogicStmt::AssignChain { line, target, .. } => {
+                LogicStmt::AssignChain {
+                    line,
+                    target,
+                    from,
+                    from_side,
+                    to,
+                    to_side,
+                    chunks,
+                } => {
+                    // `target = a-b-c;` の `=` 形は wire への素子列定義のみ。
+                    // 2 点の接続はチェーン文 `a-b-c;`(`=` なし)で行う。
                     if !wire_names.contains(target) {
                         return fail(
                             *line,
-                            format!("chain assignment target must be a wire: {}", target),
+                            format!(
+                                "only a wire can be assigned an element sequence ('{} = ...'); \
+                                 to connect two points use a chain statement like 'a-b-c;'",
+                                target
+                            ),
                         );
                     }
-                    if wfinal.contains_key(target) {
+                    if *from_side || *to_side {
+                        return fail(
+                            *line,
+                            "'.side' cannot appear in a wire element sequence definition",
+                        );
+                    }
+                    let mut tokens = Vec::with_capacity(chunks.len() + 2);
+                    tokens.push(from.clone());
+                    tokens.extend(chunks.iter().cloned());
+                    tokens.push(to.clone());
+                    if wseq_seen.contains(target) {
                         warn(
                             *line,
                             format!("wire '{}' reassigned (last assignment wins)", target),
                         );
-                    } else {
-                        worder.push(target.clone());
                     }
-                    wfinal.insert(target.clone(), st);
+                    wseq_seen.insert(target.clone());
+                    wire_seq.insert(target.clone(), (*line, tokens));
                 }
                 LogicStmt::Chain {
-                    line,
-                    from,
-                    to,
-                    chunks,
-                } => {
-                    anon_chains.push((*line, from.clone(), to.clone(), chunks.clone()));
-                }
-            }
-        }
-
-        // チェーン構築(端点はここまでに存在しているはず)。
-        // 名前付き wire(worder/wfinal)と無名チェーン(anon_chains)を同じ手順で構築する。
-        // label は内部ノード名に使う識別子(無名チェーンは '#chN' で trace 非表示)。
-        let mut jobs: Vec<(String, i32, String, bool, String, bool, Vec<String>)> = Vec::new();
-        for wn in &worder {
-            match wfinal[wn] {
-                LogicStmt::AssignChain {
                     line,
                     from,
                     from_side,
                     to,
                     to_side,
                     chunks,
-                    ..
-                } => jobs.push((
-                    wn.clone(),
-                    *line,
-                    from.clone(),
-                    *from_side,
-                    to.clone(),
-                    *to_side,
-                    chunks.clone(),
-                )),
-                _ => unreachable!(),
+                } => {
+                    anon_chains.push((
+                        *line,
+                        from.clone(),
+                        *from_side,
+                        to.clone(),
+                        *to_side,
+                        chunks.clone(),
+                    ));
+                }
             }
         }
-        // 無名チェーンは端点に `.side` を取らない(常に後ろ入力)。
-        for (k, (line, from, to, chunks)) in anon_chains.iter().enumerate() {
+
+        // wire 素子列定義の早期検証(未使用 wire も対象)。各トークンは素子チャンク
+        // または他 wire 名でなければならない。reg/ポート名(= 旧 named-wire 接続形の
+        // 名残)は素子列に置けない。素子展開・循環検出はチェーン構築時に遅延する。
+        for (wn, (def_line, tokens)) in &wire_seq {
+            for tok in tokens {
+                if scope.contains_key(tok) {
+                    return fail(
+                        *def_line,
+                        format!(
+                            "named node '{}' cannot appear in wire '{}' (a wire is a reusable \
+                             element sequence, not a connection); to connect two points use a \
+                             chain statement like 'a-b-c;'",
+                            tok, wn
+                        ),
+                    );
+                }
+                if !wire_names.contains(tok) {
+                    parse_chunk(tok, *def_line)?; // 素子構文の検証
+                }
+            }
+        }
+
+        // チェーン構築(端点はここまでに存在しているはず)。接続は Chain 文のみ
+        // (wire は素子列定義であって接続ではない)。
+        // label は内部ノード名に使う識別子('#chN' で trace 非表示)。
+        let mut jobs: Vec<(String, i32, String, bool, String, bool, Vec<String>)> = Vec::new();
+        for (k, (line, from, from_side, to, to_side, chunks)) in anon_chains.iter().enumerate() {
             jobs.push((
                 format!("#ch{}", k + 1),
                 *line,
                 from.clone(),
-                false,
+                *from_side,
                 to.clone(),
-                false,
+                *to_side,
                 chunks.clone(),
             ));
         }
@@ -459,7 +559,17 @@ impl<'p> Elaborator<'_, 'p> {
             }
             let fi = match scope.get(from) {
                 Some(n) => *n,
-                None => return fail(line, format!("unknown wire endpoint: {}", from)),
+                None if wire_names.contains(from) => {
+                    return fail(
+                        line,
+                        format!(
+                            "wire '{}' cannot be a chain endpoint (a wire is an element sequence; \
+                             endpoints must be reg/port)",
+                            from
+                        ),
+                    )
+                }
+                None => return fail(line, format!("unknown chain endpoint: {}", from)),
             };
             // 終端(信号先)。コンパレータ reg は `.side`=横入力 / 無印=後ろ入力。
             let ti = if to_side {
@@ -477,22 +587,31 @@ impl<'p> Elaborator<'_, 'p> {
             } else {
                 match scope.get(to) {
                     Some(n) => *n,
-                    None => return fail(line, format!("unknown wire endpoint: {}", to)),
+                    None if wire_names.contains(to) => {
+                        return fail(
+                            line,
+                            format!(
+                                "wire '{}' cannot be a chain endpoint (a wire is an element \
+                                 sequence; endpoints must be reg/port)",
+                                to
+                            ),
+                        )
+                    }
+                    None => return fail(line, format!("unknown chain endpoint: {}", to)),
                 }
             };
+            // チャンクを Elem 列へ展開。wire 名は素子列として再帰展開する。
             let mut es: Vec<Elem> = Vec::new();
-            for tok in chunks {
-                if scope.contains_key(tok) || wire_names.contains(tok) {
-                    return fail(
-                        line,
-                        format!(
-                            "named node '{}' cannot appear inside a wire chain (a wire connects exactly two points)",
-                            tok
-                        ),
-                    );
-                }
-                es.extend(parse_chunk(tok, line)?);
-            }
+            let mut visited: Vec<String> = Vec::new();
+            expand_chain_tokens(
+                chunks,
+                &wire_seq,
+                &scope,
+                &wire_names,
+                line,
+                &mut visited,
+                &mut es,
+            )?;
             let mut prev = fi;
             let mut decay = 0;
             let mut idx = 0;
