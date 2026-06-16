@@ -76,6 +76,12 @@ fn clock() {
     run_golden("clock");
 }
 
+/// リピーターロック: 横入力 > 0 の間、出力を直前値で凍結する。
+#[test]
+fn repeater_lock() {
+    run_golden("repeater_lock");
+}
+
 /// stdin を流し込んで stdout がゴールデンと一致するか検証する。
 fn run_golden_stdin(name: &str, input: &str) {
     let manifest = env!("CARGO_MANIFEST_DIR");

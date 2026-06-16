@@ -154,6 +154,24 @@ fn comparator_mode(tok: &str, line: i32) -> RvResult<Option<SeqKind>> {
     }
 }
 
+/// reg 初期化子トークンがリピーター(`r` / `r1`-`r4`)ちょうど 1 個なら、その
+/// 遅延 tick を返す。リピーターでなければ None。複合チャンクはエラー。
+fn repeater_delay(tok: &str, line: i32) -> RvResult<Option<i32>> {
+    let es = parse_chunk(tok, line)?;
+    match es.first() {
+        Some(e) if e.k == 'r' => {
+            if es.len() != 1 {
+                return fail(
+                    line,
+                    format!("a repeater reg must hold exactly one repeater: \"{}\"", tok),
+                );
+            }
+            Ok(Some(e.n))
+        }
+        _ => Ok(None),
+    }
+}
+
 // ---- logic instance ----------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -277,8 +295,8 @@ impl<'p> Elaborator<'_, 'p> {
 
         let mut scope: HashMap<String, usize> = HashMap::new();
         let mut qual_of: HashMap<String, Qual> = HashMap::new();
-        // コンパレータ reg の (back, side) ノード。scope[name] は out ノード。
-        let mut comp_regs: HashMap<String, (usize, usize)> = HashMap::new();
+        // コンパレータ / ロック付きリピーター reg の (back, side) ノード。scope[name] は out ノード。
+        let mut side_regs: HashMap<String, (usize, usize)> = HashMap::new();
         let mut wire_names: HashSet<String> = HashSet::new();
         let mut in_order: Vec<String> = Vec::new();
         let mut outs: Vec<(String, usize)> = Vec::new();
@@ -361,6 +379,15 @@ impl<'p> Elaborator<'_, 'p> {
                         Some(ri) => comparator_mode(&ri.tok, *line)?,
                         None => None,
                     };
+                    // ロック付きリピーター reg(`reg m = r;` / `r1`-`r4`)も同じ 3 ノード束。
+                    let rep_delay = if comp_kind.is_none() {
+                        match init {
+                            Some(ri) => repeater_delay(&ri.tok, *line)?,
+                            None => None,
+                        }
+                    } else {
+                        None
+                    };
                     if let Some(ck) = comp_kind {
                         let ri = init.as_ref().unwrap();
                         if *qual != Qual::Plain {
@@ -387,7 +414,30 @@ impl<'p> Elaborator<'_, 'p> {
                             format!("{}.{}", prefix, name),
                         );
                         scope.insert(name.clone(), out);
-                        comp_regs.insert(name.clone(), (back, side));
+                        side_regs.insert(name.clone(), (back, side));
+                        qual_of.insert(name.clone(), Qual::Plain);
+                    } else if let Some(dly) = rep_delay {
+                        let ri = init.as_ref().unwrap();
+                        if *qual != Qual::Plain {
+                            return fail(
+                                *line,
+                                "repeater reg must be plain (const/mutable not allowed)",
+                            );
+                        }
+                        if ri.strength >= 0 {
+                            return fail(*line, "repeater reg cannot take a signal strength");
+                        }
+                        let back = self
+                            .c
+                            .new_node(format!("{}.{}#back", prefix, name), NodeKind::Plain);
+                        let side = self
+                            .c
+                            .new_node(format!("{}.{}#side", prefix, name), NodeKind::Plain);
+                        let out = self.c.new_node(format!("{}.{}", prefix, name), NodeKind::Plain);
+                        self.c
+                            .add_rep_lock(dly, back, side, out, format!("{}.{}", prefix, name));
+                        scope.insert(name.clone(), out);
+                        side_regs.insert(name.clone(), (back, side));
                         qual_of.insert(name.clone(), Qual::Plain);
                     } else {
                         let id = self.c.new_node(format!("{}.{}", prefix, name), NodeKind::Plain);
@@ -571,18 +621,21 @@ impl<'p> Elaborator<'_, 'p> {
                 }
                 None => return fail(line, format!("unknown chain endpoint: {}", from)),
             };
-            // 終端(信号先)。コンパレータ reg は `.side`=横入力 / 無印=後ろ入力。
+            // 終端(信号先)。コンパレータ / リピーター reg は `.side`=横入力 / 無印=後ろ入力。
             let ti = if to_side {
-                match comp_regs.get(to) {
+                match side_regs.get(to) {
                     Some((_back, side)) => *side,
                     None => {
                         return fail(
                             line,
-                            format!("'.side' is only valid on a comparator reg, but '{}' is not", to),
+                            format!(
+                                "'.side' is only valid on a comparator/repeater reg, but '{}' is not",
+                                to
+                            ),
                         )
                     }
                 }
-            } else if let Some((back, _side)) = comp_regs.get(to) {
+            } else if let Some((back, _side)) = side_regs.get(to) {
                 *back
             } else {
                 match scope.get(to) {

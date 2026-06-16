@@ -85,6 +85,7 @@ cargo test                                        # Golden tests for all example
 | `examples/hier_and.rv` | A hierarchical AND nesting `not_gate` / `or_gate` (De Morgan) |
 | `examples/chain_mixed.rv` | Merging two chain paths into the same point (max) |
 | `examples/comparator_side.rv` | Comparator side input (`cd` subtract / `cc` compare) |
+| `examples/repeater_lock.rv` | Repeater lock (`.side` on `reg m = r;` freezes the output) |
 | `examples/wire_reuse.rv` | Define a wire as a reusable component sequence used in several places |
 
 ## Project Layout

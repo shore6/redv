@@ -267,6 +267,39 @@ impl Circuit {
         self.nodes[r].has_incoming = true;
     }
 
+    /// ロック可能リピーター(遅延 n tick)。`side_in` は横(ロック)入力ノード。
+    /// 横入力 > 0 の間は出力を直前の値で凍結し、0 に戻ると通常動作へ復帰する。
+    /// ロックは 1 tick 反応(横入力の履歴は 1 段)。
+    pub fn add_rep_lock(&mut self, delay: i32, in_: usize, side_in: usize, out: usize, label: String) {
+        let mut hist = VecDeque::new();
+        for _ in 0..delay {
+            hist.push_back(0);
+        }
+        let mut side_hist = VecDeque::new();
+        side_hist.push_back(0);
+        self.seqs.push(CSeq {
+            kind: SeqKind::Rep,
+            delay,
+            in_,
+            out,
+            hist,
+            side_in: Some(side_in),
+            side_hist,
+            outv: 0,
+            prev_out: 0,
+            togg: VecDeque::new(),
+            cooldown: 0,
+            label,
+        });
+        let r = self.find(out);
+        self.nodes[r].has_incoming = true;
+    }
+
+    /// リピーターがロック中か(ロック付きリピーターで横入力 > 0)。
+    fn rep_locked(seq: &CSeq, side: i32) -> bool {
+        seq.kind == SeqKind::Rep && seq.side_in.is_some() && side > 0
+    }
+
     fn seq_out_of(kind: SeqKind, back: i32, side: i32) -> i32 {
         match kind {
             SeqKind::Rep => {
@@ -337,7 +370,12 @@ impl Circuit {
             let kind = self.seqs[i].kind;
             let front = *self.seqs[i].hist.front().unwrap_or(&0);
             let side_front = *self.seqs[i].side_hist.front().unwrap_or(&0);
-            let mut o = Self::seq_out_of(kind, front, side_front);
+            // ロック付きリピーターは横入力 > 0 の間、出力を直前値で凍結する。
+            let mut o = if Self::rep_locked(&self.seqs[i], side_front) {
+                self.seqs[i].prev_out
+            } else {
+                Self::seq_out_of(kind, front, side_front)
+            };
             if kind == SeqKind::Torch && self.seqs[i].cooldown > 0 {
                 o = 0;
                 self.seqs[i].cooldown -= 1;
@@ -447,7 +485,13 @@ impl Circuit {
                     break;
                 }
             }
-            if !uniform || self.seqs[i].outv != Self::seq_out_of(self.seqs[i].kind, back, side) {
+            // ロック中は出力が凍結されるので、期待出力は現在の出力(= 据え置き)。
+            let expected = if Self::rep_locked(&self.seqs[i], side) {
+                self.seqs[i].outv
+            } else {
+                Self::seq_out_of(self.seqs[i].kind, back, side)
+            };
+            if !uniform || self.seqs[i].outv != expected {
                 changed = true;
             }
         }
