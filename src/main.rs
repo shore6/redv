@@ -11,7 +11,7 @@ mod parser;
 
 use std::process::ExitCode;
 
-const VERSION: &str = "redv 0.1.0";
+const VERSION: &str = "redv 0.2.0";
 
 fn usage() {
     print!(
