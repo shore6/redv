@@ -4,7 +4,7 @@
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 
-*[日本語版 README はこちら / Japanese README](README.md)*
+*[日本語版/Japanese](README.md)*
 
 A toolchain that lets you design redstone circuits **as text**, like Verilog,
 then compile and simulate them from the command line. It works at the *component level*

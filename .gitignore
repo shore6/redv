@@ -1,2 +1,9 @@
+# Rustの実行ファイルなど
 /target
+
+# 各種回路ファイル置き場
 /curcuit
+
+# claude関連
+/.claude
+CLAUDE.md
