@@ -4,7 +4,7 @@
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](#ライセンス)
 
-*[English README here](README.en.md)*
+*[English README](README.en.md)*
 
 Verilog のようにレッドストーン回路を **文字で** 設計し、コマンドラインで
 コンパイル + シミュレーションできる処理系です。素子レベル(ゲートレベルよりさらに低レイヤー)で、
