@@ -1,10 +1,10 @@
 /* AND回路: NOT(NOT a OR NOT b) をトーチ3本で構成 */
-logic and_gate(input a, input b, output y)
+logic and_gate(input a, input b2, output y)
 {
     reg m;
     m = d;          // NOR合流点
     a-t-m;
-    b-t-m;
+    b2-t-m;
     m-t-y;
 }
 

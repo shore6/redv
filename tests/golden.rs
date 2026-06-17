@@ -168,3 +168,41 @@ fn missing_file_exits_2() {
         .expect("spawn redv");
     assert_eq!(out.status.code(), Some(2));
 }
+
+/// 与えたソースを一時ファイルに書いて redv に渡し、(終了コード, stderr) を返す。
+fn run_source(tag: &str, src: &str) -> (Option<i32>, String) {
+    let path = std::env::temp_dir().join(format!("redv_test_{tag}.rv"));
+    std::fs::write(&path, src).expect("write temp rv");
+    let out = Command::new(bin()).arg(&path).output().expect("spawn redv");
+    let _ = std::fs::remove_file(&path);
+    (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+/// 素子名と衝突する宣言名(reg / wire / ポート)はパース時にエラーになる。
+/// インスタンス化を待たず発火するので module 呼び出しは不要。
+#[test]
+fn element_name_collision_is_error() {
+    // 単体素子・コンパレータ・連結素子列、reg / wire / port の各サイト。
+    for (tag, src) in [
+        ("reg_cd", "logic g(input a, output y){ reg cd; a-t-y; }"),
+        ("port_b", "logic g(input a, input b, output y){ a-t-y; }"),
+        ("wire_r", "logic g(input a, output y){ wire r; a-t-y; }"),
+        ("reg_tb", "logic g(input a, output y){ reg tb; a-t-y; }"),
+    ] {
+        let (code, stderr) = run_source(tag, src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(
+            stderr.contains("collides with an element name"),
+            "{tag}: unexpected stderr:\n{stderr}"
+        );
+    }
+}
+
+/// 素子名でない宣言名(`b2` / `cmp` / `x` / `c` 等)は受理される。
+#[test]
+fn non_element_names_are_accepted() {
+    let src = "logic g(input a, input b2, output y){ reg cmp, x, c; a-t-y; }\n\
+               module m(){ var u, v; sim{ u=0; v=g(u,u); #init } }";
+    let (code, stderr) = run_source("non_elem_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}

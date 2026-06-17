@@ -111,11 +111,14 @@ docs/
 最小例:
 
 ```rv
-logic or_gate(input a, input b, output y) {
+logic or_gate(input a, input b2, output y) {
     a-r-y;          // a をリピータ経由で y へ
-    b-r-y;          // b をリピータ経由で y へ(y で合流 = 最大値)
+    b2-r-y;         // b をリピータ経由で y へ(y で合流 = 最大値)
 }
 ```
+
+> `reg` / `wire` / ポート名に素子名(`b` / `r` / `cd` 等)と衝突する名前は使えない
+> (チェーン内で曖昧になるため。詳細は [docs/LANGUAGE.md](docs/LANGUAGE.md) §2)。
 
 ## ライセンス
 

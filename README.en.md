@@ -115,11 +115,14 @@ simulation semantics, see **[docs/LANGUAGE.md](docs/LANGUAGE.md)** (Japanese).
 Minimal example:
 
 ```rv
-logic or_gate(input a, input b, output y) {
+logic or_gate(input a, input b2, output y) {
     a-r-y;          // a to y via a repeater
-    b-r-y;          // b to y via a repeater (merges at y = max value)
+    b2-r-y;         // b to y via a repeater (merges at y = max value)
 }
 ```
+
+> `reg` / `wire` / port names may not collide with element names (`b` / `r` / `cd`, etc.);
+> such names would be ambiguous inside a chain (see [docs/LANGUAGE.md](docs/LANGUAGE.md) §2).
 
 ## License
 
