@@ -132,6 +132,14 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
     Ok(out)
 }
 
+/// 名前全体が素子列として解釈できる(= 素子名と衝突する)なら true。
+/// reg / wire / ポート名がこれに該当するのは禁止する: チェーン内に置いたとき
+/// 「名前付きの点」と「素子列」が曖昧になり、回路が読みにくくバグの温床になる。
+/// 例: `b`(ブロック)/ `r`(リピータ)/ `cd`(コンパレータ)/ `tb`(トーチ+ブロック)。
+pub fn name_collides_with_element(name: &str) -> bool {
+    !name.is_empty() && parse_chunk(name, 0).is_ok()
+}
+
 /// reg 初期化子トークンがコンパレータ(`cc`/`cd`)ちょうど 1 個なら、その
 /// SeqKind を返す。コンパレータでなければ None。複合チャンクはエラー。
 fn comparator_mode(tok: &str, line: i32) -> RvResult<Option<SeqKind>> {
