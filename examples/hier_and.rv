@@ -1,20 +1,20 @@
 /* 階層化のデモ: 既存の not_gate / or_gate を組み合わせて AND を構成。
    ド・モルガン則  a AND b = NOT( (NOT a) OR (NOT b) )  を logic の入れ子で記述する。 */
 
-logic not_gate(input a, output y) {
-    a-t-y;              // トーチ 1 本で NOT
+logic not_gate(input x, output y) {
+    x-t-y;              // トーチ 1 本で NOT
 }
 
-logic or_gate(input a, input b2, output y) {
-    a-r-y;              // a をリピータ経由で y へ
-    b2-r-y;             // b をリピータ経由で y へ(y で合流 = 最大値)
+logic or_gate(input x1, input x2, output y) {
+    x1-r-y;              // x1 をリピータ経由で y へ
+    x2-r-y;              // x2 をリピータ経由で y へ(y で合流 = 最大値)
 }
 
 /* 下位 logic を 4 個インスタンス化して AND を組む */
-logic and2(input a, input b2, output y) {
+logic and2(input x1, input x2, output y) {
     reg na, nb, o;      // 中間ノード(階層インスタンスの結線端点)
-    na = not_gate(a);   // na = !a
-    nb = not_gate(b2);  // nb = !b
+    na = not_gate(x1);   // na = !a
+    nb = not_gate(x2);  // nb = !b
     o  = or_gate(na, nb);   // o = na | nb = !a | !b
     y  = not_gate(o);   // y = !o = a & b
 }

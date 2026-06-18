@@ -2,19 +2,19 @@
  *  - ダスト1個につき強度が1減衰する
  *  - リピータは強度を15に再増幅する(遅延1tick)
  *  - コンパレータ(比較モード)は強度を「そのまま」通す(遅延1tick) */
-logic via_d8(input a, output y)
+logic via_d8(input x, output y)
 {
-    a-d8-y;            // ダスト8個 (= dddddddd): 15 -> 7
+    x-d8-y;            // ダスト8個 (= dddddddd): 15 -> 7
 }
 
-logic via_rep(input a, output y)
+logic via_rep(input x, output y)
 {
-    a-d4rd4-y;         // 途中で再増幅: 15 -> 11, 5 -> 11
+    x-d4rd4-y;         // 途中で再増幅: 15 -> 11, 5 -> 11
 }
 
-logic via_cmp(input a, output y)
+logic via_cmp(input x, output y)
 {
-    a-d4ccd4-y;        // 強度を保持して中継(アナログ値を運べる): 15 -> 7
+    x-d4ccd4-y;        // 強度を保持して中継(アナログ値を運べる): 15 -> 7
 }
 
 module test_decay()

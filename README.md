@@ -11,18 +11,18 @@ Verilog のようにレッドストーン回路を **文字で** 設計し、コ
 **「任意の2点を素子列のワイヤーでつなぐ」** ことで回路を記述します。
 
 ```rv
-logic not_gate(input a, output y) {
-    a-t-y;              // a と y をトーチ 1 本でつなぐ → これだけで NOT
+logic not_gate(input x, output y) {
+    x-t-y;              // x と y をトーチ 1 本でつなぐ → これだけで NOT
 }
 
 module test() {
-    var a, y;
+    var x, y;
     sim {
-        a = 0;
-        y = not_gate(a);                 // インスタンス化して変数を束縛
+        x = 0;
+        y = not_gate(x);                 // インスタンス化して変数を束縛
         #init                            // 定常状態まで待つ($time = 0)
-        a = 10;  #1 #1                   // 入力を立てて 2 tick 進める
-        ?monitor("t=%t a=% y=%\n", $time, a, y);
+        x = 10;  #1 #1                   // 入力を立てて 2 tick 進める
+        ?monitor("t=%t x=% y=%\n", $time, x, y);
     }
 }
 ```

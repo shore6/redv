@@ -2,12 +2,12 @@
    例:  echo "15 0" | ./target/release/redv examples/scan_and.rv
    scan() は空白/改行区切りの整数を 1 つずつ読む(0-15 外は回路束縛時にクランプ警告)。 */
 
-logic and_gate(input a, input b2, output y)
+logic and_gate(input x1, input x2, output y)
 {
     reg m;
     m = d;          // NOR 合流点
-    a-t-m;
-    b2-t-m;
+    x1-t-m;
+    x2-t-m;
     m-t-y;
 }
 

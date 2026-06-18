@@ -7,10 +7,10 @@
  *
  *  ※ ゲームでは横入力がリピーター/コンパレータからのときだけロックするが、
  *    本処理系は任意の side>0 でロックする(簡略化)。 */
-logic lockable(input a, input lk, output y)
+logic lockable(input x, input lk, output y)
 {
     reg m = r;     // ロック可能リピーター(遅延 1)
-    a - m;         // 後ろ入力
+    x - m;         // 後ろ入力
     lk - m.side;   // 横(ロック)入力
     m - y;         // 前(出力)
 }

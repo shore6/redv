@@ -3,19 +3,19 @@
  *  - cc(比較): out = back >= side ? back : 0
  * reg にコンパレータを代入して名前付きの点にし、後ろ入力(無印)と
  * 横入力(.side)を別々のワイヤーで結線する。前(out)は r を始端に取り出す。 */
-logic sub_gate(input a, input b2, output y)
+logic sub_gate(input x1, input x2, output y)
 {
     reg cmp = cd;      // 減算コンパレータ
-    a-cmp;             // 後ろ(被減算)入力
-    b2-cmp.side;       // 横(減算)入力
+    x1-cmp;            // 後ろ(被減算)入力
+    x2-cmp.side;       // 横(減算)入力
     cmp-y;             // 前(出力)
 }
 
-logic cmp_gate(input a, input b2, output y)
+logic cmp_gate(input x1, input x2, output y)
 {
     reg cmp = cc;      // 比較コンパレータ
-    a-cmp;             // 後ろ入力
-    b2-cmp.side;       // 横(しきい)入力
+    x1-cmp;             // 後ろ入力
+    x2-cmp.side;       // 横(しきい)入力
     cmp-y;             // 前(出力)
 }
 
