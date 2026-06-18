@@ -1,13 +1,13 @@
 /* wire を「再利用可能な素子列」として定義し、複数箇所で使い回すデモ。
  * wire は端点を持たない素子列のテンプレートで、各使用箇所(a-seg-m / b-seg-m)で
  * 独立に展開される(物理的に別々の素子列になる)。 */
-logic reuse(input a, input b, output y)
+logic reuse(input x1, input x2, output y)
 {
     reg m;
     wire seg;
     seg = d2ccd2;      // ダスト2 + コンパレータ(比較) + ダスト2 の中継素子列
-    a-seg-m;           // a を seg 経由で m へ
-    b-seg-m;           // 同じ seg を b -> m にも再利用(m で max 合流)
+    x1-seg-m;          // x1 を seg 経由で m へ
+    x2-seg-m;          // 同じ seg を x2 -> m にも再利用(m で max 合流)
     m-d-y;             // m から y へ(ダスト1個ぶん減衰)
 }
 

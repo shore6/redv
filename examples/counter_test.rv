@@ -1,10 +1,10 @@
 /* for/while/if を使ったスイープテスト: 全入力組み合わせでANDを検証 */
-logic and_gate(input a, input b, output y)
+logic and_gate(input x1, input x2, output y)
 {
     reg m;
     m = d;
-    a-t-m;
-    b-t-m;
+    x1-t-m;
+    x2-t-m;
     m-t-y;
 }
 

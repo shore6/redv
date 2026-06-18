@@ -11,18 +11,18 @@ Verilog のようにレッドストーン回路を **文字で** 設計し、コ
 **「任意の2点を素子列のワイヤーでつなぐ」** ことで回路を記述します。
 
 ```rv
-logic not_gate(input a, output y) {
-    a-t-y;              // a と y をトーチ 1 本でつなぐ → これだけで NOT
+logic not_gate(input x, output y) {
+    x-t-y;              // x と y をトーチ 1 本でつなぐ → これだけで NOT
 }
 
 module test() {
-    var a, y;
+    var x, y;
     sim {
-        a = 0;
-        y = not_gate(a);                 // インスタンス化して変数を束縛
+        x = 0;
+        y = not_gate(x);                 // インスタンス化して変数を束縛
         #init                            // 定常状態まで待つ($time = 0)
-        a = 10;  #1 #1                   // 入力を立てて 2 tick 進める
-        ?monitor("t=%t a=% y=%\n", $time, a, y);
+        x = 10;  #1 #1                   // 入力を立てて 2 tick 進める
+        ?monitor("t=%t x=% y=%\n", $time, x, y);
     }
 }
 ```
@@ -111,11 +111,14 @@ docs/
 最小例:
 
 ```rv
-logic or_gate(input a, input b, output y) {
+logic or_gate(input a, input b2, output y) {
     a-r-y;          // a をリピータ経由で y へ
-    b-r-y;          // b をリピータ経由で y へ(y で合流 = 最大値)
+    b2-r-y;         // b をリピータ経由で y へ(y で合流 = 最大値)
 }
 ```
+
+> `reg` / `wire` / ポート名に素子名(`b` / `r` / `cd` 等)と衝突する名前は使えない
+> (チェーン内で曖昧になるため。詳細は [docs/LANGUAGE.md](docs/LANGUAGE.md) §2)。
 
 ## ライセンス
 

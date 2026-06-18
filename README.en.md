@@ -12,18 +12,18 @@ then compile and simulate them from the command line. It works at the *component
 with a wire made of a chain of components**.
 
 ```rv
-logic not_gate(input a, output y) {
-    a-t-y;              // Connect a and y with a single torch → that alone is a NOT
+logic not_gate(input x, output y) {
+    x-t-y;              // Connect x and y with a single torch → that alone is a NOT
 }
 
 module test() {
-    var a, y;
+    var x, y;
     sim {
-        a = 0;
-        y = not_gate(a);                 // Instantiate and bind variables
+        x = 0;
+        y = not_gate(x);                 // Instantiate and bind variables
         #init                            // Wait until steady state ($time = 0)
-        a = 10;  #1 #1                   // Drive the input high and advance 2 ticks
-        ?monitor("t=%t a=% y=%\n", $time, a, y);
+        x = 10;  #1 #1                   // Drive the input high and advance 2 ticks
+        ?monitor("t=%t x=% y=%\n", $time, x, y);
     }
 }
 ```
@@ -115,11 +115,14 @@ simulation semantics, see **[docs/LANGUAGE.md](docs/LANGUAGE.md)** (Japanese).
 Minimal example:
 
 ```rv
-logic or_gate(input a, input b, output y) {
+logic or_gate(input a, input b2, output y) {
     a-r-y;          // a to y via a repeater
-    b-r-y;          // b to y via a repeater (merges at y = max value)
+    b2-r-y;         // b to y via a repeater (merges at y = max value)
 }
 ```
+
+> `reg` / `wire` / port names may not collide with element names (`b` / `r` / `cd`, etc.);
+> such names would be ambiguous inside a chain (see [docs/LANGUAGE.md](docs/LANGUAGE.md) §2).
 
 ## License
 

@@ -82,6 +82,22 @@ impl Parser {
         Ok(r)
     }
 
+    /// reg / wire / ポートの宣言名が素子名(`b` / `r` / `cd` 等)と衝突しないか検査する。
+    /// 衝突する名前はチェーン内で素子列と区別できず曖昧になるためエラーにする。
+    fn check_decl_name(&self, name: &str, kind: &str, line: i32) -> RvResult<()> {
+        if crate::interp::name_collides_with_element(name) {
+            return fail(
+                line,
+                format!(
+                    "{} name '{}' collides with an element name (e.g. 'b', 'r', 'cd'); \
+                     pick a name that is not an element sequence",
+                    kind, name
+                ),
+            );
+        }
+        Ok(())
+    }
+
     // ---- directives --------------------------------------------------------
 
     fn parse_directive(&mut self, prog: &mut Program) -> RvResult<()> {
@@ -173,6 +189,7 @@ impl Parser {
                     return fail(pl, "port must start with 'input' or 'output'");
                 }
                 let pname = self.expect_ident("port name")?;
+                self.check_decl_name(&pname, "port", pl)?;
                 ports.push(Port {
                     input: pk == "input",
                     name: pname,
@@ -213,6 +230,9 @@ impl Parser {
                 self.i += 1;
                 names.push(self.expect_ident("wire name")?);
             }
+            for n in &names {
+                self.check_decl_name(n, "wire", ln)?;
+            }
             self.expect_punct(";")?;
             stmts.push(LogicStmt::DeclWire { line: ln, names });
             return Ok(());
@@ -231,6 +251,7 @@ impl Parser {
             self.i += 1;
             loop {
                 let name = self.expect_ident("reg name")?;
+                self.check_decl_name(&name, "reg", ln)?;
                 let mut init = None;
                 if self.is_punct("=") {
                     self.i += 1;
