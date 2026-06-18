@@ -198,6 +198,48 @@ fn element_name_collision_is_error() {
     }
 }
 
+/// リピータ / コンパレータ reg は **宣言時初期化に限る**(`reg m = r;`)。
+/// 後置代入(`reg m; m = r;`)は宣言時形へ誘導するエラーになる(issue #21)。
+#[test]
+fn seq_reg_post_assignment_is_error() {
+    for (tag, src, want) in [
+        (
+            "post_rep",
+            "logic g(input a, output y){ reg m; a-m; m=r; m-y; }\n\
+             module t(){ var u,v; sim{ u=0; v=g(u); #init } }",
+            "must be initialized at its declaration",
+        ),
+        (
+            "post_comp",
+            "logic g(input a, output y){ reg cmp; a-cmp; cmp=cd; cmp-y; }\n\
+             module t(){ var u,v; sim{ u=0; v=g(u); #init } }",
+            "must be initialized at its declaration",
+        ),
+        (
+            "post_torch",
+            "logic g(input a, output y){ reg z; a-z; z=t; z-y; }\n\
+             module t(){ var u,v; sim{ u=0; v=g(u); #init } }",
+            "a torch belongs inside a wire/chain",
+        ),
+    ] {
+        let (code, stderr) = run_source(tag, src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(
+            stderr.contains(want),
+            "{tag}: unexpected stderr:\n{stderr}"
+        );
+    }
+}
+
+/// 宣言時初期化(`reg m = r;` / `reg cmp = cd;`)は従来どおり受理される(issue #21)。
+#[test]
+fn seq_reg_declaration_init_is_accepted() {
+    let src = "logic g(input a, output y){ reg m = r; a-m; m-y; }\n\
+               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("decl_rep_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
 /// 素子名でない宣言名(`b2` / `cmp` / `x` / `c` 等)は受理される。
 #[test]
 fn non_element_names_are_accepted() {

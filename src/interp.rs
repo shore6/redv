@@ -203,6 +203,7 @@ impl<'p> Elaborator<'_, 'p> {
     fn apply_elem(
         &mut self,
         node_id: usize,
+        name: &str,
         tok: &str,
         strength: i32,
         qual: Qual,
@@ -220,11 +221,26 @@ impl<'p> Elaborator<'_, 'p> {
             }
             warn(line, "reg element reassigned (last assignment wins)");
         }
-        if e.k == 'r' || e.k == 't' || e.k == 'C' || e.k == 'S' {
+        // リピータ / コンパレータは reg に格納できるが **宣言時初期化に限る**
+        // (`reg m = r;` の形で back/side/out の 3 ノード束を生成する。§ DeclReg)。
+        // ここに来るのは AssignSingle 経由(= 後置代入)だけなので、宣言時形へ誘導する。
+        if e.k == 'r' || e.k == 'C' || e.k == 'S' {
+            let kind = if e.k == 'r' { "repeater" } else { "comparator" };
             return fail(
                 line,
                 format!(
-                    "element \"{}\" cannot be placed in a reg (sequential elements belong inside wires)",
+                    "a {} reg must be initialized at its declaration (write `reg {} = {};`); \
+                     it cannot be assigned after declaration",
+                    kind, name, tok
+                ),
+            );
+        }
+        // トーチは reg に格納できない(順序素子はワイヤー/チェーン内に置く)。
+        if e.k == 't' {
+            return fail(
+                line,
+                format!(
+                    "element \"{}\" cannot be placed in a reg (a torch belongs inside a wire/chain)",
                     tok
                 ),
             );
@@ -452,7 +468,9 @@ impl<'p> Elaborator<'_, 'p> {
                         scope.insert(name.clone(), id);
                         qual_of.insert(name.clone(), *qual);
                         match init {
-                            Some(ri) => self.apply_elem(id, &ri.tok, ri.strength, *qual, *line)?,
+                            Some(ri) => {
+                                self.apply_elem(id, name, &ri.tok, ri.strength, *qual, *line)?
+                            }
                             None => {
                                 if *qual == Qual::Const {
                                     return fail(*line, "const reg requires an initializer");
@@ -505,7 +523,7 @@ impl<'p> Elaborator<'_, 'p> {
                         self.c.merge(tnode, scope[rhs], *line)?; // alias
                     } else {
                         let q = qual_of.get(target).copied().unwrap_or(Qual::Plain);
-                        self.apply_elem(tnode, rhs, *strength, q, *line)?;
+                        self.apply_elem(tnode, target, rhs, *strength, q, *line)?;
                     }
                 }
                 LogicStmt::AssignChain {
