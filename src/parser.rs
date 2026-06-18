@@ -507,6 +507,7 @@ impl Parser {
             line: ln,
             target,
             value,
+            pulse: None,
         })
     }
 
@@ -648,13 +649,20 @@ impl Parser {
                         bind_args,
                     });
                 }
-                // plain Assign
+                // plain Assign(`~ width` を付けるとパルス代入)
                 let value = self.parse_expr()?;
+                let pulse = if self.is_punct("~") {
+                    self.i += 1;
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
                 self.expect_punct(";")?;
                 return Ok(SimStmt::Assign {
                     line: ln,
                     target: name,
                     value,
+                    pulse,
                 });
             }
         }

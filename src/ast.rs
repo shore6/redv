@@ -162,10 +162,15 @@ pub enum SimStmt {
         line: i32,
         decls: Vec<(String, Option<Expr>)>,
     },
+    /// `target = value [~ width]` — var への代入。
+    ///
+    /// `pulse` が `Some(width)` のとき **パルス代入**: 代入後 `width` tick 経過すると
+    /// 自動的に `target` を 0 に戻す(`width` は実行されたあらゆる tick を数える)。
     Assign {
         line: i32,
         target: String,
         value: Expr,
+        pulse: Option<Expr>,
     },
     CallBind {
         line: i32,

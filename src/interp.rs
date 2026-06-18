@@ -849,6 +849,8 @@ pub struct ModuleExec<'a> {
     mons: Vec<(i32, &'a CallData)>,
     clamp_warned: HashSet<String>,
     sim_time: i64,
+    /// パルス代入(`x = v ~ w`)で残り tick を持つ var → 0 で var を 0 に戻す。
+    pulses: HashMap<String, i64>,
 }
 
 impl<'a> ModuleExec<'a> {
@@ -863,6 +865,7 @@ impl<'a> ModuleExec<'a> {
             mons: Vec::new(),
             clamp_warned: HashSet::new(),
             sim_time: 0,
+            pulses: HashMap::new(),
         }
     }
 
@@ -992,7 +995,26 @@ impl<'a> ModuleExec<'a> {
         self.apply_inputs()?;
         let ch = self.c.step();
         self.apply_outputs();
+        self.tick_pulses();
         Ok(ch)
+    }
+
+    /// 各 tick 末に保留中パルスを 1 減らし、0 に達した var を 0 へ戻す。
+    fn tick_pulses(&mut self) {
+        if self.pulses.is_empty() {
+            return;
+        }
+        let mut expired: Vec<String> = Vec::new();
+        for (var, left) in self.pulses.iter_mut() {
+            *left -= 1;
+            if *left <= 0 {
+                expired.push(var.clone());
+            }
+        }
+        for var in expired {
+            self.pulses.remove(&var);
+            self.vars.insert(var, 0);
+        }
     }
 
     fn run_ticks(&mut self, n: i64, advance_time: bool) -> RvResult<()> {
@@ -1178,12 +1200,33 @@ impl<'a> ModuleExec<'a> {
                     self.vars.insert(name.clone(), v);
                 }
             }
-            SimStmt::Assign { line, target, value } => {
+            SimStmt::Assign {
+                line,
+                target,
+                value,
+                pulse,
+            } => {
                 if !self.vars.contains_key(target) {
                     return fail(*line, format!("undeclared variable: {}", target));
                 }
                 let v = self.eval_e(value)?;
                 self.vars.insert(target.clone(), v);
+                // パルス幅 Some(w) ならリセットを予約。通常代入は保留中パルスを解除。
+                match pulse {
+                    Some(w) => {
+                        let w = self.eval_e(w)?;
+                        if w < 1 {
+                            return fail(
+                                *line,
+                                format!("pulse width must be >= 1 (got {})", w),
+                            );
+                        }
+                        self.pulses.insert(target.clone(), w);
+                    }
+                    None => {
+                        self.pulses.remove(target);
+                    }
+                }
             }
             SimStmt::CallBind {
                 line,
