@@ -82,6 +82,12 @@ fn repeater_lock() {
     run_golden("repeater_lock");
 }
 
+/// パルス代入: `a = v ~ w;` は w tick 後に var を自動で 0 に戻す。
+#[test]
+fn pulse() {
+    run_golden("pulse");
+}
+
 /// stdin を流し込んで stdout がゴールデンと一致するか検証する。
 fn run_golden_stdin(name: &str, input: &str) {
     let manifest = env!("CARGO_MANIFEST_DIR");
