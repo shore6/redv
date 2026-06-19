@@ -1,7 +1,6 @@
 //! redv - AST
 //!
-//! C++ 版 `ast.hpp` の移植。原実装は「enum タグ + 全バリアントのフィールドを 1 構造体に
-//! 同居」という形だったが、Rust 版では **データ付き enum** にして不正状態を表現不能にする。
+//! 構文木。**データ付き enum** で不正状態を表現不能にしてある。
 //! これにより素子種別・文種別を追加した際にコンパイラが網羅性を検査できる。
 
 use std::collections::HashMap;
@@ -49,7 +48,7 @@ pub enum LogicStmt {
         line: i32,
         names: Vec<String>,
     },
-    /// 原実装の DeclReg は常に名前ちょうど 1 つを持つ(parser がカンマ列を分割する)。
+    /// DeclReg は常に名前ちょうど 1 つを持つ(parser がカンマ列を分割する)。
     ///
     /// `width` が `Some(n)` なら **バス reg**(`reg[n] name;`): n 本の並列レーン
     /// `name[0]`..`name[n-1]` を宣言する。各レーンは通常の plain 点で、`circuit` から見れば

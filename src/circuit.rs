@@ -1,6 +1,6 @@
 //! redv - circuit graph & simulation engine
 //!
-//! C++ 版 `circuit.hpp` の移植。意味論(設計判断の確定値)は原実装と一致:
+//! 意味論(設計判断の確定値):
 //!   * 1 tick = 1 レッドストーンティック。ゲームティック素子・サブティックパルスは扱わない。
 //!   * 各 tick:
 //!       1. 順序素子の出力を `delay` tick 前にサンプルした入力から計算
@@ -15,7 +15,7 @@
 //!   * 入力変数変更は次 tick 先頭で反映。
 //!   * 観測(monitor / 出力変数)は tick 処理後の値を見る。
 //!
-//! 借用検査の都合上、原実装が参照イテレートしていたループはインデックス走査に変えてある
+//! 借用検査の都合上、ループは参照イテレートでなくインデックス走査にしてある
 //! (`CEdge` は `Copy`、各ノード/素子は添字でアクセス)。結果は逐次キュー方式と同一。
 
 use crate::diag::{fail, warn, RvResult};
@@ -159,6 +159,8 @@ impl Circuit {
         idx
     }
 
+    /// union-find の代表(根)を返す。経路を半分に詰めながら辿る(path halving)ので
+    /// 償却ほぼ定数。回路の全走査は `find(n) == n`(= 代表ノード)だけを対象にする。
     pub fn find(&mut self, mut x: usize) -> usize {
         while self.par[x] != x {
             self.par[x] = self.par[self.par[x]];
@@ -167,6 +169,9 @@ impl Circuit {
         x
     }
 
+    /// 2 つのノードを「同じ点」として併合する(エイリアス `x = y;` や階層直結で使う)。
+    /// 種別は **ランク**(`Const` > `Input` > `Block` > `Plain`)が高い方を残し、各フラグは
+    /// OR で合成する。base 値の食い違う const 同士の併合は曖昧なのでエラー。
     pub fn merge(&mut self, a: usize, b: usize, line: i32) -> RvResult<()> {
         let a = self.find(a);
         let b = self.find(b);
@@ -347,6 +352,12 @@ impl Circuit {
         }
     }
 
+    /// ノード `n` に値 `v` を **合流** させ、値が増えたら `ch` を立てる(不動点ループの収束判定用)。
+    /// `n` は事前に `find` した代表ノードを渡す。種別ごとの合流規則がそのまま MAX 合流の単調性を担う:
+    ///
+    /// - `Const`/`Input` は駆動値固定なので無視、
+    /// - `Block` は給電(`v>0`)で 15 にラッチ(2 値)、
+    /// - `Plain` は max(増加方向のみ更新)。
     fn contribute(&mut self, n: usize, v: i32, ch: &mut bool) {
         let nd = &mut self.nodes[n];
         match nd.kind {
@@ -422,6 +433,8 @@ impl Circuit {
             }
         }
         let mut ch = true;
+        // 単調 MAX 更新なので必ず有限回で収束するが、念のため発散ガードを置く。
+        // 1 ノードは最大 15 段しか増えないので、(全伝搬要素数)×16 + 余裕で十分上限。
         let mut guard: i64 =
             16 * (self.edges.len() as i64 + self.seqs.len() as i64 + self.zero_reps.len() as i64)
                 + 64;

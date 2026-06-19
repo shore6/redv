@@ -1,6 +1,6 @@
 //! redv - redstone HDL simulator (CLI)
 //!
-//! C++ 版 `main.cpp` の移植。`-t/--trace`, `-h/--help`, `-v/--version` を受け付ける。
+//! CLI エントリ。`-t/--trace`, `-T/--time`, `-h/--help`, `-v/--version` を受け付ける。
 
 mod ast;
 mod circuit;

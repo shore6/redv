@@ -1,7 +1,7 @@
 //! redv - parser
 //!
-//! C++ 版 `parser.hpp` の移植。再帰下降。`#include` のサブパーサが同じ `Program` を
-//! 共有するため、`Program` は各メソッドに `&mut` 引数として渡す(構造体に保持しない)。
+//! 再帰下降パーサ。`#include` のサブパーサが同じ `Program` を共有するため、
+//! `Program` は各メソッドに `&mut` 引数として渡す(構造体に保持しない)。
 
 use crate::ast::*;
 use crate::diag::{fail, warn, RvResult};

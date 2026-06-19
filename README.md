@@ -111,8 +111,12 @@ tests/
   golden.rs     ゴールデンテスト (cargo test)
   expected/     期待出力
 docs/
-  LANGUAGE.md   言語仕様・シミュレーションセマンティクスの詳細
+  LANGUAGE.md       言語仕様・シミュレーションセマンティクスの詳細
+  ARCHITECTURE.md   内部設計(パイプライン・各モジュール・シミュレーションエンジン)
 ```
+
+開発者向けの内部設計(コンパイルパイプライン・エラボレーション・シミュレーションエンジンの
+仕組み・横断的な設計判断)は **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** を参照してください。
 
 ## 言語仕様
 
