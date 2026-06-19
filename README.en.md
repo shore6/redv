@@ -42,6 +42,8 @@ A plain `cargo build` is all you need.
 - **Verilog-style testbench** — Drive inputs in a `sim` block, advance time with
   `#init` / `#n` / `wait()`, and observe with `monitor`. `if` / `while` / `for` and pulse
   assignment `a = v ~ w;` (auto-resets to 0 after w ticks) are available.
+- **Buses (`reg[N]`)** — Declare several lanes as one bundle and wire them all in a single
+  line: `in - r - buf;` (simplifies dense circuits). Pick a single lane with `a[k]`.
 - **Zero dependencies, single binary** — No external crates. `cargo build --release`
   produces `redv`.
 - **Strict diagnostics** — Reports out-of-range signals, unconnected outputs, invalid
@@ -89,6 +91,7 @@ cargo test                                        # Golden tests for all example
 | `examples/repeater_lock.rv` | Repeater lock (`.side` on `reg m = r;` freezes the output) |
 | `examples/wire_reuse.rv` | Define a wire as a reusable component sequence used in several places |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets the var to 0 after w ticks |
+| `examples/bus_or4.rv` | Bus `reg[N]`: wire all 4 lanes in one line with `in - r - buf;` |
 
 ## Project Layout
 
