@@ -1,0 +1,36 @@
+/* インライン(チェーン内)のコンパレータ:
+ *  横入力を結線しないと cc(比較)も cd(減算)も「強度をそのまま」通す
+ *  パススルーに退化する。よってチェーン内では cc/cd の区別は無意味で、
+ *  モードを省いた `c` 単体をパススルーコンパレータとして書ける(issue #24)。
+ *  下の 3 つは完全に同一挙動になる。 */
+logic via_cc(input x, output y)
+{
+    x-d4-cc-d4-y;      // 比較モード(横未接続 = パススルー): 15 -> 7
+}
+
+logic via_cd(input x, output y)
+{
+    x-d4-cd-d4-y;      // 減算モード(横未接続 = パススルー): 15 -> 7
+}
+
+logic via_c(input x, output y)
+{
+    x-d4-c-d4-y;       // モード省略の `c` 単体: 上の 2 つと同一
+}
+
+module test_bare_comparator()
+{
+    var a;
+    var y1, y2, y3;
+    sim {
+        a = 15;
+        y1 = via_cc(a);
+        y2 = via_cd(a);
+        y3 = via_c(a);
+        #init
+        ?monitor("t=%t | a=%2d | cc: y1=%2d | cd: y2=%2d | c: y3=%2d\n", $time, a, y1, y2, y3);
+
+        a = 9;  #3
+        a = 0;  #3
+    }
+}

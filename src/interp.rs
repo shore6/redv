@@ -111,21 +111,17 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
             out.push(Elem { k: 'b', n: 1, line });
             i += 1;
         } else if c == b'c' {
-            if i + 1 >= b.len() {
-                return fail(
-                    line,
-                    "comparator must be written 'cc' (compare) or 'cd' (subtract)",
-                );
-            }
-            let m = b[i + 1];
-            if m == b'c' {
-                out.push(Elem { k: 'C', n: 1, line });
-            } else if m == b'd' {
-                out.push(Elem { k: 'S', n: 1, line });
+            // `cc` = 比較 / `cd` = 減算。それ以外の `c` 単体は **インラインのパススルー
+            // コンパレータ**。横未接続では cc/cd は同一(back パススルー)に退化するため、
+            // チェーン内では区別が無意味 → bare `c` を許可する。ただし reg 素子としては
+            // モード確定が要るので、bare `c`(k='c')を reg に置くのは interp 側でエラー。
+            if i + 1 < b.len() && (b[i + 1] == b'c' || b[i + 1] == b'd') {
+                out.push(Elem { k: if b[i + 1] == b'c' { 'C' } else { 'S' }, n: 1, line });
+                i += 2;
             } else {
-                return fail(line, format!("comparator must be written 'cc' or 'cd' in \"{}\"", s));
+                out.push(Elem { k: 'c', n: 1, line });
+                i += 1;
             }
-            i += 2;
         } else {
             return fail(line, format!("unknown element '{}' in \"{}\"", c as char, s));
         }
@@ -146,6 +142,11 @@ pub fn name_collides_with_element(name: &str) -> bool {
 fn comparator_mode(tok: &str, line: i32) -> RvResult<Option<SeqKind>> {
     let es = parse_chunk(tok, line)?;
     match es.first() {
+        // bare `c` は reg のモードを確定できない(side 結線で cc/cd の差が出る)。
+        Some(e) if e.k == 'c' && es.len() == 1 => fail(
+            line,
+            "a comparator reg must specify a mode: use 'cc' (compare) or 'cd' (subtract)",
+        ),
         Some(e) if e.k == 'C' || e.k == 'S' => {
             if es.len() != 1 {
                 return fail(
@@ -422,6 +423,13 @@ impl<'p> Elaborator<'_, 'p> {
                 ),
             );
         }
+        // bare `c` はインライン専用。reg 素子にはモード確定(cc/cd)が要る。
+        if e.k == 'c' {
+            return fail(
+                line,
+                "a comparator reg must specify a mode: use 'cc' (compare) or 'cd' (subtract)",
+            );
+        }
         // トーチは reg に格納できない(順序素子はワイヤー/チェーン内に置く)。
         if e.k == 't' {
             return fail(
@@ -516,8 +524,9 @@ impl<'p> Elaborator<'_, 'p> {
                     prev = no;
                     decay = 0;
                 }
-                // インライン(チェーン内)コンパレータ: 横入力なし = パススルー
-                'C' | 'S' => {
+                // インライン(チェーン内)コンパレータ: 横入力なし = パススルー。
+                // `c` 単体(bare)もここでパススルー扱い(cc/cd と同一に退化)。
+                'C' | 'S' | 'c' => {
                     let ni = self
                         .c
                         .new_node(format!("{}.{}#i{}", prefix, label, idx), NodeKind::Plain);

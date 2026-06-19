@@ -62,6 +62,11 @@ fn decay() {
 }
 
 #[test]
+fn bare_comparator() {
+    run_golden("bare_comparator");
+}
+
+#[test]
 fn counter_test() {
     run_golden("counter_test");
 }
@@ -258,13 +263,27 @@ fn seq_reg_declaration_init_is_accepted() {
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
-/// 素子名でない宣言名(`b2` / `cmp` / `x` / `c` 等)は受理される。
+/// 素子名でない宣言名(`b2` / `cmp` / `x` 等)は受理される。
 #[test]
 fn non_element_names_are_accepted() {
-    let src = "logic g(input a, input b2, output y){ reg cmp, x, c; a-t-y; }\n\
+    let src = "logic g(input a, input b2, output y){ reg cmp, x, z; a-t-y; }\n\
                module m(){ var u, v; sim{ u=0; v=g(u,u); #init } }";
     let (code, stderr) = run_source("non_elem_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// `c` 単体はインラインのパススルーコンパレータ素子なので、宣言名としては
+/// 素子名と衝突し **エラー**(issue #24)。
+#[test]
+fn bare_c_name_is_rejected() {
+    let src = "logic g(input a, output y){ reg c; a-t-y; }\n\
+               module m(){ var u, v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("bare_c_name", src);
+    assert_eq!(code, Some(1), "expected error, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("collides with an element name"),
+        "stderr:\n{stderr}"
+    );
 }
 
 /// バス reg(`reg[N]`)+ 添字 `a[k]` + 全体チェーン `p - r - q;` は受理される(issue #11)。
