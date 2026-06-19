@@ -100,8 +100,9 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
             if i < b.len() && b[i].is_ascii_digit() {
                 n = (b[i] - b'0') as i32;
                 i += 1;
-                if !(1..=4).contains(&n) || (i < b.len() && b[i].is_ascii_digit()) {
-                    return fail(line, format!("repeater delay must be 1-4 in \"{}\"", s));
+                // `r0` = 0tick リピータ(同一 tick で再増幅する組合せ素子)。`r1`-`r4` は遅延つき。
+                if !(0..=4).contains(&n) || (i < b.len() && b[i].is_ascii_digit()) {
+                    return fail(line, format!("repeater delay must be 0-4 in \"{}\"", s));
                 }
             }
             out.push(Elem { k: 'r', n, line });
@@ -498,6 +499,20 @@ impl<'p> Elaborator<'_, 'p> {
                     prev = nn;
                     decay = 0;
                 }
+                // 0tick リピータ(`r0`): 遅延ゼロの組合せ増幅器。順序素子ではなく
+                // 不動点ループ内で評価する zero_rep として展開する。
+                'r' if e.n == 0 => {
+                    let ni = self
+                        .c
+                        .new_node(format!("{}.{}#i{}", prefix, label, idx), NodeKind::Plain);
+                    let no = self
+                        .c
+                        .new_node(format!("{}.{}#o{}", prefix, label, idx), NodeKind::Plain);
+                    self.c.add_edge(prev, ni, decay);
+                    self.c.add_zero_rep(ni, no);
+                    prev = no;
+                    decay = 0;
+                }
                 'r' | 't' => {
                     let ni = self
                         .c
@@ -747,6 +762,18 @@ impl<'p> Elaborator<'_, 'p> {
                         }
                         if ri.strength >= 0 {
                             return fail(*line, "repeater reg cannot take a signal strength");
+                        }
+                        // 0tick リピータ(`r0`)はロック付き reg にできない(ロックは前 tick の
+                        // 出力を凍結する順序素子だが、r0 には保持する状態がない)。inline 専用。
+                        if dly == 0 {
+                            return fail(
+                                *line,
+                                format!(
+                                    "a 0-tick repeater (r0) cannot be a lockable reg; place it inline \
+                                     in a chain (e.g. 'x - r0 - {};')",
+                                    name
+                                ),
+                            );
                         }
                         let back = self
                             .c

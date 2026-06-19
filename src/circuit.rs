@@ -120,6 +120,15 @@ pub struct CSeq {
     pub label: String,
 }
 
+/// 0tick リピータ(`r0`)。遅延ゼロの組合せ増幅器: `out = in > 0 ? 15 : 0` を
+/// **同一 tick** で確定する。入力について単調(in 増→out 増)なので、組合せ網の
+/// MAX 不動点ループにそのまま参加でき、決定性・順序非依存を保てる。
+#[derive(Debug, Clone)]
+pub struct ZeroRep {
+    pub in_: usize,
+    pub out: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct Circuit {
     pub cfg: Config,
@@ -128,6 +137,8 @@ pub struct Circuit {
     pub par: Vec<usize>,
     pub edges: Vec<CEdge>,
     pub seqs: Vec<CSeq>,
+    /// 0tick リピータ(遅延ゼロの組合せ増幅器)。`seqs` と違い不動点ループ内で評価する。
+    pub zero_reps: Vec<ZeroRep>,
     pub tick: i64,
     pub trace: bool,
 }
@@ -230,6 +241,14 @@ impl Circuit {
             cooldown: 0,
             label,
         });
+        let r = self.find(out);
+        self.nodes[r].has_incoming = true;
+    }
+
+    /// 0tick リピータ(遅延ゼロの組合せ増幅器)を登録する。`out` は組合せ網内で
+    /// `in_` の確定値から毎回計算されるので、出力ノードを `has_incoming` にしておく。
+    pub fn add_zero_rep(&mut self, in_: usize, out: usize) {
+        self.zero_reps.push(ZeroRep { in_, out });
         let r = self.find(out);
         self.nodes[r].has_incoming = true;
     }
@@ -403,7 +422,9 @@ impl Circuit {
             }
         }
         let mut ch = true;
-        let mut guard: i64 = 16 * (self.edges.len() as i64 + self.seqs.len() as i64) + 64;
+        let mut guard: i64 =
+            16 * (self.edges.len() as i64 + self.seqs.len() as i64 + self.zero_reps.len() as i64)
+                + 64;
         while ch {
             ch = false;
             for ei in 0..self.edges.len() {
@@ -414,6 +435,14 @@ impl Circuit {
                 if v < 0 {
                     v = 0;
                 }
+                self.contribute(d, v, &mut ch);
+            }
+            // 0tick リピータ: 入力の確定値から同一 tick で出力(in>0?15:0)を合流する。
+            // 入力は MAX 合流で単調増加するので出力も単調、不動点は決定的に収束する。
+            for zi in 0..self.zero_reps.len() {
+                let s = self.find(self.zero_reps[zi].in_);
+                let d = self.find(self.zero_reps[zi].out);
+                let v = if self.nodes[s].value > 0 { 15 } else { 0 };
                 self.contribute(d, v, &mut ch);
             }
             guard -= 1;

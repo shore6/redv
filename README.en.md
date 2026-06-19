@@ -91,6 +91,7 @@ cargo test                                        # Golden tests for all example
 | `examples/chain_mixed.rv` | Merging two chain paths into the same point (max) |
 | `examples/comparator_side.rv` | Comparator side input (`cd` subtract / `cc` compare) |
 | `examples/repeater_lock.rv` | Repeater lock (`.side` on `reg m = r;` freezes the output) |
+| `examples/repeater_0tick.rv` | 0-tick repeater (`r0`) vs. a normal repeater (`r1`): timing comparison |
 | `examples/wire_reuse.rv` | Define a wire as a reusable component sequence used in several places |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets the var to 0 after w ticks |
 | `examples/bus_or4.rv` | Bus `reg[N]`: wire all 4 lanes in one line with `in - r - buf;` |

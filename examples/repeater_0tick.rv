@@ -1,0 +1,35 @@
+/* 0tick リピータ (r0):
+ *  - 遅延ゼロの組合せ増幅器。入力を同一 tick で 15 に再増幅する(in>0 ? 15 : 0)。
+ *  - r1-r4 (遅延つき) と違い、入力変化がその tick のうちに出力へ伝わる。
+ * ここでは d4 で 4 減衰させた信号を r0 / r1 で再増幅し、反応タイミングの差を観測する。 */
+logic amp0(input x, output y)
+{
+    x-d4r0d4-y;        // 0tick 再増幅: 15 -> 11 -> (即) 15 -> 11
+}
+
+logic amp1(input x, output y)
+{
+    x-d4rd4-y;         // 1tick 再増幅 (r = r1): 同じ強度だが 1 tick 遅れる
+}
+
+module test_repeater_0tick()
+{
+    var a;
+    var y0, y1;
+    sim {
+        a = 0;
+        y0 = amp0(a);
+        y1 = amp1(a);
+        #init                      // (時刻0) 両方 0
+
+        a = 15;
+        #1                         // (時刻1) r0 は同tickで反応(y0=11)、r1 はまだ 0
+        #1                         // (時刻2) r1 が 1tick 遅れて反応(y1=11)
+
+        a = 0;
+        #1                         // (時刻3) r0 は即 0、r1 はまだ 11
+        #1                         // (時刻4) r1 が 1tick 遅れて 0
+
+        ?monitor("t=%2 | a=%2 | r0:y0=%2 | r1:y1=%2\n", $time, a, y0, y1);
+    }
+}
