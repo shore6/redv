@@ -10,8 +10,9 @@ mod lexer;
 mod parser;
 
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
-const VERSION: &str = "redv 0.3.0";
+const VERSION: &str = "redv 0.4.0";
 
 fn usage() {
     print!(
@@ -21,19 +22,40 @@ Redstone circuit HDL simulator.\n\
 \n\
 options:\n\
 \x20 -t, --trace    dump named node values to stderr every tick\n\
+\x20 -T, --time     print compile/sim timings to stderr\n\
 \x20 -h, --help     show this help\n\
 \x20 -v, --version  show version\n"
     );
+}
+
+/// `--time` のフェーズ別所要時間を stderr へ出力する。
+///
+/// - `compile`: 字句解析 + 構文解析 + 回路エラボレーション(tick 実行以外のすべて)。
+/// - `sim`:     sim tick 実行(`step()` 不動点エンジン)。複数 module は合算。
+/// - `total`:   `compile + sim`。
+fn report_time(compile: Duration, sim: Duration, modules: usize) {
+    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+    let suffix = if modules > 1 {
+        format!(" ({} modules)", modules)
+    } else {
+        String::new()
+    };
+    eprintln!("[time] {:<8} {:.3} ms", "compile:", ms(compile));
+    eprintln!("[time] {:<8} {:.3} ms{}", "sim:", ms(sim), suffix);
+    eprintln!("[time] {:<8} {:.3} ms", "total:", ms(compile + sim));
 }
 
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let mut file: Option<String> = None;
     let mut trace = false;
+    let mut time = false;
 
     for a in &argv[1..] {
         if a == "-t" || a == "--trace" {
             trace = true;
+        } else if a == "-T" || a == "--time" {
+            time = true;
         } else if a == "-h" || a == "--help" {
             usage();
             return ExitCode::SUCCESS;
@@ -67,17 +89,29 @@ fn main() -> ExitCode {
         }
     };
 
-    let result = (|| -> diag::RvResult<()> {
+    let result = (|| -> diag::RvResult<(Duration, Duration, interp::RunTimings)> {
+        let t0 = Instant::now();
         let mut prog = ast::Program::default();
         let toks = lexer::Lexer::new(src).run()?;
         let mut ps = parser::Parser::new(toks, parser::dir_of(&file));
         ps.parse_file(&mut prog)?;
-        interp::run_program(&prog, trace)?;
-        Ok(())
+        let parse_dur = t0.elapsed();
+        let t1 = Instant::now();
+        let timings = interp::run_program(&prog, trace)?;
+        let run_dur = t1.elapsed();
+        Ok((parse_dur, run_dur, timings))
     })();
 
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok((parse_dur, run_dur, timings)) => {
+            if time {
+                // run_dur のうち tick 実行以外(エラボレーション + monitor 出力等)を
+                // compile に合算する。sim は tick 実行のみ。
+                let elaborate = run_dur.saturating_sub(timings.sim);
+                report_time(parse_dur + elaborate, timings.sim, timings.modules);
+            }
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("[error] {}", e);
             ExitCode::FAILURE

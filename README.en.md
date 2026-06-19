@@ -71,6 +71,7 @@ cargo test                                        # Golden tests for all example
 |---|---|
 | `redv <file.rv>` | Compile and simulate the circuit (exit code 0 on success, 1 on error) |
 | `-t`, `--trace` | Trace all node values every tick to stderr |
+| `-T`, `--time` | Print compile / simulation timings to stderr |
 | `-h`, `--help` | Show usage (exit code 0) |
 | `-v`, `--version` | Show version |
 | No args / unknown option / missing file | Print usage to stderr, exit code 2 |

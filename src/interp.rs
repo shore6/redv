@@ -11,6 +11,7 @@ use crate::circuit::{Circuit, Config, NodeKind, SeqKind};
 use crate::diag::{fail, warn, RvResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
+use std::time::{Duration, Instant};
 
 // ---- chain token expansion ---------------------------------------------
 
@@ -1072,6 +1073,8 @@ pub struct ModuleExec<'a> {
     pulses: HashMap<String, i64>,
     /// バス var(`var[N] x;`)の幅。レーンは vars に `x[0]`..`x[N-1]` のキーで格納する。
     var_buses: HashMap<String, i32>,
+    /// この module の sim tick 実行(`tick_once`)に費やした累積時間。`--time` 用。
+    sim_dur: Duration,
 }
 
 impl<'a> ModuleExec<'a> {
@@ -1088,6 +1091,7 @@ impl<'a> ModuleExec<'a> {
             sim_time: 0,
             pulses: HashMap::new(),
             var_buses: HashMap::new(),
+            sim_dur: Duration::ZERO,
         }
     }
 
@@ -1253,10 +1257,12 @@ impl<'a> ModuleExec<'a> {
     }
 
     fn tick_once(&mut self) -> RvResult<bool> {
+        let t = Instant::now();
         self.apply_inputs()?;
         let ch = self.c.step();
         self.apply_outputs();
         self.tick_pulses();
+        self.sim_dur += t.elapsed();
         Ok(ch)
     }
 
@@ -1766,7 +1772,19 @@ fn read_stdin_int(line: i32) -> RvResult<i64> {
     }
 }
 
-pub fn run_program(prog: &Program, trace: bool) -> RvResult<()> {
+/// `run_program` のフェーズ別所要時間(`--time` 用)。
+///
+/// `sim` は sim tick 実行(`tick_once` = 入力反映 + `step()` 不動点 + 出力反映)に
+/// 費やした累積時間。エラボレーションや monitor 出力など tick 以外の処理は含まない。
+#[derive(Default, Clone, Copy)]
+pub struct RunTimings {
+    /// 全 module 合算の sim tick 実行時間。
+    pub sim: Duration,
+    /// 実行した module 数。
+    pub modules: usize,
+}
+
+pub fn run_program(prog: &Program, trace: bool) -> RvResult<RunTimings> {
     let mut cfg = Config::default();
     if let Some(v) = prog.defines.get("INIT_TIMEOUT") {
         cfg.init_timeout = *v;
@@ -1783,15 +1801,20 @@ pub fn run_program(prog: &Program, trace: bool) -> RvResult<()> {
 
     if prog.modules.is_empty() {
         warn(0, "no module to run");
-        return Ok(());
+        return Ok(RunTimings::default());
     }
     let many = prog.modules.len() > 1;
+    let mut timings = RunTimings {
+        sim: Duration::ZERO,
+        modules: prog.modules.len(),
+    };
     for m in &prog.modules {
         if many {
             println!("=== module {} ===", m.name);
         }
         let mut ex = ModuleExec::new(prog, m, cfg, trace);
         ex.run()?;
+        timings.sim += ex.sim_dur;
     }
-    Ok(())
+    Ok(timings)
 }

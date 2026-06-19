@@ -187,6 +187,43 @@ fn missing_file_exits_2() {
     assert_eq!(out.status.code(), Some(2));
 }
 
+/// CLI 動作: `--time` は compile/sim/total の計測値を stderr に出し、
+/// stdout はフラグ無しと完全一致する(issue #25)。値は非決定的なので
+/// ゴールデン比較せず「行が出ること」「stdout が不変なこと」だけ検証する。
+#[test]
+fn time_flag_reports_to_stderr() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let rv = format!("{manifest}/examples/clock.rv");
+
+    let plain = Command::new(bin()).arg(&rv).output().expect("spawn redv");
+    let timed = Command::new(bin())
+        .arg("--time")
+        .arg(&rv)
+        .output()
+        .expect("spawn redv");
+
+    assert!(timed.status.success(), "--time should exit 0");
+    // stdout は計測フラグの有無で変わらない。
+    assert_eq!(
+        timed.stdout, plain.stdout,
+        "--time must not alter stdout"
+    );
+
+    let stderr = String::from_utf8_lossy(&timed.stderr);
+    for needle in ["[time] compile:", "[time] sim:", "[time] total:"] {
+        assert!(
+            stderr.contains(needle),
+            "missing {needle:?} in stderr:\n{stderr}"
+        );
+    }
+    // フラグ無しでは計測行を出さない。
+    let plain_stderr = String::from_utf8_lossy(&plain.stderr);
+    assert!(
+        !plain_stderr.contains("[time]"),
+        "timing should be opt-in, stderr:\n{plain_stderr}"
+    );
+}
+
 /// 与えたソースを一時ファイルに書いて redv に渡し、(終了コード, stderr) を返す。
 fn run_source(tag: &str, src: &str) -> (Option<i32>, String) {
     let path = std::env::temp_dir().join(format!("redv_test_{tag}.rv"));
