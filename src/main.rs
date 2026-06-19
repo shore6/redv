@@ -12,7 +12,8 @@ mod parser;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-const VERSION: &str = "redv 0.4.0";
+/// バージョンは `Cargo.toml` を唯一の正とし、`env!` でビルド時に埋め込む。
+const VERSION: &str = concat!("redv ", env!("CARGO_PKG_VERSION"));
 
 fn usage() {
     print!(
