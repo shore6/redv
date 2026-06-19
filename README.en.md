@@ -89,6 +89,7 @@ cargo test                                        # Golden tests for all example
 | `examples/hier_and.rv` | A hierarchical AND nesting `not_gate` / `or_gate` (De Morgan) |
 | `examples/chain_mixed.rv` | Merging two chain paths into the same point (max) |
 | `examples/comparator_side.rv` | Comparator side input (`cd` subtract / `cc` compare) |
+| `examples/bare_comparator.rv` | Mode-less comparator `c` inside a chain (same as `cc` / `cd`) |
 | `examples/repeater_lock.rv` | Repeater lock (`.side` on `reg m = r;` freezes the output) |
 | `examples/wire_reuse.rv` | Define a wire as a reusable component sequence used in several places |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets the var to 0 after w ticks |
@@ -128,7 +129,7 @@ logic or_gate(input a, input b2, output y) {
 }
 ```
 
-> `reg` / `wire` / port names may not collide with element names (`b` / `r` / `cd`, etc.);
+> `reg` / `wire` / port names may not collide with element names (`b` / `r` / `c` / `cd`, etc.);
 > such names would be ambiguous inside a chain (see [docs/LANGUAGE.md](docs/LANGUAGE.md) §2).
 
 ## License
