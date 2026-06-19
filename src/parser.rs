@@ -188,12 +188,28 @@ impl Parser {
                 if pk != "input" && pk != "output" {
                     return fail(pl, "port must start with 'input' or 'output'");
                 }
+                // バスポート `input[N]` / `output[N]`(`[N]` は input/output と名前の間)。
+                let mut width: Option<i32> = None;
+                if self.is_punct("[") {
+                    self.i += 1;
+                    if self.cur().k != Tk::Num {
+                        return fail(self.cur().line, "expected a bus width 'N' after '['");
+                    }
+                    let n = self.cur().num;
+                    self.i += 1;
+                    self.expect_punct("]")?;
+                    if n < 1 {
+                        return fail(pl, format!("bus width must be >= 1 (got {})", n));
+                    }
+                    width = Some(n as i32);
+                }
                 let pname = self.expect_ident("port name")?;
                 self.check_decl_name(&pname, "port", pl)?;
                 ports.push(Port {
                     input: pk == "input",
                     name: pname,
                     line: pl,
+                    width,
                 });
                 if self.is_punct(",") {
                     self.i += 1;
@@ -370,7 +386,18 @@ impl Parser {
             let mut args = Vec::new();
             if !self.is_punct(")") {
                 loop {
-                    args.push(self.expect_ident("logic input (reg/port name)")?);
+                    let an = self.expect_ident("logic input (reg/port name)")?;
+                    if self.is_punct("[") {
+                        return fail(
+                            self.cur().line,
+                            format!(
+                                "cannot pass a bus lane '{}[..]' as a logic argument; \
+                                 pass the whole bus reg/port",
+                                an
+                            ),
+                        );
+                    }
+                    args.push(an);
                     if self.is_punct(",") {
                         self.i += 1;
                         continue;
@@ -532,6 +559,21 @@ impl Parser {
     fn parse_var_decl(&mut self) -> RvResult<SimStmt> {
         let ln = self.cur().line;
         self.i += 1; // 'var'
+        // バス var `var[N]`(`[N]` は var と名前の間。宣言列全体に適用)。
+        let mut width: Option<i32> = None;
+        if self.is_punct("[") {
+            self.i += 1;
+            if self.cur().k != Tk::Num {
+                return fail(self.cur().line, "expected a bus width 'N' after 'var['");
+            }
+            let n = self.cur().num;
+            self.i += 1;
+            self.expect_punct("]")?;
+            if n < 1 {
+                return fail(ln, format!("bus width must be >= 1 (got {})", n));
+            }
+            width = Some(n as i32);
+        }
         let mut decls = Vec::new();
         loop {
             let n = self.expect_ident("variable name")?;
@@ -541,7 +583,7 @@ impl Parser {
             } else {
                 None
             };
-            decls.push((n, e));
+            decls.push((n, e, width));
             if self.is_punct(",") {
                 self.i += 1;
                 continue;
@@ -569,11 +611,20 @@ impl Parser {
     fn parse_assign_no_semi(&mut self) -> RvResult<SimStmt> {
         let ln = self.cur().line;
         let target = self.expect_ident("assignment target")?;
+        let index = if self.is_punct("[") {
+            self.i += 1;
+            let e = self.parse_expr()?;
+            self.expect_punct("]")?;
+            Some(Box::new(e))
+        } else {
+            None
+        };
         self.expect_punct("=")?;
         let value = self.parse_expr()?;
         Ok(SimStmt::Assign {
             line: ln,
             target,
+            index,
             value,
             pulse: None,
         })
@@ -686,6 +737,29 @@ impl Parser {
                 let call = self.parse_call()?;
                 return Ok(SimStmt::Call { line: ln, call });
             }
+            // バス var のレーン代入:  name[idx] = value [~ pulse];
+            if self.peek(1).k == Tk::Punct && self.peek(1).s == "[" {
+                self.i += 1; // name
+                self.expect_punct("[")?;
+                let idx = self.parse_expr()?;
+                self.expect_punct("]")?;
+                self.expect_punct("=")?;
+                let value = self.parse_expr()?;
+                let pulse = if self.is_punct("~") {
+                    self.i += 1;
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                self.expect_punct(";")?;
+                return Ok(SimStmt::Assign {
+                    line: ln,
+                    target: name,
+                    index: Some(Box::new(idx)),
+                    value,
+                    pulse,
+                });
+            }
             if self.peek(1).k == Tk::Punct && self.peek(1).s == "=" {
                 self.i += 2;
                 // CallBind?  target = callee(args...)
@@ -698,9 +772,19 @@ impl Parser {
                     let mut bind_args = Vec::new();
                     if !self.is_punct(")") {
                         loop {
-                            bind_args.push(
-                                self.expect_ident("variable name (logic inputs must be vars)")?,
-                            );
+                            let an =
+                                self.expect_ident("variable name (logic inputs must be vars)")?;
+                            if self.is_punct("[") {
+                                return fail(
+                                    self.cur().line,
+                                    format!(
+                                        "cannot pass a bus lane '{}[..]' as a logic argument; \
+                                         pass the whole bus var (or copy the lane to a scalar var first)",
+                                        an
+                                    ),
+                                );
+                            }
+                            bind_args.push(an);
                             if self.is_punct(",") {
                                 self.i += 1;
                                 continue;
@@ -729,6 +813,7 @@ impl Parser {
                 return Ok(SimStmt::Assign {
                     line: ln,
                     target: name,
+                    index: None,
                     value,
                     pulse,
                 });
@@ -885,7 +970,20 @@ impl Parser {
         if self.cur().k == Tk::Ident {
             let name = self.cur().s.clone();
             self.i += 1;
-            return Ok(Expr::Var { line: ln, name });
+            // バス var のレーン参照 `name[expr]`(添字は実行時に評価)。
+            let index = if self.is_punct("[") {
+                self.i += 1;
+                let e = self.parse_expr()?;
+                self.expect_punct("]")?;
+                Some(Box::new(e))
+            } else {
+                None
+            };
+            return Ok(Expr::Var {
+                line: ln,
+                name,
+                index,
+            });
         }
         if self.is_punct("(") {
             self.i += 1;
