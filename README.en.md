@@ -41,7 +41,9 @@ A plain `cargo build` is all you need.
   rules: repeater delay, torch inversion, dust attenuation, max-value merging, and more.
 - **Verilog-style testbench** — Drive inputs in a `sim` block, advance time with
   `#init` / `#n` / `wait()`, and observe with `monitor`. `if` / `while` / `for` and pulse
-  assignment `a = v ~ w;` (auto-resets to 0 after w ticks) are available.
+  assignment `a = v ~ w;` (auto-resets to 0 after w ticks) are available. Write self-checking
+  tests with `assert(cond)` / `expect(actual, expected)` — failures report to stderr and the
+  process exits non-zero, so pass/fail comes from the exit code (no golden text needed).
 - **Buses (`reg[N]` / `input[N]` / `output[N]` / `var[N]`)** — Declare several lanes as one
   bundle and wire them all in a single line: `in - r - buf;` (simplifies dense circuits). Pick a
   single lane with `a[k]`, and bind **multi-I/O** directly through bus ports and sim bus vars.
@@ -85,6 +87,7 @@ cargo test                                        # Golden tests for all example
 | `examples/and_gate.rv` | An AND from 3 torches (NOR of NOTs) |
 | `examples/decay.rv` | Comparison of dust attenuation / repeater re-amplification / comparator strength pass-through |
 | `examples/counter_test.rv` | Automatically verifies the AND truth table with `for` / `if` |
+| `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` report pass/fail via exit code |
 | `examples/clock.rv` | A torch + repeater-4 clock (period 10). Example of `wait()` |
 | `examples/scan_and.rv` | Reads 2 values from stdin with `scan()` and feeds them into an AND |
 | `examples/hier_and.rv` | A hierarchical AND nesting `not_gate` / `or_gate` (De Morgan) |

@@ -94,6 +94,12 @@ fn repeater_0tick() {
     run_golden("repeater_0tick");
 }
 
+/// assert / expect による自己検証テストベンチ(全 assert が通れば exit 0)(issue #40)。
+#[test]
+fn assert_selfcheck() {
+    run_golden("assert_selfcheck");
+}
+
 /// stdin を流し込んで stdout がゴールデンと一致するか検証する。
 fn run_golden_stdin(name: &str, input: &str) {
     let manifest = env!("CARGO_MANIFEST_DIR");
@@ -322,6 +328,69 @@ fn zero_tick_repeater_inline_is_accepted() {
                module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("r0_inline_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// 全 assert / expect が真なら exit 0 で「all passed」サマリを出す(issue #40)。
+#[test]
+fn assert_all_passed_exits_zero() {
+    let src = "module m(){ var a; sim{ a=0; assert(a==0); expect(a, 0); } }";
+    let (code, stderr) = run_source("assert_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+    assert!(stderr.contains("all passed"), "unexpected stderr:\n{stderr}");
+}
+
+/// 偽の assert は失敗を記録し、末尾サマリ付きで非ゼロ終了する(issue #40)。
+#[test]
+fn assert_failure_exits_nonzero() {
+    let src = "module m(){ var a; sim{ a=0; assert(a > 0); } }";
+    let (code, stderr) = run_source("assert_fail", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("assertion failed") && stderr.contains("1 of 1 failed"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
+/// expect の不一致は「実際の値 / 期待値」を出力して非ゼロ終了する(issue #40)。
+#[test]
+fn expect_mismatch_reports_values() {
+    let src = "module m(){ var a; sim{ a=7; expect(a, 3); } }";
+    let (code, stderr) = run_source("expect_fail", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("expect failed") && stderr.contains("= 7, expected 3"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
+/// 失敗しても sim は継続し、全チェックを集計する(2 件失敗を 1 度に把握できる)(issue #40)。
+#[test]
+fn assert_collects_all_failures() {
+    let src = "module m(){ var a; sim{ a=0; assert(a > 0); expect(a, 9); assert(a == 0); } }";
+    let (code, stderr) = run_source("assert_collect", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(stderr.contains("2 of 3 failed"), "unexpected stderr:\n{stderr}");
+}
+
+/// assert / expect の引数個数が違えばエラー(issue #40)。
+#[test]
+fn assert_expect_arity_is_error() {
+    for (tag, src, want) in [
+        (
+            "assert_two",
+            "module m(){ var a; sim{ a=0; assert(a, 1); } }",
+            "assert(cond) takes exactly one",
+        ),
+        (
+            "expect_one",
+            "module m(){ var a; sim{ a=0; expect(a); } }",
+            "expect(actual, expected) takes exactly two",
+        ),
+    ] {
+        let (code, stderr) = run_source(tag, src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
+    }
 }
 
 /// 素子名でない宣言名(`b2` / `cmp` / `x` / `c` 等)は受理される。
