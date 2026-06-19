@@ -19,6 +19,6 @@ module scan_and()
         b = scan();         // stdin から b を読む
         y = and_gate(a, b);
         #init
-        ?monitor("a=%2d b=%2d -> y=%2d\n", a, b, y);
+        ?monitor("a=%2 b=%2 -> y=%2\n", a, b, y);
     }
 }

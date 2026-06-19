@@ -29,7 +29,7 @@ module test_comparator_side()
         s = sub_gate(a, b);   // max(0, 12-5) = 7
         c = cmp_gate(a, b);   // 12 >= 5 -> 12
         #init
-        ?monitor("t=%t | a=%2d b=%2d | sub=%2d | cmp=%2d\n", $time, a, b, s, c);
+        ?monitor("t=% | a=%2 b=%2 | sub=%2 | cmp=%2\n", $time, a, b, s, c);
 
         b = 12;  #2           // sub: max(0,12-12)=0,  cmp: 12>=12 -> 12
         b = 15;  #2           // sub: max(0,12-15)=0,  cmp: 12>=15 -> 0

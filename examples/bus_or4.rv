@@ -33,7 +33,7 @@ module test_or4()
             #2                         // リピータ遅延1 + 入力反映1 を待つ
             exp = 0;
             if (i > 0) { exp = 15; }
-            monitor("a=%d%d%d%d -> y=%2d", a3 / 15, a2 / 15, a1 / 15, a0 / 15, y);
+            monitor("a=%1%1%1%1 -> y=%2", a3 / 15, a2 / 15, a1 / 15, a0 / 15, y);
             if (y != exp) { monitor("  <- NG!\n"); ng = ng + 1; }
             else          { monitor("  ok\n"); }
         }

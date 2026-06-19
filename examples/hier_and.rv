@@ -31,7 +31,7 @@ module sweep_and()
             a = (i / 2) * 15;
             b = (i % 2) * 15;
             #6                          // 階層 4 段(トーチ/リピータ)の伝搬を待つ
-            monitor("a=%2d b=%2d -> y=%2d", a, b, y);
+            monitor("a=%2 b=%2 -> y=%2", a, b, y);
             if ((a > 0 && b > 0) != (y > 0)) {
                 monitor("   <- NG!\n");
                 ng = ng + 1;

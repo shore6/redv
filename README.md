@@ -22,7 +22,7 @@ module test() {
         y = not_gate(x);                 // インスタンス化して変数を束縛
         #init                            // 定常状態まで待つ($time = 0)
         x = 10;  #1 #1                   // 入力を立てて 2 tick 進める
-        ?monitor("t=%t x=% y=%\n", $time, x, y);
+        ?monitor("t=% x=% y=%\n", $time, x, y);
     }
 }
 ```
