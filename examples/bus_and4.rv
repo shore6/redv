@@ -1,0 +1,47 @@
+/* Phase 1b: バスポート + バス var + バス束縛のデモ。
+ * 2 本の 4 ビットバス a, b2 のビット単位 AND を、各行 1 文でまとめて配線する。
+ *   a AND b2 = NOT( NOT a OR NOT b2 )   (ド・モルガン)
+ * バスポート input[4]/output[4]・内部バス reg・バス全体チェーンで密に書ける
+ * (スカラ 4 本ぶんの配線が 1 行になる)。 */
+logic and4(input[4] a, input[4] b2, output[4] y)
+{
+    reg[4] na;
+    reg[4] nb;
+    reg[4] o;
+    a - t - na;        // na = NOT a(4 レーンへトーチ一括)
+    b2 - t - nb;        // nb = NOT b2
+    na - o;            // o = na OR nb(各レーンで max 合流)
+    nb - o;
+    o - t - y;         // y = NOT o = a AND b2
+}
+
+module test_and4()
+{
+    var[4] a;          // バス var: a[0]..a[3]
+    var[4] b2;
+    var[4] y;
+    var i, k, ng, bit;
+    sim {
+        a = 0; b2 = 0; ng = 0;       // バス全体へブロードキャスト代入
+        y = and4(a, b2);             // バス出力をバス var へ束縛(レーン対応)
+        #init
+        b2[1] = 15; b2[2] = 15;       // b2 = 0110 固定
+        for (i = 0; i < 16; i = i + 1) {
+            a[0] = (i % 2) * 15;     // a を 4 ビットのパターンに(添字代入)
+            a[1] = (i / 2 % 2) * 15;
+            a[2] = (i / 4 % 2) * 15;
+            a[3] = (i / 8 % 2) * 15;
+            #6                       // トーチ 2 段の伝搬を待つ(焼き切れ保護に触れない間隔)
+            for (k = 0; k < 4; k = k + 1) {    // 各レーンを検証(実行時添字)
+                bit = 0;
+                if (a[k] > 0 && b2[k] > 0) { bit = 1; }
+                if ((y[k] > 0) != bit) { ng = ng + 1; }
+            }
+            monitor("a=%d%d%d%d & b2=0110 -> y=%d%d%d%d\n",
+                    a[3] / 15, a[2] / 15, a[1] / 15, a[0] / 15,
+                    y[3] / 15, y[2] / 15, y[1] / 15, y[0] / 15);
+        }
+        if (ng == 0) { monitor("bus AND4: all passed\n"); }
+        else         { monitor("bus AND4: % failure(s)\n", ng); }
+    }
+}

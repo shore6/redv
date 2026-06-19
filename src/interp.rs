@@ -292,11 +292,88 @@ fn resolve_dst(
 
 // ---- logic instance ----------------------------------------------------
 
+/// ポートの形。スカラ(1 ノード)かバス(レーン列)。バスポートは内部バス reg(§4.2)と
+/// 同じく本体で添字 / バス全体として使える。
+#[derive(Debug, Clone)]
+enum PortShape {
+    Scalar(usize),
+    Bus(Vec<usize>),
+}
+
+impl PortShape {
+    /// レーンノード列(スカラは長さ 1)。
+    fn lanes(&self) -> Vec<usize> {
+        match self {
+            PortShape::Scalar(n) => vec![*n],
+            PortShape::Bus(v) => v.clone(),
+        }
+    }
+    fn width(&self) -> usize {
+        match self {
+            PortShape::Scalar(_) => 1,
+            PortShape::Bus(v) => v.len(),
+        }
+    }
+}
+
+/// 階層インスタンスの親側端点(reg/ポート = スカラ、内部バス reg/バスポート = バス)を
+/// `PortShape` として解決する。
+fn resolve_parent_ref(
+    name: &str,
+    scope: &HashMap<String, usize>,
+    buses: &HashMap<String, Vec<usize>>,
+    wire_names: &HashSet<String>,
+    line: i32,
+) -> RvResult<PortShape> {
+    if let Some(n) = scope.get(name) {
+        return Ok(PortShape::Scalar(*n));
+    }
+    if let Some(v) = buses.get(name) {
+        return Ok(PortShape::Bus(v.clone()));
+    }
+    if wire_names.contains(name) {
+        return fail(line, format!("'{}' is a wire, not a reg/port", name));
+    }
+    fail(line, format!("unknown logic instance endpoint: {}", name))
+}
+
+/// 2 つのポート(`src` -> `dst`)をレーン対応で減衰なし結線する。幅整合は厳格。
+fn connect_ports(
+    c: &mut Circuit,
+    src: &PortShape,
+    dst: &PortShape,
+    ctx: &str,
+    line: i32,
+) -> RvResult<()> {
+    if src.width() != dst.width() {
+        return fail(
+            line,
+            format!(
+                "{}: port width mismatch ({} vs {} lane(s); scalar/bus must match)",
+                ctx,
+                src.width(),
+                dst.width()
+            ),
+        );
+    }
+    let s = src.lanes();
+    let d = dst.lanes();
+    for i in 0..s.len() {
+        c.add_edge(s[i], d[i], 0);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct Instance {
+    /// 入力レーンごとの (sim var キー, 回路ノード)。スカラ入力は 1 レーン、
+    /// バス入力は幅ぶんのレーン(var キーは `xbus[0]` 等)。
     pub in_vars: Vec<String>,
     pub in_nodes: Vec<usize>,
-    pub out_ports: Vec<(String, usize)>,
+    /// 唯一の出力ポートのレーンノード列(スカラ出力は長さ 1)。
+    /// 束縛先 var は呼び出しごとに `out_bind` へ登録する(複数の var が同じインスタンス
+    /// 出力を観測し得るため、target はインスタンス同一性に含めない)。
+    pub out_lanes: Vec<usize>,
 }
 
 struct Elaborator<'c, 'p> {
@@ -465,30 +542,13 @@ impl<'p> Elaborator<'_, 'p> {
         Ok(())
     }
 
-    /// sim から呼ばれる最上位エラボレート。入力ポートは sim 変数で駆動する
-    /// `Input` ノードになる。
-    fn build(
-        &mut self,
-        l: &'p LogicDef,
-        prefix: &str,
-        arg_vars: &[String],
-        call_line: i32,
-    ) -> RvResult<Instance> {
-        let (in_nodes, outs) = self.elaborate(l, prefix, true, call_line, arg_vars.len())?;
-        Ok(Instance {
-            in_vars: arg_vars.to_vec(),
-            in_nodes,
-            out_ports: outs,
-        })
-    }
-
     /// logic 定義 1 つを回路ノード群へ展開する。
     ///
     /// - `top_level == true` … 入力ポートは sim 変数で駆動する `Input` ノード。
     /// - `top_level == false` … 階層インスタンス。入力ポートは親ノードから駆動される
     ///   `Plain` ノードで、結線は呼び出し側が行う。
     ///
-    /// 返り値は (ポート順の入力ノード列, 出力ポート列)。
+    /// 返り値は (入力ポート列, 出力ポート列)。各ポートは (名前, 形 PortShape)。
     fn elaborate(
         &mut self,
         l: &'p LogicDef,
@@ -496,7 +556,7 @@ impl<'p> Elaborator<'_, 'p> {
         top_level: bool,
         call_line: i32,
         arg_count: usize,
-    ) -> RvResult<(Vec<usize>, Vec<(String, usize)>)> {
+    ) -> RvResult<(Vec<(String, PortShape)>, Vec<(String, PortShape)>)> {
         if self.stack.iter().any(|n| n == &l.name) {
             self.stack.push(l.name.clone());
             return fail(
@@ -514,10 +574,10 @@ impl<'p> Elaborator<'_, 'p> {
         // コンパレータ / ロック付きリピーター reg の (back, side) ノード。scope[name] は out ノード。
         let mut side_regs: HashMap<String, (usize, usize)> = HashMap::new();
         let mut wire_names: HashSet<String> = HashSet::new();
-        // バス reg(`reg[n] a;`)。name -> レーンノード列 a[0]..a[n-1]。scope とは別空間。
+        // バス reg(`reg[n] a;`)/ バスポート。name -> レーンノード列。scope とは別空間。
         let mut buses: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut in_order: Vec<String> = Vec::new();
-        let mut outs: Vec<(String, usize)> = Vec::new();
+        let mut inputs: Vec<(String, PortShape)> = Vec::new();
+        let mut outs: Vec<(String, PortShape)> = Vec::new();
         // 階層インスタンス文(全ノード確定後にまとめて結線する)
         let mut instances: Vec<(i32, String, String, Vec<String>)> = Vec::new();
         // 無名チェーン文(wire 名を介さない直結。全ノード確定後にまとめて構築)。
@@ -526,36 +586,50 @@ impl<'p> Elaborator<'_, 'p> {
         let mut anon_chains: Vec<(i32, ChainEp, ChainEp, Vec<String>)> = Vec::new();
 
         for p in &l.ports {
-            if scope.contains_key(&p.name) {
+            if scope.contains_key(&p.name) || buses.contains_key(&p.name) {
                 return fail(p.line, format!("duplicate port name: {}", p.name));
             }
-            let kind = if p.input {
-                if top_level {
-                    NodeKind::Input
-                } else {
-                    NodeKind::Plain
-                }
+            let kind = if p.input && top_level {
+                NodeKind::Input
             } else {
                 NodeKind::Plain
             };
-            let id = self.c.new_node(format!("{}.{}", prefix, p.name), kind);
-            if !p.input {
-                self.c.nodes[id].is_out_port = true;
-            }
-            scope.insert(p.name.clone(), id);
-            if p.input {
-                in_order.push(p.name.clone());
+            // バスポート(`input[n]` / `output[n]`)は n 本のレーンへ展開し buses に登録。
+            // 本体では内部バス reg と同じく添字 / バス全体で使える。
+            let shape = if let Some(w) = p.width {
+                let mut lanes = Vec::with_capacity(w as usize);
+                for i in 0..w {
+                    let id = self
+                        .c
+                        .new_node(format!("{}.{}[{}]", prefix, p.name, i), kind);
+                    if !p.input {
+                        self.c.nodes[id].is_out_port = true;
+                    }
+                    lanes.push(id);
+                }
+                buses.insert(p.name.clone(), lanes.clone());
+                PortShape::Bus(lanes)
             } else {
-                outs.push((p.name.clone(), id));
+                let id = self.c.new_node(format!("{}.{}", prefix, p.name), kind);
+                if !p.input {
+                    self.c.nodes[id].is_out_port = true;
+                }
+                scope.insert(p.name.clone(), id);
+                PortShape::Scalar(id)
+            };
+            if p.input {
+                inputs.push((p.name.clone(), shape));
+            } else {
+                outs.push((p.name.clone(), shape));
             }
         }
-        if arg_count != in_order.len() {
+        if arg_count != inputs.len() {
             return fail(
                 call_line,
                 format!(
                     "{}: expected {} input argument(s), got {}",
                     l.name,
-                    in_order.len(),
+                    inputs.len(),
                     arg_count
                 ),
             );
@@ -910,34 +984,21 @@ impl<'p> Elaborator<'_, 'p> {
             }
         }
 
-        // 階層インスタンスの結線(親ノード <-> サブ logic のポート)
+        // 階層インスタンスの結線(親ノード <-> サブ logic のポート)。
+        // スカラ/バスは PortShape として解決し、レーン対応で結線する(幅整合は厳格)。
         for (line, output, callee, args) in &instances {
             let sub = match self.logics.get(callee) {
                 Some(s) => s,
                 None => return fail(*line, format!("unknown logic: {}", callee)),
             };
-            // 親側の結線端点を解決(reg / ポートのみ。wire / バスは不可)
             if wire_names.contains(output) {
                 return fail(
                     *line,
                     format!("logic instance output '{}' must be a reg/port, not a wire", output),
                 );
             }
-            if buses.contains_key(output) {
-                return fail(
-                    *line,
-                    format!(
-                        "logic instance output '{}' must be a scalar reg/port (bus ports are not \
-                         supported yet; index a lane)",
-                        output
-                    ),
-                );
-            }
-            let out_node = match scope.get(output) {
-                Some(n) => *n,
-                None => return fail(*line, format!("unknown instance output target: {}", output)),
-            };
-            let mut arg_nodes: Vec<usize> = Vec::new();
+            let out_ref = resolve_parent_ref(output, &scope, &buses, &wire_names, *line)?;
+            let mut arg_refs: Vec<PortShape> = Vec::new();
             for a in args {
                 if wire_names.contains(a) {
                     return fail(
@@ -945,22 +1006,7 @@ impl<'p> Elaborator<'_, 'p> {
                         format!("logic instance argument '{}' must be a reg/port, not a wire", a),
                     );
                 }
-                if buses.contains_key(a) {
-                    return fail(
-                        *line,
-                        format!(
-                            "logic instance argument '{}' must be a scalar reg/port (bus ports are \
-                             not supported yet; index a lane)",
-                            a
-                        ),
-                    );
-                }
-                match scope.get(a) {
-                    Some(n) => arg_nodes.push(*n),
-                    None => {
-                        return fail(*line, format!("unknown logic instance argument: {}", a))
-                    }
-                }
+                arg_refs.push(resolve_parent_ref(a, &scope, &buses, &wire_names, *line)?);
             }
             // サブ logic を展開(入力ポートは Plain ノードになる)
             self.counter += 1;
@@ -979,31 +1025,34 @@ impl<'p> Elaborator<'_, 'p> {
                     ),
                 );
             }
-            // 親の引数ノード -> サブ入力ポート(減衰なし直結)
-            for (pa, si) in arg_nodes.iter().zip(sub_in.iter()) {
-                self.c.add_edge(*pa, *si, 0);
+            // 親引数 -> サブ入力ポート(レーン対応で減衰なし直結)
+            for (arg_ref, (pname, pshape)) in arg_refs.iter().zip(sub_in.iter()) {
+                let ctx = format!("{} input port '{}'", callee, pname);
+                connect_ports(self.c, arg_ref, pshape, &ctx, *line)?;
             }
-            // サブ出力ポート -> 親の出力先(減衰なし直結)
-            self.c.add_edge(sub_out[0].1, out_node, 0);
+            // サブ出力ポート -> 親の出力先(レーン対応)
+            let ctx = format!("output of {} bound to '{}'", callee, output);
+            connect_ports(self.c, &sub_out[0].1, &out_ref, &ctx, *line)?;
         }
 
-        // 未接続 output ポート検査(仕様: エラー)
-        for (name, node) in &outs {
-            let r = self.c.find(*node);
-            if !self.c.nodes[r].has_incoming && self.c.nodes[r].kind != NodeKind::Const {
-                return fail(
-                    call_line,
-                    format!(
-                        "output port '{}' of logic '{}' is not driven (unconnected port)",
-                        name, l.name
-                    ),
-                );
+        // 未接続 output ポート検査(仕様: エラー)。バスポートは全レーンを検査する。
+        for (name, shape) in &outs {
+            for node in shape.lanes() {
+                let r = self.c.find(node);
+                if !self.c.nodes[r].has_incoming && self.c.nodes[r].kind != NodeKind::Const {
+                    return fail(
+                        call_line,
+                        format!(
+                            "output port '{}' of logic '{}' is not driven (unconnected port)",
+                            name, l.name
+                        ),
+                    );
+                }
             }
         }
 
         self.stack.pop();
-        let in_nodes = in_order.iter().map(|n| scope[n]).collect();
-        Ok((in_nodes, outs))
+        Ok((inputs, outs))
     }
 }
 
@@ -1021,6 +1070,8 @@ pub struct ModuleExec<'a> {
     sim_time: i64,
     /// パルス代入(`x = v ~ w`)で残り tick を持つ var → 0 で var を 0 に戻す。
     pulses: HashMap<String, i64>,
+    /// バス var(`var[N] x;`)の幅。レーンは vars に `x[0]`..`x[N-1]` のキーで格納する。
+    var_buses: HashMap<String, i32>,
 }
 
 impl<'a> ModuleExec<'a> {
@@ -1036,7 +1087,18 @@ impl<'a> ModuleExec<'a> {
             clamp_warned: HashSet::new(),
             sim_time: 0,
             pulses: HashMap::new(),
+            var_buses: HashMap::new(),
         }
+    }
+
+    /// バス var のレーン vars キー `name[k]` を作る。
+    fn lane_key(name: &str, k: i64) -> String {
+        format!("{}[{}]", name, k)
+    }
+
+    /// バス var `name` の幅を返す(バスでなければ None)。
+    fn bus_width(&self, name: &str) -> Option<i32> {
+        self.var_buses.get(name).copied()
     }
 
     pub fn run(&mut self) -> RvResult<()> {
@@ -1069,9 +1131,38 @@ impl<'a> ModuleExec<'a> {
         match e {
             Expr::Num { num, .. } => Ok(*num),
             Expr::Time { .. } => Ok(self.sim_time),
-            Expr::Var { line, name } => match self.vars.get(name) {
-                Some(v) => Ok(*v),
-                None => fail(*line, format!("undeclared variable: {}", name)),
+            Expr::Var { line, name, index } => match index {
+                None => match self.vars.get(name) {
+                    Some(v) => Ok(*v),
+                    None if self.var_buses.contains_key(name) => fail(
+                        *line,
+                        format!("'{}' is a bus var; index a lane (e.g. '{}[0]')", name, name),
+                    ),
+                    None => fail(*line, format!("undeclared variable: {}", name)),
+                },
+                Some(e) => {
+                    let w = match self.bus_width(name) {
+                        Some(w) => w as i64,
+                        None => {
+                            return fail(
+                                *line,
+                                format!("'{}' is not a bus var; cannot index it", name),
+                            )
+                        }
+                    };
+                    let k = self.eval_e(e)?;
+                    if k < 0 || k >= w {
+                        return fail(
+                            *line,
+                            format!("bus var index out of range: {}[{}] (width {})", name, k, w),
+                        );
+                    }
+                    let key = Self::lane_key(name, k);
+                    match self.vars.get(&key) {
+                        Some(v) => Ok(*v),
+                        None => fail(*line, format!("undeclared variable: {}", key)),
+                    }
+                }
             },
             Expr::Un { op, a, .. } => {
                 let v = self.eval_e(a)?;
@@ -1285,6 +1376,12 @@ impl<'a> ModuleExec<'a> {
         if !bind_args.is_empty() {
             return fail(line, "scan() takes no arguments");
         }
+        if self.var_buses.contains_key(target) {
+            return fail(
+                line,
+                format!("scan() cannot target a whole bus var '{}'; scan into a scalar var", target),
+            );
+        }
         if !self.vars.contains_key(target) {
             return fail(line, format!("undeclared variable: {}", target));
         }
@@ -1308,44 +1405,116 @@ impl<'a> ModuleExec<'a> {
         let key = format!("{}({})", callee, bind_args.join(","));
         if !self.insts.contains_key(&key) {
             for a in bind_args {
-                if !self.vars.contains_key(a) {
+                if !self.vars.contains_key(a) && !self.var_buses.contains_key(a) {
                     return fail(line, format!("undeclared variable passed to logic: {}", a));
                 }
             }
-            let inst = {
+            // logic を展開してポート形(スカラ/バス)を得る。
+            let (inputs, outputs) = {
                 let mut el = Elaborator {
                     c: &mut self.c,
                     logics: &prog.logics,
                     stack: Vec::new(),
                     counter: 0,
                 };
-                el.build(lit, &key, bind_args, line)?
+                el.elaborate(lit, &key, true, line, bind_args.len())?
             };
-            self.insts.insert(key.clone(), inst);
-        }
-        let (out_node, ports_len) = {
-            let inst = self.insts.get(&key).unwrap();
-            (inst.out_ports.first().map(|p| p.1), inst.out_ports.len())
-        };
-        if ports_len == 0 {
-            return fail(line, format!("{} has no output port to bind", callee));
-        }
-        if ports_len > 1 {
-            return fail(
-                line,
-                format!(
-                    "{} has multiple output ports; the binding form 'v = logic(...)' supports exactly one",
-                    callee
-                ),
+            if outputs.is_empty() {
+                return fail(line, format!("{} has no output port to bind", callee));
+            }
+            if outputs.len() > 1 {
+                return fail(
+                    line,
+                    format!(
+                        "{} has multiple output ports; the binding form 'v = logic(...)' supports exactly one",
+                        callee
+                    ),
+                );
+            }
+            // 各引数 var(スカラ/バス)を入力ポートにレーン対応で束縛する。
+            let mut in_vars: Vec<String> = Vec::new();
+            let mut in_nodes: Vec<usize> = Vec::new();
+            for (arg, (pname, pshape)) in bind_args.iter().zip(inputs.iter()) {
+                let lanes = pshape.lanes();
+                match self.bus_width(arg) {
+                    Some(w) => {
+                        if lanes.len() != w as usize {
+                            return fail(
+                                line,
+                                format!(
+                                    "argument '{}' (bus var width {}) does not match {} input port '{}' (width {})",
+                                    arg, w, callee, pname, lanes.len()
+                                ),
+                            );
+                        }
+                        for (j, node) in lanes.iter().enumerate() {
+                            in_vars.push(Self::lane_key(arg, j as i64));
+                            in_nodes.push(*node);
+                        }
+                    }
+                    None => {
+                        if lanes.len() != 1 {
+                            return fail(
+                                line,
+                                format!(
+                                    "argument '{}' is a scalar var but {} input port '{}' is a bus (width {})",
+                                    arg, callee, pname, lanes.len()
+                                ),
+                            );
+                        }
+                        in_vars.push(arg.clone());
+                        in_nodes.push(lanes[0]);
+                    }
+                }
+            }
+            let out_lanes = outputs[0].1.lanes();
+            self.insts.insert(
+                key.clone(),
+                Instance {
+                    in_vars,
+                    in_nodes,
+                    out_lanes,
+                },
             );
         }
-        if !self.vars.contains_key(target) {
-            return fail(line, format!("undeclared variable: {}", target));
+        // 出力ポートを target(スカラ/バス var)へレーン対応で束縛(呼び出しごと)。
+        let out_lanes = self.insts.get(&key).unwrap().out_lanes.clone();
+        match self.bus_width(target) {
+            Some(w) => {
+                if out_lanes.len() != w as usize {
+                    return fail(
+                        line,
+                        format!(
+                            "output of {} (width {}) does not match bus var '{}' (width {})",
+                            callee, out_lanes.len(), target, w
+                        ),
+                    );
+                }
+                for (j, node) in out_lanes.iter().enumerate() {
+                    let lk = Self::lane_key(target, j as i64);
+                    self.out_bind.insert(lk.clone(), *node);
+                    let val = self.c.read(*node) as i64;
+                    self.vars.insert(lk, val);
+                }
+            }
+            None => {
+                if !self.vars.contains_key(target) {
+                    return fail(line, format!("undeclared variable: {}", target));
+                }
+                if out_lanes.len() != 1 {
+                    return fail(
+                        line,
+                        format!(
+                            "{} has a bus output (width {}); bind it to a bus var (e.g. 'var[{}] {};')",
+                            callee, out_lanes.len(), out_lanes.len(), target
+                        ),
+                    );
+                }
+                self.out_bind.insert(target.to_string(), out_lanes[0]);
+                let val = self.c.read(out_lanes[0]) as i64;
+                self.vars.insert(target.to_string(), val);
+            }
         }
-        let node = out_node.unwrap();
-        self.out_bind.insert(target.to_string(), node);
-        let val = self.c.read(node) as i64;
-        self.vars.insert(target.to_string(), val);
         Ok(())
     }
 
@@ -1359,29 +1528,90 @@ impl<'a> ModuleExec<'a> {
     fn exec(&mut self, s: &'a SimStmt) -> RvResult<()> {
         match s {
             SimStmt::DeclVar { line, decls } => {
-                for (name, e) in decls {
-                    if self.vars.contains_key(name) {
+                for (name, e, width) in decls {
+                    if self.vars.contains_key(name) || self.var_buses.contains_key(name) {
                         return fail(*line, format!("duplicate variable: {}", name));
                     }
                     let v = match e {
                         Some(ex) => self.eval_e(ex)?,
                         None => 0,
                     };
-                    self.vars.insert(name.clone(), v);
+                    match width {
+                        // バス var: レーン name[0]..name[w-1] を初期化式(= 全レーン共通)で作る。
+                        Some(w) => {
+                            for k in 0..*w {
+                                self.vars.insert(Self::lane_key(name, k as i64), v);
+                            }
+                            self.var_buses.insert(name.clone(), *w);
+                        }
+                        None => {
+                            self.vars.insert(name.clone(), v);
+                        }
+                    }
                 }
             }
             SimStmt::Assign {
                 line,
                 target,
+                index,
                 value,
                 pulse,
             } => {
-                if !self.vars.contains_key(target) {
-                    return fail(*line, format!("undeclared variable: {}", target));
-                }
                 let v = self.eval_e(value)?;
-                self.vars.insert(target.clone(), v);
-                // パルス幅 Some(w) ならリセットを予約。通常代入は保留中パルスを解除。
+                // 代入先キーを決める: name[idx] / バス全体ブロードキャスト / スカラ。
+                let keys: Vec<String> = match index {
+                    Some(e) => {
+                        let w = match self.bus_width(target) {
+                            Some(w) => w as i64,
+                            None => {
+                                return fail(
+                                    *line,
+                                    format!("'{}' is not a bus var; cannot index it", target),
+                                )
+                            }
+                        };
+                        let k = self.eval_e(e)?;
+                        if k < 0 || k >= w {
+                            return fail(
+                                *line,
+                                format!(
+                                    "bus var index out of range: {}[{}] (width {})",
+                                    target, k, w
+                                ),
+                            );
+                        }
+                        vec![Self::lane_key(target, k)]
+                    }
+                    None => match self.bus_width(target) {
+                        // バス全体への代入は全レーンへブロードキャスト。
+                        Some(w) => {
+                            if pulse.is_some() {
+                                return fail(
+                                    *line,
+                                    format!(
+                                        "pulse assignment is not supported on a whole bus var '{}'; \
+                                         index a lane (e.g. '{}[0] = v ~ w;')",
+                                        target, target
+                                    ),
+                                );
+                            }
+                            (0..w).map(|k| Self::lane_key(target, k as i64)).collect()
+                        }
+                        None => {
+                            if !self.vars.contains_key(target) {
+                                return fail(
+                                    *line,
+                                    format!("undeclared variable: {}", target),
+                                );
+                            }
+                            vec![target.clone()]
+                        }
+                    },
+                };
+                for key in &keys {
+                    self.vars.insert(key.clone(), v);
+                }
+                // パルス幅 Some(w) ならリセットを予約(対象キー)。通常代入は保留中パルスを解除。
                 match pulse {
                     Some(w) => {
                         let w = self.eval_e(w)?;
@@ -1391,10 +1621,14 @@ impl<'a> ModuleExec<'a> {
                                 format!("pulse width must be >= 1 (got {})", w),
                             );
                         }
-                        self.pulses.insert(target.clone(), w);
+                        for key in &keys {
+                            self.pulses.insert(key.clone(), w);
+                        }
                     }
                     None => {
-                        self.pulses.remove(target);
+                        for key in &keys {
+                            self.pulses.remove(key);
+                        }
                     }
                 }
             }

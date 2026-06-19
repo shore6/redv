@@ -23,6 +23,9 @@ pub struct Port {
     pub input: bool,
     pub name: String,
     pub line: i32,
+    /// `Some(n)` なら **バスポート**(`input[n]` / `output[n]`): n 本の並列レーン。
+    /// 本体では内部バス reg(§4.2)と同じく添字 / バス全体で使える。`None` はスカラ。
+    pub width: Option<i32>,
 }
 
 /// reg 宣言の初期化子。`strength == -1` は信号強度未指定。
@@ -127,6 +130,9 @@ pub enum Expr {
     Var {
         line: i32,
         name: String,
+        /// `Some(e)` なら **バス var のレーン** `name[e]`(e は実行時に評価する添字式)。
+        /// `None` はスカラ var。`None` かつ name がバス var の場合は評価時エラー(レーン指定が必要)。
+        index: Option<Box<Expr>>,
     },
     Time {
         line: i32,
@@ -169,17 +175,22 @@ pub struct CallData {
 
 #[derive(Debug, Clone)]
 pub enum SimStmt {
+    /// var 宣言。各エントリは (名前, 初期化式, バス幅)。`width` が `Some(n)` なら
+    /// **バス var**(`var[n] x;`): n 本のレーン `x[0]`..`x[n-1]`(初期化式は全レーンに適用)。
     DeclVar {
         line: i32,
-        decls: Vec<(String, Option<Expr>)>,
+        decls: Vec<(String, Option<Expr>, Option<i32>)>,
     },
-    /// `target = value [~ width]` — var への代入。
+    /// `target[index] = value [~ width]` — var への代入。
     ///
+    /// `index` が `Some(e)` なら **バス var のレーン** `target[e]` への代入。`None` で
+    /// `target` がバス var の場合は **全レーンへブロードキャスト**(value を各レーンに代入)。
     /// `pulse` が `Some(width)` のとき **パルス代入**: 代入後 `width` tick 経過すると
     /// 自動的に `target` を 0 に戻す(`width` は実行されたあらゆる tick を数える)。
     Assign {
         line: i32,
         target: String,
+        index: Option<Box<Expr>>,
         value: Expr,
         pulse: Option<Expr>,
     },

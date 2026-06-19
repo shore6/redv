@@ -157,6 +157,12 @@ fn bus_or4() {
     run_golden("bus_or4");
 }
 
+/// バスポート + バス var + バス束縛: 2 本の 4 ビットバスのビット単位 AND(issue #11, Phase 1b)。
+#[test]
+fn bus_and4() {
+    run_golden("bus_and4");
+}
+
 /// CLI 動作: 引数なしは usage を出して終了コード 2。
 #[test]
 fn no_args_exits_2() {
@@ -318,5 +324,80 @@ fn bus_misuse_is_error() {
             stderr.contains(want),
             "{tag}: unexpected stderr:\n{stderr}"
         );
+    }
+}
+
+/// バスポート + バス var + バス束縛 + 添字 + ブロードキャストは受理される(Phase 1b)。
+#[test]
+fn bus_ports_basic_is_accepted() {
+    // 4 ビット NOT を バスポートで定義し、バス var を束縛・添字・ブロードキャストする。
+    let src = "logic not4(input[4] a, output[4] y){ a-t-y; }\n\
+               module m(){ var[4] x; var[4] y; var i; sim{ x=0; y=not4(x); #init \
+               for(i=0;i<4;i=i+1){ x[i]=15; } #2 } }";
+    let (code, stderr) = run_source("bus_ports_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// バスポート/バス var の不整合(幅・スカラ混在・出力先・添字・引数・scan・pulse)は
+/// **エラー**(Phase 1b)。
+#[test]
+fn bus_ports_misuse_is_error() {
+    for (tag, src, want) in [
+        // 入力ポート幅と引数バス幅の不一致
+        (
+            "arg_width_mismatch",
+            "logic g(input[4] a, output y){ a[0]-t-y; }\n\
+             module m(){ var[2] x; var y; sim{ x=0; y=g(x); #init } }",
+            "does not match",
+        ),
+        // スカラ var をバス入力ポートへ
+        (
+            "scalar_to_bus_port",
+            "logic g(input[4] a, output y){ a[0]-t-y; }\n\
+             module m(){ var x; var y; sim{ x=0; y=g(x); #init } }",
+            "is a scalar var but",
+        ),
+        // バス出力ポートをスカラ var へ束縛
+        (
+            "bus_out_to_scalar",
+            "logic g(input a, output[4] y){ a-t-y[0]; a-y[1]; a-y[2]; a-y[3]; }\n\
+             module m(){ var x; var y; sim{ x=0; y=g(x); #init } }",
+            "bus output",
+        ),
+        // バス var を添字なしでスカラ式に使う
+        (
+            "bus_in_scalar_expr",
+            "module m(){ var[4] x; sim{ x=0; monitor(\"%d\", x); } }",
+            "is a bus var",
+        ),
+        // バス var の範囲外添字
+        (
+            "bus_var_index_oor",
+            "module m(){ var[2] x; sim{ x=0; x[5]=1; } }",
+            "out of range",
+        ),
+        // バスレーンを logic 引数に渡す
+        (
+            "pass_bus_lane_arg",
+            "logic g(input a, output y){ a-t-y; }\n\
+             module m(){ var[2] x; var y; sim{ x=0; y=g(x[0]); #init } }",
+            "cannot pass a bus lane",
+        ),
+        // scan() をバス var へ
+        (
+            "scan_to_bus",
+            "module m(){ var[2] x; sim{ x=scan(); } }",
+            "cannot target a whole bus",
+        ),
+        // 全バスへのパルス代入
+        (
+            "pulse_on_bus",
+            "module m(){ var[2] x; sim{ x = 5 ~ 2; } }",
+            "pulse assignment is not supported on a whole bus",
+        ),
+    ] {
+        let (code, stderr) = run_source(&format!("busport_{tag}"), src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }
 }
