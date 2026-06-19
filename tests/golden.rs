@@ -88,6 +88,12 @@ fn pulse() {
     run_golden("pulse");
 }
 
+/// 0tick リピータ(`r0`): 遅延ゼロの組合せ増幅器。r1 と反応タイミングが 1 tick ずれる(issue #37)。
+#[test]
+fn repeater_0tick() {
+    run_golden("repeater_0tick");
+}
+
 /// stdin を流し込んで stdout がゴールデンと一致するか検証する。
 fn run_golden_stdin(name: &str, input: &str) {
     let manifest = env!("CARGO_MANIFEST_DIR");
@@ -292,6 +298,29 @@ fn seq_reg_declaration_init_is_accepted() {
     let src = "logic g(input a, output y){ reg m = r; a-m; m-y; }\n\
                module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("decl_rep_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// 0tick リピータ(`r0`)は inline チェーン専用。ロック付き reg(`reg m = r0;`)は
+/// 保持する状態が無いのでエラーになり、inline 利用へ誘導する(issue #37)。
+#[test]
+fn zero_tick_repeater_as_reg_is_error() {
+    let src = "logic g(input a, output y){ reg m = r0; a-m; m-y; }\n\
+               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("r0_reg_err", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("0-tick repeater") && stderr.contains("inline"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
+/// 0tick リピータは inline チェーン素子(`x - r0 - y;`)として受理される(issue #37)。
+#[test]
+fn zero_tick_repeater_inline_is_accepted() {
+    let src = "logic g(input a, output y){ a-r0-y; }\n\
+               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("r0_inline_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
