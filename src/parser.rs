@@ -249,11 +249,32 @@ impl Parser {
 
         if self.is_ident("reg") {
             self.i += 1;
+            // バス幅 `reg[N]`(`[N]` は reg と名前の間に置き、宣言列全体に適用)。
+            let mut width: Option<i32> = None;
+            if self.is_punct("[") {
+                self.i += 1;
+                if self.cur().k != Tk::Num {
+                    return fail(self.cur().line, "expected a bus width 'N' after 'reg['");
+                }
+                let n = self.cur().num;
+                self.i += 1;
+                self.expect_punct("]")?;
+                if n < 1 {
+                    return fail(ln, format!("bus width must be >= 1 (got {})", n));
+                }
+                width = Some(n as i32);
+            }
             loop {
                 let name = self.expect_ident("reg name")?;
                 self.check_decl_name(&name, "reg", ln)?;
                 let mut init = None;
                 if self.is_punct("=") {
+                    if width.is_some() {
+                        return fail(
+                            ln,
+                            "a bus reg cannot have an initializer (drive each lane via a chain)",
+                        );
+                    }
                     self.i += 1;
                     let mut strength = -1;
                     if self.cur().k == Tk::Num {
@@ -263,11 +284,15 @@ impl Parser {
                     let tok = self.expect_ident("element")?;
                     init = Some(RegInit { strength, tok });
                 }
+                if width.is_some() && qual != Qual::Plain {
+                    return fail(ln, "a bus reg must be plain (const/mutable not supported yet)");
+                }
                 stmts.push(LogicStmt::DeclReg {
                     line: ln,
                     name,
                     qual,
                     init,
+                    width,
                 });
                 if self.is_punct(",") {
                     self.i += 1;
@@ -288,38 +313,54 @@ impl Parser {
         let head = self.parse_chain_part()?;
         if self.is_punct("-") {
             // チェーン接続文:  from -chunks...- to
-            let mut parts: Vec<(String, bool)> = vec![head];
+            let mut parts: Vec<(String, bool, Option<i32>)> = vec![head];
             while self.is_punct("-") {
                 self.i += 1;
                 parts.push(self.parse_chain_part()?);
             }
             self.expect_punct(";")?;
-            // 中間チャンク(素子列 / wire 名)に `.side` は付けられない
-            for (tok, side) in &parts[1..parts.len() - 1] {
+            // 中間チャンク(素子列 / wire 名)に `.side` / `[k]` は付けられない
+            for (tok, side, idx) in &parts[1..parts.len() - 1] {
                 if *side {
                     return fail(
                         ln,
                         format!("'.side' cannot appear on a mid-chain chunk '{}'", tok),
                     );
                 }
+                if idx.is_some() {
+                    return fail(
+                        ln,
+                        format!("a lane index '[..]' cannot appear on a mid-chain chunk '{}'", tok),
+                    );
+                }
             }
-            let (from, from_side) = parts.first().unwrap().clone();
-            let (to, to_side) = parts.last().unwrap().clone();
-            let chunks: Vec<String> =
-                parts[1..parts.len() - 1].iter().map(|(t, _)| t.clone()).collect();
+            let (from, from_side, from_idx) = parts.first().unwrap().clone();
+            let (to, to_side, to_idx) = parts.last().unwrap().clone();
+            let chunks: Vec<String> = parts[1..parts.len() - 1]
+                .iter()
+                .map(|(t, _, _)| t.clone())
+                .collect();
             stmts.push(LogicStmt::Chain {
                 line: ln,
                 from,
                 from_side,
+                from_idx,
                 to,
                 to_side,
+                to_idx,
                 chunks,
             });
             return Ok(());
         }
-        let (target, target_side) = head;
+        let (target, target_side, target_idx) = head;
         if target_side {
             return fail(ln, "'.side' is only valid as a chain endpoint");
+        }
+        if target_idx.is_some() {
+            return fail(
+                ln,
+                "cannot assign to a bus lane '[..]' yet; drive it with a chain (e.g. 'src - a[0];')",
+            );
         }
         self.expect_punct("=")?;
         // 階層インスタンス化:  output = callee(args...)
@@ -359,13 +400,26 @@ impl Parser {
             });
         } else {
             // 各パートは「素子チャンク or 端点」。端点には `.side` が付き得る。
-            let mut parts: Vec<(String, bool)> = vec![self.parse_chain_part()?];
+            let mut parts: Vec<(String, bool, Option<i32>)> = vec![self.parse_chain_part()?];
             while self.is_punct("-") {
                 self.i += 1;
                 parts.push(self.parse_chain_part()?);
             }
+            // 添字は代入(wire 素子列定義 / エイリアス)では使えない(Phase 1a)。
+            for (tok, _side, idx) in &parts {
+                if idx.is_some() {
+                    return fail(
+                        ln,
+                        format!(
+                            "a lane index '[..]' is not allowed on the right-hand side of '='; \
+                             use a chain to wire a bus lane (e.g. '{}[..] - dst;')",
+                            tok
+                        ),
+                    );
+                }
+            }
             if parts.len() == 1 {
-                let (rhs, side) = parts.into_iter().next().unwrap();
+                let (rhs, side, _idx) = parts.into_iter().next().unwrap();
                 if side {
                     return fail(ln, "'.side' is only valid as a wire endpoint");
                 }
@@ -377,7 +431,7 @@ impl Parser {
                 });
             } else {
                 // 中間チャンク(素子列)に `.side` は付けられない
-                for (tok, side) in &parts[1..parts.len() - 1] {
+                for (tok, side, _idx) in &parts[1..parts.len() - 1] {
                     if *side {
                         return fail(
                             ln,
@@ -385,10 +439,12 @@ impl Parser {
                         );
                     }
                 }
-                let (from, from_side) = parts.first().unwrap().clone();
-                let (to, to_side) = parts.last().unwrap().clone();
-                let chunks: Vec<String> =
-                    parts[1..parts.len() - 1].iter().map(|(t, _)| t.clone()).collect();
+                let (from, from_side, _) = parts.first().unwrap().clone();
+                let (to, to_side, _) = parts.last().unwrap().clone();
+                let chunks: Vec<String> = parts[1..parts.len() - 1]
+                    .iter()
+                    .map(|(t, _, _)| t.clone())
+                    .collect();
                 stmts.push(LogicStmt::AssignChain {
                     line: ln,
                     target,
@@ -405,9 +461,21 @@ impl Parser {
     }
 
     /// ワイヤーチェーンの 1 パート(素子チャンク or 端点)を読む。
-    /// 端点には `.side`(コンパレータの横入力端子)が付き得る。
-    fn parse_chain_part(&mut self) -> RvResult<(String, bool)> {
+    /// 端点には `[k]`(バスのレーン添字)と `.side`(コンパレータの横入力端子)が付き得る。
+    /// 返り値は (名前, side か, 添字 Option)。素子チャンクには添字・side は付かない。
+    fn parse_chain_part(&mut self) -> RvResult<(String, bool, Option<i32>)> {
         let name = self.expect_ident("element chunk or endpoint")?;
+        let mut idx = None;
+        if self.is_punct("[") {
+            let ln = self.cur().line;
+            self.i += 1;
+            if self.cur().k != Tk::Num {
+                return fail(ln, "expected an integer lane index after '['");
+            }
+            idx = Some(self.cur().num as i32);
+            self.i += 1;
+            self.expect_punct("]")?;
+        }
         let mut side = false;
         if self.is_punct(".") {
             let ln = self.cur().line;
@@ -421,7 +489,7 @@ impl Parser {
             }
             side = true;
         }
-        Ok((name, side))
+        Ok((name, side, idx))
     }
 
     // ---- module ------------------------------------------------------------

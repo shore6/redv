@@ -151,6 +151,12 @@ fn wire_reuse() {
     run_golden("wire_reuse");
 }
 
+/// バス reg(`reg[N] a;`): 4 レーンを `in - r - buf;` の 1 行でまとめて配線(issue #11)。
+#[test]
+fn bus_or4() {
+    run_golden("bus_or4");
+}
+
 /// CLI 動作: 引数なしは usage を出して終了コード 2。
 #[test]
 fn no_args_exits_2() {
@@ -253,4 +259,64 @@ fn non_element_names_are_accepted() {
                module m(){ var u, v; sim{ u=0; v=g(u,u); #init } }";
     let (code, stderr) = run_source("non_elem_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// バス reg(`reg[N]`)+ 添字 `a[k]` + 全体チェーン `p - r - q;` は受理される(issue #11)。
+#[test]
+fn bus_basic_is_accepted() {
+    let src = "logic g(input a, output y){ reg[2] p; reg[2] q; a-p[0]; a-p[1]; p-r-q; q[0]-y; }\n\
+               module m(){ var u,v; sim{ u=15; v=g(u); #init } }";
+    let (code, stderr) = run_source("bus_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// バスチェーンの幅不一致・スカラ混在・範囲外添字・非バス添字は **エラー**(issue #11)。
+#[test]
+fn bus_misuse_is_error() {
+    let call = "module m(){ var u,v; sim{ u=0; v=g(u); #init } }";
+    for (tag, body, want) in [
+        (
+            "width_mismatch",
+            "reg[2] p; reg[3] q; a-p[0]; p-r-q; q[0]-y;",
+            "bus width mismatch",
+        ),
+        (
+            "bus_scalar_mismatch",
+            "reg[2] p; reg z; a-p[0]; p-r-z; z-y;",
+            "bus/scalar width mismatch",
+        ),
+        (
+            "index_out_of_range",
+            "reg[2] p; a-p[5]; p[0]-y;",
+            "bus index out of range",
+        ),
+        (
+            "index_on_non_bus",
+            "reg z; a-z[0]; z-y;",
+            "is not a bus",
+        ),
+        (
+            "bus_width_zero",
+            "reg[0] p; a-y;",
+            "bus width must be >= 1",
+        ),
+        (
+            "assign_whole_bus",
+            "reg[2] p; p = d; a-y;",
+            "cannot assign to a whole bus",
+        ),
+        (
+            "bus_as_mid_chunk",
+            "reg[2] p; reg z; a-p-z; z-y;",
+            "cannot appear inside a chain",
+        ),
+    ] {
+        let src = format!("logic g(input a, output y){{ {body} }}\n{call}");
+        let (code, stderr) = run_source(&format!("bus_{tag}"), &src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(
+            stderr.contains(want),
+            "{tag}: unexpected stderr:\n{stderr}"
+        );
+    }
 }

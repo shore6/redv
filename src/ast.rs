@@ -47,11 +47,17 @@ pub enum LogicStmt {
         names: Vec<String>,
     },
     /// 原実装の DeclReg は常に名前ちょうど 1 つを持つ(parser がカンマ列を分割する)。
+    ///
+    /// `width` が `Some(n)` なら **バス reg**(`reg[n] name;`): n 本の並列レーン
+    /// `name[0]`..`name[n-1]` を宣言する。各レーンは通常の plain 点で、`circuit` から見れば
+    /// 独立したスカラ点(バスは純粋な糖衣でシミュレーション意味論は不変)。
+    /// バス reg は plain のみ・初期化子不可(Phase 1a)。`width == None` は従来のスカラ reg。
     DeclReg {
         line: i32,
         name: String,
         qual: Qual,
         init: Option<RegInit>,
+        width: Option<i32>,
     },
     /// `target = elem-chunks...` — wire への **素子列定義**。
     ///
@@ -72,12 +78,17 @@ pub enum LogicStmt {
     ///
     /// 中間チャンクには素子に加えて **wire 名** を書け、その素子列が各箇所に
     /// 独立展開される。`from_side` / `to_side` は端点の `.side`(コンパレータ横入力)。
+    ///
+    /// `from_idx` / `to_idx` が `Some(k)` なら端点はバスのレーン `name[k]`。`None` かつ端点が
+    /// バス名なら **バス全体**(同幅の両端を element-wise に展開する)。スカラ端点は幅 1。
     Chain {
         line: i32,
         from: String,
         from_side: bool,
+        from_idx: Option<i32>,
         to: String,
         to_side: bool,
+        to_idx: Option<i32>,
         chunks: Vec<String>,
     },
     /// `target = [strength] rhs` (strength == -1 は未指定)

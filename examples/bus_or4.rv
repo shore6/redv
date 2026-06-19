@@ -1,0 +1,43 @@
+/* バス(reg[N])のデモ: 4 レーンのバスを 1 行でまとめて配線する。
+ * `in - r - buf;` の 1 行が 4 レーンぶん(各レーンに独立したリピータ)へ展開される。
+ * バスは「N 本の並列スカラ点」への純粋な糖衣で、シミュレーション意味論は不変。
+ * Phase 1a ではポートはスカラのみ。ここでは 4 入力を 1 出力へ OR 集約する。 */
+logic or4(input a0, input a1, input a2, input a3, output y)
+{
+    reg[4] in;             // バス宣言: in[0]..in[3]
+    reg[4] buf;            // バス宣言: buf[0]..buf[3]
+    a0 - in[0];            // 各レーンを入力から駆動(添字 [k] でレーン指定)
+    a1 - in[1];
+    a2 - in[2];
+    a3 - in[3];
+    in - r - buf;          // ★ 1 行で 4 レーン: 各レーンにリピータ(再増幅)
+    buf[0] - y;            // 4 レーンを y で max 合流(= OR)
+    buf[1] - y;
+    buf[2] - y;
+    buf[3] - y;
+}
+
+module test_or4()
+{
+    var a0, a1, a2, a3, y;
+    var i, ng, exp;
+    sim {
+        a0 = 0; a1 = 0; a2 = 0; a3 = 0; ng = 0;
+        y = or4(a0, a1, a2, a3);
+        #init
+        for (i = 0; i < 16; i = i + 1) {
+            a0 = (i % 2) * 15;
+            a1 = (i / 2 % 2) * 15;
+            a2 = (i / 4 % 2) * 15;
+            a3 = (i / 8 % 2) * 15;
+            #2                         // リピータ遅延1 + 入力反映1 を待つ
+            exp = 0;
+            if (i > 0) { exp = 15; }
+            monitor("a=%d%d%d%d -> y=%2d", a3 / 15, a2 / 15, a1 / 15, a0 / 15, y);
+            if (y != exp) { monitor("  <- NG!\n"); ng = ng + 1; }
+            else          { monitor("  ok\n"); }
+        }
+        if (ng == 0) { monitor("bus OR4: all passed\n"); }
+        else         { monitor("bus OR4: % failure(s)\n", ng); }
+    }
+}
