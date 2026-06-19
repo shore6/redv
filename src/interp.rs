@@ -1,10 +1,10 @@
 //! redv - elaboration & module/sim interpreter
 //!
-//! C++ 版 `interp.hpp` の移植。logic 定義を回路グラフへエラボレートし、module の sim を実行する。
+//! logic 定義を回路グラフへエラボレートし、module の sim を実行する。
 //! `?monitor` は sim 開始時にホイストされ、各ウェイト完了直後に発火する(Verilog $monitor 風)。
 //!
 //! 借用検査の都合上、`insts` / `out_bind` を走査しつつ回路を書き換える箇所は、
-//! 必要な値を一旦ローカルへ集めてから適用する(結果は原実装と同一)。
+//! 必要な値を一旦ローカルへ集めてから適用する。
 
 use crate::ast::*;
 use crate::circuit::{Circuit, Config, NodeKind, SeqKind};

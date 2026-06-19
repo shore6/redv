@@ -1,8 +1,7 @@
 //! redv - diagnostics
 //!
-//! C++ 版は例外 (`rv::Error`) で大域脱出していたが、Rust 版は `Result` で伝播する。
-//! `RvError` は行番号付きのエラー。`fail(line, msg)` は `Err(..)` を返すヘルパ、
-//! `warn(line, msg)` は stderr へ警告を出す(C++ 版と同一フォーマット)。
+//! エラーは `Result`(`RvResult`)で伝播する。`RvError` は行番号付きのエラー。
+//! `fail(line, msg)` は `Err(..)` を返すヘルパ、`warn(line, msg)` は stderr へ警告を出す。
 
 use std::fmt;
 
@@ -26,7 +25,7 @@ impl std::error::Error for RvError {}
 
 pub type RvResult<T> = Result<T, RvError>;
 
-/// C++ の `fail(line, msg)` 相当。`Err` を生成して返す(呼び出し側で `?` か `return`)。
+/// `Err` を生成して返す(呼び出し側で `?` か `return` する)。
 pub fn fail<T>(line: i32, msg: impl Into<String>) -> RvResult<T> {
     Err(RvError {
         line,
@@ -34,7 +33,7 @@ pub fn fail<T>(line: i32, msg: impl Into<String>) -> RvResult<T> {
     })
 }
 
-/// C++ の `warn(line, msg)` 相当。stderr へ出力。
+/// stderr へ警告を出力する。
 pub fn warn(line: i32, msg: impl AsRef<str>) {
     if line > 0 {
         eprintln!("[warning] line {}: {}", line, msg.as_ref());
