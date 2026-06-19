@@ -116,8 +116,12 @@ tests/
   golden.rs     Golden tests (cargo test)
   expected/     Expected output
 docs/
-  LANGUAGE.md   Detailed language spec + simulation semantics
+  LANGUAGE.md       Detailed language spec + simulation semantics
+  ARCHITECTURE.md   Internals (pipeline, modules, simulation engine)
 ```
+
+For internals (compile pipeline, elaboration, how the simulation engine works, and
+cross-cutting design decisions), see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (Japanese).
 
 ## Language Specification
 
