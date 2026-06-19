@@ -22,6 +22,6 @@ module test_not_gate()
         #1                 // 時刻4
         #1                 // 時刻5: 再点灯
 
-        ?monitor("時刻=%t | a=% | 出力y=%\n", $time, a, y);
+        ?monitor("時刻=% | a=% | 出力y=%\n", $time, a, y);
     }
 }

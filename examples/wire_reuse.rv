@@ -18,7 +18,7 @@ module test_reuse()
         a = 0; b = 0;
         y = reuse(a, b);
         #init
-        ?monitor("t=%t | a=%2d b=%2d | y=%2d\n", $time, a, b, y);
+        ?monitor("t=% | a=%2 b=%2 | y=%2\n", $time, a, b, y);
 
         a = 15;  #3     // a 経由 ON
         b = 8;   #3     // b も ON(m は max)

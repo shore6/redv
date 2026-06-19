@@ -404,7 +404,7 @@ fn bus_ports_misuse_is_error() {
         // バス var を添字なしでスカラ式に使う
         (
             "bus_in_scalar_expr",
-            "module m(){ var[4] x; sim{ x=0; monitor(\"%d\", x); } }",
+            "module m(){ var[4] x; sim{ x=0; monitor(\"%\", x); } }",
             "is a bus var",
         ),
         // バス var の範囲外添字
@@ -437,4 +437,27 @@ fn bus_ports_misuse_is_error() {
         assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
         assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }
+}
+
+/// monitor フォーマットの型サフィックス `%t` / `%d`(`%2d` 等の幅付きも)は **エラー**(issue #17)。
+/// `%` / `%N` に統一されたため、旧サフィックスは受理しない。
+#[test]
+fn monitor_fmt_type_suffix_is_error() {
+    for (tag, fmt) in [("pct_t", "%t"), ("pct_d", "%d"), ("pct_2d", "%2d")] {
+        let src = format!("module m(){{ var a; sim{{ a=0; monitor(\"{fmt}\", a); }} }}");
+        let (code, stderr) = run_source(&format!("monfmt_{tag}"), &src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(
+            stderr.contains("type suffix") && stderr.contains("not supported"),
+            "{tag}: unexpected stderr:\n{stderr}"
+        );
+    }
+}
+
+/// `%` / `%N`(幅指定)は引き続き受理される(issue #17)。
+#[test]
+fn monitor_fmt_bare_and_width_is_accepted() {
+    let src = "module m(){ var a; sim{ a=0; monitor(\"x=% y=%2\\n\", a, a); } }";
+    let (code, stderr) = run_source("monfmt_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }

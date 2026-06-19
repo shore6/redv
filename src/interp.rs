@@ -1344,7 +1344,13 @@ impl<'a> ModuleExec<'a> {
                     j += 1;
                 }
                 if j < f.len() && (f[j] == 't' || f[j] == 'd') {
-                    j += 1;
+                    return fail(
+                        line,
+                        format!(
+                            "monitor format: type suffix '%{0}' is not supported; use '%' or '%N' for width (e.g. '%2' instead of '%2{0}')",
+                            f[j]
+                        ),
+                    );
                 }
                 let mut v = if ai < av.len() {
                     let s = av[ai].to_string();

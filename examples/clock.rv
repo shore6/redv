@@ -16,7 +16,7 @@ module test_osc()
     sim {
         y = osc();
         wait(20);                       // $time を進めずに20tick待つ
-        ?monitor("t=%t y=%\n", $time, y);
+        ?monitor("t=% y=%\n", $time, y);
         #1 #1 #1 #1 #1 #1 #1 #1 #1 #1
         #1 #1
     }

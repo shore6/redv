@@ -23,7 +23,7 @@ module test() {
         y = not_gate(x);                 // Instantiate and bind variables
         #init                            // Wait until steady state ($time = 0)
         x = 10;  #1 #1                   // Drive the input high and advance 2 ticks
-        ?monitor("t=%t x=% y=%\n", $time, x, y);
+        ?monitor("t=% x=% y=%\n", $time, x, y);
     }
 }
 ```

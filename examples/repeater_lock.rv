@@ -23,7 +23,7 @@ module test_repeater_lock()
         lk = 0;
         y = lockable(a, lk);
         #init                       // 通常動作: a=15 → y=15
-        ?monitor("t=%t | a=%2d lk=%2d | y=%2d\n", $time, a, lk, y);
+        ?monitor("t=% | a=%2 lk=%2 | y=%2\n", $time, a, lk, y);
 
         lk = 15;  #2                // ロック開始: y=15 を保持
         a = 0;    #2                // 後ろを 0 に下げてもロック中は y=15 のまま

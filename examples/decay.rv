@@ -27,7 +27,7 @@ module test_decay()
         y2 = via_rep(a);
         y3 = via_cmp(a);
         #init
-        ?monitor("t=%t | a=%2d | d8: y1=%2d | d4rd4: y2=%2d | d4ccd4: y3=%2d\n", $time, a, y1, y2, y3);
+        ?monitor("t=% | a=%2 | d8: y1=%2 | d4rd4: y2=%2 | d4ccd4: y3=%2\n", $time, a, y1, y2, y3);
 
         a = 5;  #3
         a = 0;  #3

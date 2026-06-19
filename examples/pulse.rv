@@ -25,6 +25,6 @@ module test_pulse()
         #1             // 時刻6
         #1             // 時刻7
 
-        ?monitor("時刻=%t | a=%2d | y=%2d\n", $time, a, y);
+        ?monitor("時刻=% | a=%2 | y=%2\n", $time, a, y);
     }
 }

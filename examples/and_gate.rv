@@ -16,7 +16,7 @@ module test_and_gate()
         a = 0; b = 0;
         y = and_gate(a, b);
         #init
-        ?monitor("t=%t | a=%2d b=%2d | y=%2d\n", $time, a, b, y);
+        ?monitor("t=% | a=%2 b=%2 | y=%2\n", $time, a, b, y);
 
         a = 15;          #3     // トーチ2段 = 遅延2tick + 入力反映1tick
         b = 15;          #3     // 両方ON -> y=15
