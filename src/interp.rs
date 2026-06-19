@@ -1102,6 +1102,10 @@ pub struct ModuleExec<'a> {
     var_buses: HashMap<String, i32>,
     /// この module の sim tick 実行(`tick_once`)に費やした累積時間。`--time` 用。
     sim_dur: Duration,
+    /// 実行した `assert` / `expect` の総数(自己検証サマリ用)。
+    assert_total: i64,
+    /// 失敗した `assert` / `expect` の数。1 つ以上なら非ゼロ終了。
+    assert_failed: i64,
 }
 
 impl<'a> ModuleExec<'a> {
@@ -1119,6 +1123,8 @@ impl<'a> ModuleExec<'a> {
             pulses: HashMap::new(),
             var_buses: HashMap::new(),
             sim_dur: Duration::ZERO,
+            assert_total: 0,
+            assert_failed: 0,
         }
     }
 
@@ -1398,6 +1404,47 @@ impl<'a> ModuleExec<'a> {
         }
         print!("{}", out);
         std::io::stdout().flush().ok();
+        Ok(())
+    }
+
+    /// `assert(cond);` — cond を評価し、偽(= 0)なら失敗として記録し stderr に出力する。
+    /// 失敗しても sim は継続する(全チェックを実行して末尾でサマリ + 非ゼロ終了)。
+    fn do_assert(&mut self, line: i32, call: &CallData) -> RvResult<()> {
+        if call.has_fmt || call.args.len() != 1 {
+            return fail(line, "assert(cond) takes exactly one condition expression");
+        }
+        let v = self.eval_e(&call.args[0])?;
+        self.assert_total += 1;
+        if v == 0 {
+            self.assert_failed += 1;
+            eprintln!(
+                "[assert] line {}: assertion failed: {}",
+                line,
+                expr_to_string(&call.args[0])
+            );
+        }
+        Ok(())
+    }
+
+    /// `expect(actual, expected);` — actual と expected を評価し、不一致なら失敗として
+    /// 記録し「実際の値 / 期待値」を stderr に出力する。`assert` と同じく継続する。
+    fn do_expect(&mut self, line: i32, call: &CallData) -> RvResult<()> {
+        if call.has_fmt || call.args.len() != 2 {
+            return fail(line, "expect(actual, expected) takes exactly two expressions");
+        }
+        let actual = self.eval_e(&call.args[0])?;
+        let expected = self.eval_e(&call.args[1])?;
+        self.assert_total += 1;
+        if actual != expected {
+            self.assert_failed += 1;
+            eprintln!(
+                "[assert] line {}: expect failed: {} = {}, expected {}",
+                line,
+                expr_to_string(&call.args[0]),
+                actual,
+                expected
+            );
+        }
         Ok(())
     }
 
@@ -1704,6 +1751,10 @@ impl<'a> ModuleExec<'a> {
                         return fail(*line, "wait(n): n must be >= 0");
                     }
                     self.run_ticks(n, false)?; // $time を進めず、monitor も発火しない
+                } else if call.callee == "assert" {
+                    self.do_assert(*line, call)?;
+                } else if call.callee == "expect" {
+                    self.do_expect(*line, call)?;
                 } else {
                     return fail(*line, format!("unknown system function: {}", call.callee));
                 }
@@ -1761,6 +1812,23 @@ impl<'a> ModuleExec<'a> {
             }
         }
         Ok(())
+    }
+}
+
+/// 式を診断メッセージ用の読みやすい文字列へ復元する(`assert` / `expect` 失敗時)。
+/// 元ソースの字面ではなく AST からの再構成なので、空白や括弧は正規化される。
+fn expr_to_string(e: &Expr) -> String {
+    match e {
+        Expr::Num { num, .. } => num.to_string(),
+        Expr::Time { .. } => "$time".to_string(),
+        Expr::Var { name, index, .. } => match index {
+            Some(i) => format!("{}[{}]", name, expr_to_string(i)),
+            None => name.clone(),
+        },
+        Expr::Un { op, a, .. } => format!("{}{}", op, expr_to_string(a)),
+        Expr::Bin { op, a, b, .. } => {
+            format!("({} {} {})", expr_to_string(a), op, expr_to_string(b))
+        }
     }
 }
 
@@ -1841,6 +1909,10 @@ pub fn run_program(prog: &Program, trace: bool) -> RvResult<RunTimings> {
         sim: Duration::ZERO,
         modules: prog.modules.len(),
     };
+    // 自己検証(`assert` / `expect`)は全 module ぶん集計する。途中の失敗で打ち切らず、
+    // 各 module の sim を最後まで実行してから合否を判定する(全チェックを見せるため)。
+    let mut assert_total = 0i64;
+    let mut assert_failed = 0i64;
     for m in &prog.modules {
         if many {
             println!("=== module {} ===", m.name);
@@ -1848,6 +1920,17 @@ pub fn run_program(prog: &Program, trace: bool) -> RvResult<RunTimings> {
         let mut ex = ModuleExec::new(prog, m, cfg, trace);
         ex.run()?;
         timings.sim += ex.sim_dur;
+        assert_total += ex.assert_total;
+        assert_failed += ex.assert_failed;
+    }
+    if assert_total > 0 {
+        if assert_failed > 0 {
+            return fail(
+                0,
+                format!("assertions: {} of {} failed", assert_failed, assert_total),
+            );
+        }
+        eprintln!("[assert] {} assertion(s), all passed", assert_total);
     }
     Ok(timings)
 }

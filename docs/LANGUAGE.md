@@ -267,6 +267,11 @@ module test() {
 - `monitor(fmt, ...)` … その場で出力。`%` が次の引数を 10 進で消費、`%N`(例 `%2`)で **最小幅**(右寄せ
   スペース詰め)を指定、`%%` で `%` リテラル。**隣接プレースホルダ**は `%%` がエスケープと衝突するため
   幅付き(例 `%1%1%1%1`)で書く。型サフィックス `%d` / `%t` は廃止(エラー。issue #17)
+- `assert(cond)` … `cond` が偽(= 0)なら **失敗** を stderr に記録する(行番号 + 式を表示)。
+  `expect(actual, expected)` … 不一致なら「実際の値 / 期待値」を stderr に記録する。**いずれも
+  失敗しても sim は止まらず継続**し、全 module の sim 実行後に `N assertion(s), all passed`、
+  または失敗があれば `assertions: M of N failed` を出して **非ゼロ終了** する。`monitor`(stdout)に
+  頼らず **終了コードで合否が分かる** 自己検証テストベンチを書ける(`examples/assert_selfcheck.rv`)
 - `wait(n)` … `$time` を進めず、monitor も発火させずに n tick 待つ(発振回路用)
 - `v = scan()` … **stdin** から空白/改行区切りの整数を 1 つ読み、変数 `v` に代入する。
   EOF(入力切れ)・非数値は **エラー**。回路へ束縛した変数は読み取り後も 0–15 にクランプされる。
@@ -335,6 +340,7 @@ module test() {
 | `examples/and_gate.rv` | トーチ 3 本(NOT の NOR)の AND |
 | `examples/decay.rv` | ダスト減衰 / リピータ再増幅 / コンパレータの強度パススルーの比較 |
 | `examples/counter_test.rv` | `for` / `if` で AND の真理値表を自動検証 |
+| `examples/assert_selfcheck.rv` | `assert` / `expect` で合否を終了コードに返す自己検証(§5) |
 | `examples/clock.rv` | トーチ + リピータ 4 のクロック(周期 10)。`wait()` の使用例 |
 | `examples/scan_and.rv` | `scan()` で stdin から 2 値を読んで AND に通す |
 | `examples/hier_and.rv` | `not_gate` / `or_gate` を入れ子にした階層化 AND(ド・モルガン) |
