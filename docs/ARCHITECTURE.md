@@ -68,7 +68,7 @@
 let toks = lexer::Lexer::new(src).run()?;            // 1. 字句解析
 let mut ps = parser::Parser::new(toks, dir);
 ps.parse_file(&mut prog)?;                           // 2. 構文解析 → Program
-let timings = interp::run_program(&prog, trace)?;    // 3. エラボレーション + sim 実行
+let timings = interp::run_program(&prog, trace, vcd)?; // 3. エラボレーション + sim 実行
 ```
 
 エラーは `diag::RvResult`(= `Result<T, RvError>`)で `?` 伝播し、`main` で `[error] ...` を
@@ -390,7 +390,9 @@ phase 1(出力)と phase 4(期待出力 = 据え置き)の **両方** で `rep_l
 - **エラーケーステスト**: `run_source()` でソース文字列を一時ファイル化して叩き、(終了コード, stderr) を
   検証する。エラボレーションのエラーは module 呼び出しを添えないと発火しない(§4.6)ので注意。
 - **ノード名の `#`**: 内部ノード(`foo.w#i3` 等)は `dump_trace` でスキップされる。`-t` で公開したい点は
-  名前に `#` を含めない。
+  名前に `#` を含めない。`--vcd <file>` の VCD 波形出力(`circuit.rs::dump_vcd`、`Vcd`)も **同じ公開ノード
+  基準** で信号を選び、`dump_trace` と並んで `step()` から毎 tick 駆動される。値変化のみを記録し、時刻は
+  生 tick(`#init` 整定も含む)。VCD ゴールデンは生成ファイルを `tests/expected/vcd_demo.vcd` と比較する。
 
 新機能を足したら **サンプル + ゴールデン(LF) + `tests/golden.rs` のテスト関数** を 1 つ以上追加する。
 

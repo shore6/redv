@@ -1,0 +1,32 @@
+/* VCD 波形出力デモ(issue #46)
+ *
+ *   redv --vcd out.vcd examples/vcd_demo.rv
+ *
+ * で out.vcd を生成でき、GTKWave 等で波形を観測できる。--vcd 無しなら通常実行。
+ * 入力 x をトーチで反転して a に、それをリピータ遅延2で y に出す。公開ノード
+ * (名前に '#' を含まない reg / ポート)が 4bit ベクタ信号として記録される。 */
+logic chain(input x, output y)
+{
+    reg a;
+    x-t-a;          // a = NOT x(トーチ1tick遅れ)
+    a-r2-y;         // y = a を遅延2で複製
+}
+
+module test_chain()
+{
+    var x;
+    var y;
+    sim {
+        x = 0;
+        y = chain(x);
+        #init              // 定常状態まで待つ(時刻0)
+
+        x = 15;
+        #1 #1 #1           // 立ち上がり: a は1tick後に0へ、y はさらに遅延2で追従
+
+        x = 0;
+        #1 #1 #1           // 立ち下がり
+
+        ?monitor("t=% x=% y=%\n", $time, x, y);
+    }
+}
