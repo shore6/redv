@@ -1175,7 +1175,11 @@ impl<'a> ModuleExec<'a> {
                         *line,
                         format!("'{}' is a bus var; index a lane (e.g. '{}[0]')", name, name),
                     ),
-                    None => fail(*line, format!("undeclared variable: {}", name)),
+                    // var に無ければ param 定数(`param` / 数値 `#define`)を引く。
+                    None => match self.prog.defines.get(name) {
+                        Some(v) => Ok(*v),
+                        None => fail(*line, format!("undeclared variable: {}", name)),
+                    },
                 },
                 Some(e) => {
                     let w = match self.bus_width(name) {

@@ -6,6 +6,7 @@
 use crate::ast::*;
 use crate::diag::{fail, warn, RvResult};
 use crate::lexer::{Lexer, Tk, Token};
+use std::collections::HashMap;
 use std::fs;
 
 pub fn dir_of(path: &str) -> String {
@@ -19,6 +20,9 @@ pub struct Parser {
     toks: Vec<Token>,
     i: usize,
     base_dir: String,
+    /// パラメータ定数表(`param` / 数値 `#define`)。幅 `[expr]` と式の解決に使う
+    /// **パース時** のミラー。確定値は `prog.defines` 側にも書く(interp が読む)。
+    consts: HashMap<String, i64>,
 }
 
 impl Parser {
@@ -27,6 +31,7 @@ impl Parser {
             toks,
             i: 0,
             base_dir,
+            consts: HashMap::new(),
         }
     }
 
@@ -35,6 +40,9 @@ impl Parser {
             if self.is_punct("#") {
                 self.i += 1;
                 self.parse_directive(prog)?;
+            } else if self.is_ident("param") {
+                self.i += 1;
+                self.parse_param(prog)?;
             } else if self.is_ident("logic") {
                 self.i += 1;
                 self.parse_logic(prog)?;
@@ -44,7 +52,7 @@ impl Parser {
             } else {
                 return fail(
                     self.cur().line,
-                    "expected 'logic', 'module', or '#' directive at top level",
+                    "expected 'param', 'logic', 'module', or '#' directive at top level",
                 );
             }
         }
@@ -108,6 +116,7 @@ impl Parser {
             match self.cur().k {
                 Tk::Num => {
                     let num = self.cur().num;
+                    self.consts.insert(name.clone(), num);
                     prog.defines.insert(name, num);
                     self.i += 1;
                 }
@@ -164,11 +173,109 @@ impl Parser {
             if let Ok(src) = fs::read_to_string(c) {
                 let toks = Lexer::new(src).run()?;
                 let mut sub = Parser::new(toks, dir_of(c));
+                // 外側で定義済みの param/define を include 先からも参照できるよう引き継ぐ。
+                sub.consts = self.consts.clone();
                 sub.parse_file(prog)?;
+                // include 先で定義された param/define を外側へ戻す。
+                self.consts.extend(sub.consts);
                 return Ok(());
             }
         }
         fail(ln, format!("cannot open include file: {}", fn_))
+    }
+
+    // ---- param -------------------------------------------------------------
+
+    /// `param NAME = <定数式> ;` を解析。値は `self.consts`(パース時解決用)と
+    /// `prog.defines`(interp が読む)の両方に登録する。
+    fn parse_param(&mut self, prog: &mut Program) -> RvResult<()> {
+        let name = self.expect_ident("param name")?;
+        self.expect_punct("=")?;
+        let e = self.parse_expr()?;
+        self.expect_punct(";")?;
+        let v = self.eval_const(&e)?;
+        self.consts.insert(name.clone(), v);
+        prog.defines.insert(name, v);
+        Ok(())
+    }
+
+    /// 定数式 `e` を `self.consts` を引いて畳み込む。`$time` / 添字 / 比較・論理は不可。
+    fn eval_const(&self, e: &Expr) -> RvResult<i64> {
+        match e {
+            Expr::Num { num, .. } => Ok(*num),
+            Expr::Time { line } => fail(*line, "$time is not allowed in a constant expression"),
+            Expr::Var { line, name, index } => {
+                if index.is_some() {
+                    return fail(
+                        *line,
+                        format!("cannot index '{}' in a constant expression", name),
+                    );
+                }
+                match self.consts.get(name) {
+                    Some(v) => Ok(*v),
+                    None => fail(
+                        *line,
+                        format!(
+                            "unknown constant '{}' (declare it with 'param {} = ...;')",
+                            name, name
+                        ),
+                    ),
+                }
+            }
+            Expr::Un { line, op, a } => {
+                let v = self.eval_const(a)?;
+                match op.as_str() {
+                    "-" => Ok(-v),
+                    "!" => Ok((v == 0) as i64),
+                    _ => fail(*line, format!("operator '{}' not allowed in a constant expression", op)),
+                }
+            }
+            Expr::Bin { line, op, a, b } => {
+                let a = self.eval_const(a)?;
+                let b = self.eval_const(b)?;
+                match op.as_str() {
+                    "+" => Ok(a + b),
+                    "-" => Ok(a - b),
+                    "*" => Ok(a * b),
+                    "/" => {
+                        if b == 0 {
+                            return fail(*line, "division by zero in a constant expression");
+                        }
+                        Ok(a / b)
+                    }
+                    "%" => {
+                        if b == 0 {
+                            return fail(*line, "modulo by zero in a constant expression");
+                        }
+                        Ok(a % b)
+                    }
+                    _ => fail(
+                        *line,
+                        format!("operator '{}' not allowed in a constant expression", op),
+                    ),
+                }
+            }
+        }
+    }
+
+    /// バス幅 `[<定数式>]`(省略可)を解析する。`[` が無ければ `None`。
+    /// `what` は診断用のラベル(例: "reg[")。
+    fn parse_width(&mut self, what: &str) -> RvResult<Option<i32>> {
+        if !self.is_punct("[") {
+            return Ok(None);
+        }
+        let ln = self.cur().line;
+        self.i += 1;
+        if self.is_punct("]") {
+            return fail(ln, format!("expected a bus width after '{}'", what));
+        }
+        let e = self.parse_expr()?;
+        self.expect_punct("]")?;
+        let n = self.eval_const(&e)?;
+        if n < 1 {
+            return fail(ln, format!("bus width must be >= 1 (got {})", n));
+        }
+        Ok(Some(n as i32))
     }
 
     // ---- logic -------------------------------------------------------------
@@ -189,20 +296,8 @@ impl Parser {
                     return fail(pl, "port must start with 'input' or 'output'");
                 }
                 // バスポート `input[N]` / `output[N]`(`[N]` は input/output と名前の間)。
-                let mut width: Option<i32> = None;
-                if self.is_punct("[") {
-                    self.i += 1;
-                    if self.cur().k != Tk::Num {
-                        return fail(self.cur().line, "expected a bus width 'N' after '['");
-                    }
-                    let n = self.cur().num;
-                    self.i += 1;
-                    self.expect_punct("]")?;
-                    if n < 1 {
-                        return fail(pl, format!("bus width must be >= 1 (got {})", n));
-                    }
-                    width = Some(n as i32);
-                }
+                // 幅はリテラルのほか param 定数や定数式(`input[W]` / `input[W+1]`)を許可。
+                let width = self.parse_width(&format!("{}[", pk))?;
                 let pname = self.expect_ident("port name")?;
                 self.check_decl_name(&pname, "port", pl)?;
                 ports.push(Port {
@@ -266,20 +361,8 @@ impl Parser {
         if self.is_ident("reg") {
             self.i += 1;
             // バス幅 `reg[N]`(`[N]` は reg と名前の間に置き、宣言列全体に適用)。
-            let mut width: Option<i32> = None;
-            if self.is_punct("[") {
-                self.i += 1;
-                if self.cur().k != Tk::Num {
-                    return fail(self.cur().line, "expected a bus width 'N' after 'reg['");
-                }
-                let n = self.cur().num;
-                self.i += 1;
-                self.expect_punct("]")?;
-                if n < 1 {
-                    return fail(ln, format!("bus width must be >= 1 (got {})", n));
-                }
-                width = Some(n as i32);
-            }
+            // 幅はリテラルのほか param 定数や定数式(`reg[W]` / `reg[W+1]`)を許可。
+            let width = self.parse_width("reg[")?;
             loop {
                 let name = self.expect_ident("reg name")?;
                 self.check_decl_name(&name, "reg", ln)?;
@@ -560,20 +643,8 @@ impl Parser {
         let ln = self.cur().line;
         self.i += 1; // 'var'
         // バス var `var[N]`(`[N]` は var と名前の間。宣言列全体に適用)。
-        let mut width: Option<i32> = None;
-        if self.is_punct("[") {
-            self.i += 1;
-            if self.cur().k != Tk::Num {
-                return fail(self.cur().line, "expected a bus width 'N' after 'var['");
-            }
-            let n = self.cur().num;
-            self.i += 1;
-            self.expect_punct("]")?;
-            if n < 1 {
-                return fail(ln, format!("bus width must be >= 1 (got {})", n));
-            }
-            width = Some(n as i32);
-        }
+        // 幅はリテラルのほか param 定数や定数式(`var[W]` / `var[W+1]`)を許可。
+        let width = self.parse_width("var[")?;
         let mut decls = Vec::new();
         loop {
             let n = self.expect_ident("variable name")?;
