@@ -42,6 +42,27 @@ pub enum Qual {
     Mutable,
 }
 
+/// チェーン端点のレーン選択。バス名や reg 名に付く。
+#[derive(Debug, Clone)]
+pub enum Sel {
+    /// 添字なし。スカラ点 / バス全体。
+    All,
+    /// `name[k]` — 単一レーン。
+    Lane(i32),
+    /// `name[hi:lo]` — スライス(包含)。`hi >= lo` で降順、`hi < lo` で昇順。
+    Slice(i32, i32),
+}
+
+/// チェーン端点。スカラ点 / バス全体 / レーン / スライス / 連結のいずれか。
+/// レーン列(`Vec<usize>`)に解決され、両端の幅が一致すれば element-wise 接続される。
+#[derive(Debug, Clone)]
+pub enum Endpoint {
+    /// 名前 + レーン選択 + `.side`(コンパレータ/リピーター横入力)。
+    Ref { name: String, side: bool, sel: Sel },
+    /// `{e1, e2, ...}` — 連結(左から順にレーンを連接)。各要素は `Ref`(`side` 不可)。
+    Concat(Vec<Endpoint>),
+}
+
 #[derive(Debug, Clone)]
 pub enum LogicStmt {
     DeclWire {
@@ -79,18 +100,12 @@ pub enum LogicStmt {
     /// `from -chunks...- to` — チェーン接続文(2 点を素子列でつなぐ)。
     ///
     /// 中間チャンクには素子に加えて **wire 名** を書け、その素子列が各箇所に
-    /// 独立展開される。`from_side` / `to_side` は端点の `.side`(コンパレータ横入力)。
-    ///
-    /// `from_idx` / `to_idx` が `Some(k)` なら端点はバスのレーン `name[k]`。`None` かつ端点が
-    /// バス名なら **バス全体**(同幅の両端を element-wise に展開する)。スカラ端点は幅 1。
+    /// 独立展開される。両端は `Endpoint`(スカラ / バス全体 / レーン / スライス / 連結)。
+    /// 端点はレーン列に解決され、両端の幅(レーン数)が一致すれば element-wise 接続される。
     Chain {
         line: i32,
-        from: String,
-        from_side: bool,
-        from_idx: Option<i32>,
-        to: String,
-        to_side: bool,
-        to_idx: Option<i32>,
+        from: Endpoint,
+        to: Endpoint,
         chunks: Vec<String>,
     },
     /// `target = [strength] rhs` (strength == -1 は未指定)

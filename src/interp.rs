@@ -189,10 +189,21 @@ fn repeater_delay(tok: &str, line: i32) -> RvResult<Option<i32>> {
 
 // ---- chain endpoint resolution -----------------------------------------
 
-/// チェーン端点の解決結果。スカラ点(1 ノード)かバス全体(レーン列)。
+/// チェーン端点の解決結果。スカラ点(1 ノード)かバス(レーン列)。
+/// スライス・連結は常に `Bus`(レーン列)。スカラ点 / 単一レーン `a[k]` は `Single`。
 enum Ep {
     Single(usize),
     Bus(Vec<usize>),
+}
+
+impl Ep {
+    /// レーンノード列(スカラは長さ 1)。
+    fn lanes(&self) -> Vec<usize> {
+        match self {
+            Ep::Single(n) => vec![*n],
+            Ep::Bus(v) => v.clone(),
+        }
+    }
 }
 
 /// バスのレーン `name[k]` を解決する(範囲検査つき)。
@@ -206,47 +217,43 @@ fn bus_lane(v: &[usize], name: &str, k: i32, line: i32) -> RvResult<Ep> {
     Ok(Ep::Single(v[k as usize]))
 }
 
-/// チェーンの **始端(信号源)** を解決する。`name[k]` はレーン、無印のバス名はバス全体。
-fn resolve_src(
-    name: &str,
-    idx: Option<i32>,
-    scope: &HashMap<String, usize>,
-    buses: &HashMap<String, Vec<usize>>,
-    wire_names: &HashSet<String>,
-    line: i32,
-) -> RvResult<Ep> {
-    if let Some(k) = idx {
-        return match buses.get(name) {
-            Some(v) => bus_lane(v, name, k, line),
-            None => fail(line, format!("'{}' is indexed with '[{}]' but is not a bus", name, k)),
-        };
+/// バスのスライス `name[hi:lo]`(包含)をレーン列へ展開する。`hi >= lo` で降順
+/// `[hi, hi-1, .., lo]`、`hi < lo` で昇順 `[hi, hi+1, .., lo]`(ビット反転に使える)。
+fn bus_slice(v: &[usize], name: &str, hi: i32, lo: i32, line: i32) -> RvResult<Vec<usize>> {
+    let w = v.len() as i32;
+    for k in [hi, lo] {
+        if k < 0 || k >= w {
+            return fail(
+                line,
+                format!(
+                    "bus slice index out of range: {}[{}:{}] (width {})",
+                    name, hi, lo, w
+                ),
+            );
+        }
     }
-    if let Some(n) = scope.get(name) {
-        return Ok(Ep::Single(*n));
+    let mut out = Vec::new();
+    if hi >= lo {
+        for k in (lo..=hi).rev() {
+            out.push(v[k as usize]);
+        }
+    } else {
+        for k in hi..=lo {
+            out.push(v[k as usize]);
+        }
     }
-    if let Some(v) = buses.get(name) {
-        return Ok(Ep::Bus(v.clone()));
-    }
-    if wire_names.contains(name) {
-        return fail(
-            line,
-            format!(
-                "wire '{}' cannot be a chain endpoint (a wire is an element sequence; \
-                 endpoints must be reg/port)",
-                name
-            ),
-        );
-    }
-    fail(line, format!("unknown chain endpoint: {}", name))
+    Ok(out)
 }
 
-/// チェーンの **終端(信号先)** を解決する。`.side` はコンパレータ/リピーター reg の横入力、
-/// 無印のコンパレータ/リピーター reg は後ろ入力。それ以外はスカラ点 / バス全体。
+/// 単一の名前参照(`name` / `name[k]` / `name[hi:lo]` / `name.side`)を解決する。
+/// `dst` が true なら終端(信号先)としての規則: `.side` はコンパレータ/リピーター reg の
+/// 横入力、無印の同 reg は後ろ入力。`dst` が false なら始端(信号源)で `.side` は不可。
 #[allow(clippy::too_many_arguments)]
-fn resolve_dst(
+fn resolve_ref(
     name: &str,
-    idx: Option<i32>,
+    sel: &Sel,
     side: bool,
+    dst: bool,
     scope: &HashMap<String, usize>,
     side_regs: &HashMap<String, (usize, usize)>,
     buses: &HashMap<String, Vec<usize>>,
@@ -254,8 +261,11 @@ fn resolve_dst(
     line: i32,
 ) -> RvResult<Ep> {
     if side {
-        if idx.is_some() {
-            return fail(line, format!("'{}' cannot take both a lane index and '.side'", name));
+        if !dst {
+            return fail(
+                line,
+                format!("'{}.side' cannot be a wire source (side is an input terminal)", name),
+            );
         }
         return match side_regs.get(name) {
             Some((_back, s)) => Ok(Ep::Single(*s)),
@@ -268,32 +278,94 @@ fn resolve_dst(
             ),
         };
     }
-    if let Some(k) = idx {
-        return match buses.get(name) {
-            Some(v) => bus_lane(v, name, k, line),
+    match sel {
+        Sel::Lane(k) => match buses.get(name) {
+            Some(v) => bus_lane(v, name, *k, line),
             None => fail(line, format!("'{}' is indexed with '[{}]' but is not a bus", name, k)),
-        };
-    }
-    if let Some((back, _side)) = side_regs.get(name) {
-        return Ok(Ep::Single(*back));
-    }
-    if let Some(n) = scope.get(name) {
-        return Ok(Ep::Single(*n));
-    }
-    if let Some(v) = buses.get(name) {
-        return Ok(Ep::Bus(v.clone()));
-    }
-    if wire_names.contains(name) {
-        return fail(
-            line,
-            format!(
-                "wire '{}' cannot be a chain endpoint (a wire is an element sequence; \
-                 endpoints must be reg/port)",
-                name
+        },
+        Sel::Slice(hi, lo) => match buses.get(name) {
+            Some(v) => Ok(Ep::Bus(bus_slice(v, name, *hi, *lo, line)?)),
+            None => fail(
+                line,
+                format!("'{}' is sliced with '[{}:{}]' but is not a bus", name, hi, lo),
             ),
-        );
+        },
+        Sel::All => {
+            // 終端では無印のコンパレータ/リピーター reg は後ろ入力(back)。
+            if dst {
+                if let Some((back, _side)) = side_regs.get(name) {
+                    return Ok(Ep::Single(*back));
+                }
+            }
+            if let Some(n) = scope.get(name) {
+                return Ok(Ep::Single(*n));
+            }
+            if let Some(v) = buses.get(name) {
+                return Ok(Ep::Bus(v.clone()));
+            }
+            if wire_names.contains(name) {
+                return fail(
+                    line,
+                    format!(
+                        "wire '{}' cannot be a chain endpoint (a wire is an element sequence; \
+                         endpoints must be reg/port)",
+                        name
+                    ),
+                );
+            }
+            fail(line, format!("unknown chain endpoint: {}", name))
+        }
     }
-    fail(line, format!("unknown chain endpoint: {}", name))
+}
+
+/// チェーン端点 `Endpoint` をレーン列へ解決する。連結は各要素のレーン列を順に連接する
+/// (結果は常に `Bus`)。`dst` は始端/終端の別(`.side`・back/out の解釈に使う)。
+#[allow(clippy::too_many_arguments)]
+fn resolve_endpoint(
+    ep: &Endpoint,
+    dst: bool,
+    scope: &HashMap<String, usize>,
+    side_regs: &HashMap<String, (usize, usize)>,
+    buses: &HashMap<String, Vec<usize>>,
+    wire_names: &HashSet<String>,
+    line: i32,
+) -> RvResult<Ep> {
+    match ep {
+        Endpoint::Ref { name, side, sel } => {
+            resolve_ref(name, sel, *side, dst, scope, side_regs, buses, wire_names, line)
+        }
+        Endpoint::Concat(elems) => {
+            let mut lanes = Vec::new();
+            for e in elems {
+                lanes.extend(
+                    resolve_endpoint(e, dst, scope, side_regs, buses, wire_names, line)?.lanes(),
+                );
+            }
+            Ok(Ep::Bus(lanes))
+        }
+    }
+}
+
+/// 端点を診断メッセージ用の文字列に整形する(`p` / `p[3:0]` / `{a, b}` 等)。
+fn endpoint_desc(ep: &Endpoint) -> String {
+    match ep {
+        Endpoint::Ref { name, side, sel } => {
+            let mut s = name.clone();
+            match sel {
+                Sel::All => {}
+                Sel::Lane(k) => s.push_str(&format!("[{}]", k)),
+                Sel::Slice(hi, lo) => s.push_str(&format!("[{}:{}]", hi, lo)),
+            }
+            if *side {
+                s.push_str(".side");
+            }
+            s
+        }
+        Endpoint::Concat(elems) => {
+            let inner: Vec<String> = elems.iter().map(endpoint_desc).collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+    }
 }
 
 // ---- logic instance ----------------------------------------------------
@@ -614,9 +686,8 @@ impl<'p> Elaborator<'_, 'p> {
         // 階層インスタンス文(全ノード確定後にまとめて結線する)
         let mut instances: Vec<(i32, String, String, Vec<String>)> = Vec::new();
         // 無名チェーン文(wire 名を介さない直結。全ノード確定後にまとめて構築)。
-        // 端点の (name, side, idx) を保持(idx Some=バスレーン / None かつバス名=バス全体)。
-        type ChainEp = (String, bool, Option<i32>);
-        let mut anon_chains: Vec<(i32, ChainEp, ChainEp, Vec<String>)> = Vec::new();
+        // 両端の `Endpoint`(スカラ / バス全体 / レーン / スライス / 連結)を保持する。
+        let mut anon_chains: Vec<(i32, Endpoint, Endpoint, Vec<String>)> = Vec::new();
 
         for p in &l.ports {
             if scope.contains_key(&p.name) || buses.contains_key(&p.name) {
@@ -930,19 +1001,10 @@ impl<'p> Elaborator<'_, 'p> {
                 LogicStmt::Chain {
                     line,
                     from,
-                    from_side,
-                    from_idx,
                     to,
-                    to_side,
-                    to_idx,
                     chunks,
                 } => {
-                    anon_chains.push((
-                        *line,
-                        (from.clone(), *from_side, *from_idx),
-                        (to.clone(), *to_side, *to_idx),
-                        chunks.clone(),
-                    ));
+                    anon_chains.push((*line, from.clone(), to.clone(), chunks.clone()));
                 }
             }
         }
@@ -974,19 +1036,11 @@ impl<'p> Elaborator<'_, 'p> {
         // 展開する(各レーンで独立した素子列。circuit シミュレーション意味論は不変)。
         // label は内部ノード名に使う識別子('#chN' / '#chN_i' で trace 非表示)。
         let bus_names: HashSet<String> = buses.keys().cloned().collect();
-        for (k, (line, src_ep, dst_ep, chunks)) in anon_chains.iter().enumerate() {
+        for (k, (line, from_ep, to_ep, chunks)) in anon_chains.iter().enumerate() {
             let line = *line;
-            let (from, from_side, from_idx) = src_ep;
-            let (to, to_side, to_idx) = dst_ep;
-            // 始端(信号源)。`.side` は入力専用なので源にはできない。
-            if *from_side {
-                return fail(
-                    line,
-                    format!("'{}.side' cannot be a wire source (side is an input terminal)", from),
-                );
-            }
-            let src = resolve_src(from, *from_idx, &scope, &buses, &wire_names, line)?;
-            let dst = resolve_dst(to, *to_idx, *to_side, &scope, &side_regs, &buses, &wire_names, line)?;
+            // 端点をレーン列へ解決(`.side` を源に置く誤りは resolve_endpoint が弾く)。
+            let src = resolve_endpoint(from_ep, false, &scope, &side_regs, &buses, &wire_names, line)?;
+            let dst = resolve_endpoint(to_ep, true, &scope, &side_regs, &buses, &wire_names, line)?;
             match (src, dst) {
                 (Ep::Single(fi), Ep::Single(ti)) => {
                     let label = format!("#ch{}", k + 1);
@@ -995,36 +1049,36 @@ impl<'p> Elaborator<'_, 'p> {
                         &bus_names, line,
                     )?;
                 }
-                (Ep::Bus(fv), Ep::Bus(tv)) => {
-                    if fv.len() != tv.len() {
-                        return fail(
-                            line,
-                            format!(
+                (s, d) => {
+                    // 少なくとも片方がバス(全体 / スライス / 連結)。幅(レーン数)一致で
+                    // element-wise に展開する。スカラは幅 1 として扱う。
+                    let sl = s.lanes();
+                    let dl = d.lanes();
+                    if sl.len() != dl.len() {
+                        let msg = match (&s, &d) {
+                            (Ep::Bus(_), Ep::Bus(_)) => format!(
                                 "bus width mismatch in chain: '{}' has {} lane(s) but '{}' has {}",
-                                from,
-                                fv.len(),
-                                to,
-                                tv.len()
+                                endpoint_desc(from_ep),
+                                sl.len(),
+                                endpoint_desc(to_ep),
+                                dl.len()
                             ),
-                        );
+                            _ => format!(
+                                "bus/scalar width mismatch in chain between '{}' and '{}' \
+                                 (index a lane like 'name[0]', or make both whole buses of equal width)",
+                                endpoint_desc(from_ep),
+                                endpoint_desc(to_ep)
+                            ),
+                        };
+                        return fail(line, msg);
                     }
-                    for i in 0..fv.len() {
+                    for i in 0..sl.len() {
                         let label = format!("#ch{}_{}", k + 1, i);
                         self.build_chain_body(
-                            &label, prefix, fv[i], tv[i], chunks, &wire_seq, &scope,
+                            &label, prefix, sl[i], dl[i], chunks, &wire_seq, &scope,
                             &wire_names, &bus_names, line,
                         )?;
                     }
-                }
-                _ => {
-                    return fail(
-                        line,
-                        format!(
-                            "bus/scalar width mismatch in chain between '{}' and '{}' \
-                             (index a lane like 'name[0]', or make both whole buses of equal width)",
-                            from, to
-                        ),
-                    );
                 }
             }
         }
