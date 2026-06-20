@@ -12,11 +12,11 @@ logic or_gate(input x1, input x2, output y) {
 
 /* 下位 logic を 4 個インスタンス化して AND を組む */
 logic and2(input x1, input x2, output y) {
-    reg na, nb, o;      // 中間ノード(階層インスタンスの結線端点)
+    reg na, nb, m;      // 中間ノード(階層インスタンスの結線端点)
     na = not_gate(x1);   // na = !a
     nb = not_gate(x2);  // nb = !b
-    o  = or_gate(na, nb);   // o = na | nb = !a | !b
-    y  = not_gate(o);   // y = !o = a & b
+    m  = or_gate(na, nb);   // m = na | nb = !a | !b
+    y  = not_gate(m);   // y = !m = a & b
 }
 
 module sweep_and()

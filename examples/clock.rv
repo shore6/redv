@@ -4,10 +4,10 @@
 
 logic osc(output y)
 {
-    reg o;
-    o = d;
-    o-t-y;          // o を反転して y へ
-    y-r4-o;         // y を遅延4で o に戻す(フィードバック)
+    reg m;
+    m = d;
+    m-t-y;          // m を反転して y へ
+    y-r4-m;         // y を遅延4で m に戻す(フィードバック)
 }
 
 module test_osc()
