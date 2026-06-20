@@ -1157,6 +1157,14 @@ impl<'p> Elaborator<'_, 'p> {
 
 // ---- module execution --------------------------------------------------
 
+/// `clock(var, N)` の周期トグル状態。各レベルを `hold` tick 保持し、`counter` が
+/// 0 に達するたびに `level` を 0 ↔ 15 で反転する(full period = 2*hold、50% デューティ)。
+struct ClockState {
+    hold: i64,
+    counter: i64,
+    level: i64,
+}
+
 pub struct ModuleExec<'a> {
     prog: &'a Program,
     m: &'a ModuleDef,
@@ -1169,6 +1177,8 @@ pub struct ModuleExec<'a> {
     sim_time: i64,
     /// パルス代入(`x = v ~ w`)で残り tick を持つ var → 0 で var を 0 に戻す。
     pulses: HashMap<String, i64>,
+    /// `clock(x, N)` で自動トグルする var → 周期状態。tick ごとに `tick_clocks` が更新する。
+    clocks: HashMap<String, ClockState>,
     /// バス var(`var[N] x;`)の幅。レーンは vars に `x[0]`..`x[N-1]` のキーで格納する。
     var_buses: HashMap<String, i32>,
     /// この module の sim tick 実行(`tick_once`)に費やした累積時間。`--time` 用。
@@ -1198,6 +1208,7 @@ impl<'a> ModuleExec<'a> {
             clamp_warned: HashSet::new(),
             sim_time: 0,
             pulses: HashMap::new(),
+            clocks: HashMap::new(),
             var_buses: HashMap::new(),
             sim_dur: Duration::ZERO,
             assert_total: 0,
@@ -1376,6 +1387,7 @@ impl<'a> ModuleExec<'a> {
         let ch = self.c.step();
         self.apply_outputs();
         self.tick_pulses();
+        self.tick_clocks();
         self.sim_dur += t.elapsed();
         Ok(ch)
     }
@@ -1396,6 +1408,55 @@ impl<'a> ModuleExec<'a> {
             self.pulses.remove(&var);
             self.vars.insert(var, 0);
         }
+    }
+
+    /// 各 tick 末にクロックの残り tick を 1 減らし、0 に達した var をトグル(0 ↔ 15)する。
+    fn tick_clocks(&mut self) {
+        if self.clocks.is_empty() {
+            return;
+        }
+        let mut toggled: Vec<(String, i64)> = Vec::new();
+        for (var, st) in self.clocks.iter_mut() {
+            st.counter -= 1;
+            if st.counter <= 0 {
+                st.level = if st.level == 0 { 15 } else { 0 };
+                st.counter = st.hold;
+                toggled.push((var.clone(), st.level));
+            }
+        }
+        for (var, level) in toggled {
+            self.vars.insert(var, level);
+        }
+    }
+
+    /// `clock(var, N)` — var を「各レベル N tick 保持」で 0/15 に自動トグルさせる。
+    /// 呼び出し直後は Low(0)。clock() 自体は時刻を進めず、後続の `#n`/`wait`/`#until` が
+    /// tick を刻む間にトグルする(パルス代入と同型)。同じ var への通常代入で解除される。
+    fn do_clock(&mut self, line: i32, call: &CallData) -> RvResult<()> {
+        if call.has_fmt || call.args.len() != 2 {
+            return fail(line, "clock(var, N) takes a var name and a period");
+        }
+        let name = match &call.args[0] {
+            Expr::Var { name, index: None, .. } => name.clone(),
+            Expr::Var { .. } => {
+                return fail(line, "clock(var, N): first argument must be a scalar var, not a bus lane");
+            }
+            _ => return fail(line, "clock(var, N): first argument must be a var name"),
+        };
+        if self.var_buses.contains_key(&name) {
+            return fail(line, format!("clock on a bus var '{}' is not supported", name));
+        }
+        if !self.vars.contains_key(&name) {
+            return fail(line, format!("undeclared variable: {}", name));
+        }
+        let n = self.eval_e(&call.args[1])?;
+        if n < 1 {
+            return fail(line, format!("clock period must be >= 1 (got {})", n));
+        }
+        self.vars.insert(name.clone(), 0);
+        self.pulses.remove(&name);
+        self.clocks.insert(name, ClockState { hold: n, counter: n, level: 0 });
+        Ok(())
     }
 
     fn run_ticks(&mut self, n: i64, advance_time: bool) -> RvResult<()> {
@@ -1798,6 +1859,8 @@ impl<'a> ModuleExec<'a> {
                 };
                 for key in &keys {
                     self.vars.insert(key.clone(), v);
+                    // var への代入は、その var に掛かっていたクロックを解除する。
+                    self.clocks.remove(key);
                 }
                 // パルス幅 Some(w) ならリセットを予約(対象キー)。通常代入は保留中パルスを解除。
                 match pulse {
@@ -1857,6 +1920,8 @@ impl<'a> ModuleExec<'a> {
                         return fail(*line, "wait(n): n must be >= 0");
                     }
                     self.run_ticks(n, false)?; // $time を進めず、monitor も発火しない
+                } else if call.callee == "clock" {
+                    self.do_clock(*line, call)?;
                 } else if call.callee == "assert" {
                     self.do_assert(*line, call)?;
                 } else if call.callee == "expect" {

@@ -1,0 +1,8 @@
+t= 1 | clk= 0 | y= 0
+t= 2 | clk=15 | y= 0
+t= 3 | clk=15 | y=15
+t= 4 | clk= 0 | y=15
+t= 5 | clk= 0 | y= 0
+t= 6 | clk=15 | y= 0
+t= 7 | clk=15 | y=15
+t= 8 | clk= 0 | y=15

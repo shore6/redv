@@ -325,6 +325,13 @@ module test() {
   または失敗があれば `assertions: M of N failed` を出して **非ゼロ終了** する。`monitor`(stdout)に
   頼らず **終了コードで合否が分かる** 自己検証テストベンチを書ける(`examples/assert_selfcheck.rv`)
 - `wait(n)` … `$time` を進めず、monitor も発火させずに n tick 待つ(発振回路用)
+- `clock(var, N)` … **テスト用クロック生成シュガー**。スカラ var を「各レベル **N tick 保持**」で
+  `0` / `15` に自動トグルする(full period = 2N、50% デューティ)。呼び出し直後は **Low(0)**、以降
+  N tick ごとに反転。`clock()` 自体は時刻を進めず、**後続の `#n` / `wait` / `#init` / `#until` が
+  tick を刻む間**にトグルする(パルス代入と同型の遅延機構)。同じ var への通常代入でクロックは解除される。
+  `N` は 1 以上の整数(式可)。`var` は宣言済みのスカラ var(バス var 不可)。monitor で読む var の値は
+  **次 tick に適用される値**を映すため 1 tick 先行して見える(パルス代入 `v = x ~ 1` と同じ挙動)。
+  デューティ比・初期位相の指定は将来拡張(issue 参照)。`examples/clock_sugar.rv`
 - `v = scan()` … **stdin** から空白/改行区切りの整数を 1 つ読み、変数 `v` に代入する。
   EOF(入力切れ)・非数値は **エラー**。回路へ束縛した変数は読み取り後も 0–15 にクランプされる。
   テストでは `redv foo.rv < input.txt` のように入力を固定すれば決定的に再現できる
@@ -429,6 +436,7 @@ module m() {
 | `examples/counter_test.rv` | `for` / `if` で AND の真理値表を自動検証 |
 | `examples/assert_selfcheck.rv` | `assert` / `expect` で合否を終了コードに返す自己検証(§5) |
 | `examples/clock.rv` | トーチ + リピータ 4 のクロック(周期 10)。`wait()` の使用例 |
+| `examples/clock_sugar.rv` | テスト用クロックのシュガー `clock(var, N)`(各レベル N tick 保持)(§5) |
 | `examples/scan_and.rv` | `scan()` で stdin から 2 値を読んで AND に通す |
 | `examples/hier_and.rv` | `not_gate` / `or_gate` を入れ子にした階層化 AND(ド・モルガン) |
 | `examples/chain_mixed.rv` | チェーン文で 2 経路を同じ点に合流(max) |
