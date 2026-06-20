@@ -36,7 +36,7 @@ A plain `cargo build` is all you need.
 ## Features
 
 - **Write circuits as text** — Lay out redstone components (dust, repeater, torch,
-  comparator, block) as strings and just connect two points with a wire to form a circuit.
+  comparator, block, observer) as strings and just connect two points with a wire to form a circuit.
 - **Tick-accurate simulation** — Deterministic tick simulation that follows the game's
   rules: repeater delay, torch inversion, dust attenuation, max-value merging, and more.
 - **Verilog-style testbench** — Drive inputs in a `sim` block, advance time with
@@ -100,6 +100,7 @@ cargo test                                        # Golden tests for all example
 | `examples/comparator_side.rv` | Comparator side input (`cd` subtract / `cc` compare) |
 | `examples/repeater_lock.rv` | Repeater lock (`.side` on `reg m = r;` freezes the output) |
 | `examples/repeater_0tick.rv` | 0-tick repeater (`r0`) vs. a normal repeater (`r1`): timing comparison |
+| `examples/observer.rv` | Observer (`o`): detects input changes and emits a 1-tick pulse (rising/falling/strength change) |
 | `examples/wire_reuse.rv` | Define a wire as a reusable component sequence used in several places |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets the var to 0 after w ticks |
 | `examples/bus_or4.rv` | Bus `reg[N]`: wire all 4 lanes in one line with `in - r - buf;` |

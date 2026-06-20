@@ -94,6 +94,12 @@ fn repeater_0tick() {
     run_golden("repeater_0tick");
 }
 
+/// オブザーバ素子(`o`): 入力の変化を検出して 1tick パルス(立ち上がり/立ち下がり/強度変化, issue #45)。
+#[test]
+fn observer() {
+    run_golden("observer");
+}
+
 /// assert / expect による自己検証テストベンチ(全 assert が通れば exit 0)(issue #40)。
 #[test]
 fn assert_selfcheck() {
@@ -374,6 +380,29 @@ fn zero_tick_repeater_inline_is_accepted() {
     let src = "logic g(input a, output y){ a-r0-y; }\n\
                module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("r0_inline_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// オブザーバ(`o`)は横端子を持たずインラインチェーン専用。reg(`reg p = o;`)に
+/// 置こうとするとエラーになり、inline 利用へ誘導する(issue #45)。
+#[test]
+fn observer_as_reg_is_error() {
+    let src = "logic g(input a, output y){ reg p = o; a-p; p-y; }\n\
+               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("obs_reg_err", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("observer belongs inline"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
+/// オブザーバは inline チェーン素子(`x - o - y;`)として受理される(issue #45)。
+#[test]
+fn observer_inline_is_accepted() {
+    let src = "logic g(input a, output y){ a-o-y; }\n\
+               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("obs_inline_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 

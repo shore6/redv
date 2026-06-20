@@ -99,6 +99,11 @@ pub enum SeqKind {
     CompCmp,
     /// コンパレータ(減算モード): out = max(0, back - side)
     CompSub,
+    /// オブザーバ(変化検出): 隣接 2 サンプルが異なれば 1tick・強度 15 のパルス。
+    /// 履歴 2 段(delay=2)に乗り、`out(T) = in(T-2) != in(T-1) ? 15 : 0`。
+    /// 出力は `(back,side)` の純関数ではない(前後 2 サンプルの比較)ので、
+    /// `seq_out_of` ではなく `observer_out` で step() から直接計算する。
+    Observer,
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +387,17 @@ impl Circuit {
         seq.kind == SeqKind::Rep && seq.side_in.is_some() && side > 0
     }
 
+    /// オブザーバ出力。隣接 2 サンプル(`prev = in(T-2)` / `cur = in(T-1)`)が
+    /// 異なれば 1tick・強度 15 のパルス、同じなら 0。立ち上がり・立ち下がり・
+    /// 強度変化のすべてを変化として拾う(エッジ亜種は issue #58)。
+    fn observer_out(prev: i32, cur: i32) -> i32 {
+        if prev != cur {
+            15
+        } else {
+            0
+        }
+    }
+
     fn seq_out_of(kind: SeqKind, back: i32, side: i32) -> i32 {
         match kind {
             SeqKind::Rep => {
@@ -407,6 +423,10 @@ impl Circuit {
                 }
             }
             SeqKind::CompSub => (back - side).max(0),
+            // オブザーバは隣接 2 サンプルの比較なので (back,side) だけでは決まらない。
+            // step() の phase1 / phase4 が hist の前後から `observer_out` で直接計算する
+            // ため、ここには到達しない(網羅性のためのアーム)。
+            SeqKind::Observer => 0,
         }
     }
 
@@ -458,8 +478,13 @@ impl Circuit {
             let kind = self.seqs[i].kind;
             let front = *self.seqs[i].hist.front().unwrap_or(&0);
             let side_front = *self.seqs[i].side_hist.front().unwrap_or(&0);
+            // オブザーバは履歴の前後 2 サンプル(in(T-2) / in(T-1))の変化検出。
             // ロック付きリピーターは横入力 > 0 の間、出力を直前値で凍結する。
-            let mut o = if Self::rep_locked(&self.seqs[i], side_front) {
+            let mut o = if kind == SeqKind::Observer {
+                let prev = front; // hist.front() = in(T-2)
+                let cur = *self.seqs[i].hist.back().unwrap_or(&0); // hist.back() = in(T-1)
+                Self::observer_out(prev, cur)
+            } else if Self::rep_locked(&self.seqs[i], side_front) {
                 self.seqs[i].prev_out
             } else {
                 Self::seq_out_of(kind, front, side_front)
@@ -585,8 +610,14 @@ impl Circuit {
                     break;
                 }
             }
-            // ロック中は出力が凍結されるので、期待出力は現在の出力(= 据え置き)。
-            let expected = if Self::rep_locked(&self.seqs[i], side) {
+            // オブザーバはサンプル後の履歴前後(in(T-1) / in(T))にエッジが残って
+            // いれば次 tick でパルスする = 未整定。ロック中は出力が凍結されるので、
+            // 期待出力は現在の出力(= 据え置き)。
+            let expected = if self.seqs[i].kind == SeqKind::Observer {
+                let prev = *self.seqs[i].hist.front().unwrap_or(&0);
+                let cur = *self.seqs[i].hist.back().unwrap_or(&0);
+                Self::observer_out(prev, cur)
+            } else if Self::rep_locked(&self.seqs[i], side) {
                 self.seqs[i].outv
             } else {
                 Self::seq_out_of(self.seqs[i].kind, back, side)

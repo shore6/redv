@@ -109,6 +109,10 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
         } else if c == b't' {
             out.push(Elem { k: 't', n: 1, line });
             i += 1;
+        } else if c == b'o' {
+            // オブザーバ(変化検出で 1tick パルス)。インラインチェーン専用。
+            out.push(Elem { k: 'o', n: 1, line });
+            i += 1;
         } else if c == b'b' {
             out.push(Elem { k: 'b', n: 1, line });
             i += 1;
@@ -434,6 +438,17 @@ impl<'p> Elaborator<'_, 'p> {
                 ),
             );
         }
+        // オブザーバも reg に置けない(横端子を持たず、インラインチェーン専用)。
+        if e.k == 'o' {
+            return fail(
+                line,
+                format!(
+                    "element \"{}\" cannot be placed in a reg (an observer belongs inline in a \
+                     wire/chain, e.g. 'x - o - y;')",
+                    tok
+                ),
+            );
+        }
         if qual == Qual::Const {
             if strength < 0 {
                 return fail(line, "const reg requires a signal strength (e.g. 15b)");
@@ -513,7 +528,10 @@ impl<'p> Elaborator<'_, 'p> {
                     prev = no;
                     decay = 0;
                 }
-                'r' | 't' => {
+                // 順序素子(リピータ / トーチ / オブザーバ)。`add_seq` の履歴段数
+                // (delay)で前 tick 入力を保持する。オブザーバは隣接 2 サンプルの
+                // 変化検出なので履歴 2 段(delay=2)で展開する。
+                'r' | 't' | 'o' => {
                     let ni = self
                         .c
                         .new_node(format!("{}.{}#i{}", prefix, label, idx), NodeKind::Plain);
@@ -521,12 +539,11 @@ impl<'p> Elaborator<'_, 'p> {
                         .c
                         .new_node(format!("{}.{}#o{}", prefix, label, idx), NodeKind::Plain);
                     self.c.add_edge(prev, ni, decay);
-                    let kind = if e.k == 'r' {
-                        SeqKind::Rep
-                    } else {
-                        SeqKind::Torch
+                    let (kind, dly) = match e.k {
+                        'r' => (SeqKind::Rep, e.n),
+                        't' => (SeqKind::Torch, 1),
+                        _ => (SeqKind::Observer, 2),
                     };
-                    let dly = if e.k == 'r' { e.n } else { 1 };
                     self.c
                         .add_seq(kind, dly, ni, no, format!("{}.{}[{}]", prefix, label, idx));
                     prev = no;
