@@ -718,8 +718,14 @@ impl Parser {
             } else if self.is_ident("init") {
                 self.i += 1;
                 SimStmt::WaitInit { line: ln }
+            } else if self.is_ident("until") {
+                self.i += 1;
+                self.expect_punct("(")?;
+                let cond = self.parse_expr()?;
+                self.expect_punct(")")?;
+                SimStmt::WaitUntil { line: ln, cond }
             } else {
-                return self.err_cur("expected '#<ticks>' or '#init'");
+                return self.err_cur("expected '#<ticks>', '#init', or '#until(cond)'");
             };
             if self.is_punct(";") {
                 self.i += 1; // optional ';'

@@ -40,7 +40,7 @@ A plain `cargo build` is all you need.
 - **Tick-accurate simulation** — Deterministic tick simulation that follows the game's
   rules: repeater delay, torch inversion, dust attenuation, max-value merging, and more.
 - **Verilog-style testbench** — Drive inputs in a `sim` block, advance time with
-  `#init` / `#n` / `wait()`, and observe with `monitor`. `if` / `while` / `for` and pulse
+  `#init` / `#n` / `#until(cond)` / `wait()`, and observe with `monitor`. `if` / `while` / `for` and pulse
   assignment `a = v ~ w;` (auto-resets to 0 after w ticks) are available. Write self-checking
   tests with `assert(cond)` / `expect(actual, expected)` — failures report to stderr and the
   process exits non-zero, so pass/fail comes from the exit code (no golden text needed).
@@ -103,6 +103,7 @@ cargo test                                        # Golden tests for all example
 | `examples/repeater_lock.rv` | Repeater lock (`.side` on `reg m = r;` freezes the output) |
 | `examples/repeater_0tick.rv` | 0-tick repeater (`r0`) vs. a normal repeater (`r1`): timing comparison |
 | `examples/observer.rv` | Observer (`o`): detects input changes and emits a 1-tick pulse (rising/falling/strength change) |
+| `examples/until_wait.rv` | `#until(cond)`: event-driven wait that advances ticks until the condition holds (wait for an output to rise without knowing the delay) |
 | `examples/wire_reuse.rv` | Define a wire as a reusable component sequence used in several places |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets the var to 0 after w ticks |
 | `examples/bus_or4.rv` | Bus `reg[N]`: wire all 4 lanes in one line with `in - r - buf;` |

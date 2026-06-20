@@ -100,6 +100,12 @@ fn observer() {
     run_golden("observer");
 }
 
+/// イベント駆動待機(`#until(cond)`): 条件成立まで tick を進める($time は #n 同様に進む, issue #42)。
+#[test]
+fn until_wait() {
+    run_golden("until_wait");
+}
+
 /// assert / expect による自己検証テストベンチ(全 assert が通れば exit 0)(issue #40)。
 #[test]
 fn assert_selfcheck() {

@@ -206,6 +206,12 @@ pub enum SimStmt {
     WaitInit {
         line: i32,
     },
+    /// `#until(cond)` — `cond` が真(!=0)になるまで tick を進める。
+    /// `$time` は `#n` 同様に進む。`INIT_TIMEOUT` 超過でエラー。
+    WaitUntil {
+        line: i32,
+        cond: Expr,
+    },
     Call {
         line: i32,
         call: CallData,

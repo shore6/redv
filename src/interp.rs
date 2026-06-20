@@ -1376,6 +1376,27 @@ impl<'a> ModuleExec<'a> {
         Ok(())
     }
 
+    /// `#until(cond)` — `cond` が真になるまで tick を進める(`$time` は進む)。
+    /// 既に真なら 0 tick。`INIT_TIMEOUT` 超過で発振 or 永遠に成立しないとしてエラー。
+    fn do_until(&mut self, line: i32, cond: &Expr) -> RvResult<()> {
+        let mut t = 0i64;
+        while self.eval_e(cond)? == 0 {
+            self.tick_once()?;
+            self.sim_time += 1;
+            t += 1;
+            if t > self.c.cfg.init_timeout {
+                return fail(
+                    line,
+                    format!(
+                        "#until(...) condition not satisfied within {} ticks (oscillating circuit or unreachable condition? raise INIT_TIMEOUT or use wait(n) instead)",
+                        self.c.cfg.init_timeout
+                    ),
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn do_monitor(&self, line: i32, call: &CallData) -> RvResult<()> {
         if !call.has_fmt {
             return fail(line, "monitor() requires a format string as its first argument");
@@ -1763,6 +1784,10 @@ impl<'a> ModuleExec<'a> {
             }
             SimStmt::WaitInit { line } => {
                 self.do_init(*line)?;
+                self.fire_monitors()?;
+            }
+            SimStmt::WaitUntil { line, cond } => {
+                self.do_until(*line, cond)?;
                 self.fire_monitors()?;
             }
             SimStmt::MonReg { .. } => {} // hoisted at sim start
