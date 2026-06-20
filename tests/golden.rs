@@ -298,6 +298,33 @@ fn run_source(tag: &str, src: &str) -> (Option<i32>, String) {
     (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
+/// 診断のキャレット表示(issue #47): 構文エラーは `--> file:line:col` + ソース行 +
+/// 正確な列の `^` を出す。`=` は 2 行目 12 桁目なので `:2:12` とキャレットが出る。
+#[test]
+fn caret_diagnostic_points_at_exact_column() {
+    let src = "logic g(input x, output y){\n    x - r2 = y;\n}\n";
+    let (code, stderr) = run_source("caret_col", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(stderr.contains(":2:12"), "missing line:col, stderr:\n{stderr}");
+    assert!(stderr.contains("-->"), "missing source pointer, stderr:\n{stderr}");
+    assert!(stderr.contains("x - r2 = y;"), "missing source line, stderr:\n{stderr}");
+    assert!(stderr.contains('^'), "missing caret, stderr:\n{stderr}");
+}
+
+/// 意味(エラボレーション)エラーは行レベル: 正確な列は持たないが、ソース行と
+/// `-->` ・行内容の下線を出す(issue #47 の見出し例 `unknown element`)。
+#[test]
+fn caret_diagnostic_line_level_for_elaboration_error() {
+    let src = "logic g(input x, output y){\n    x - d2q - y;\n}\n\
+               module m(){ var a,b; sim{ a=0; b=g(a); #init } }";
+    let (code, stderr) = run_source("caret_line", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(stderr.contains("unknown element 'q'"), "missing message, stderr:\n{stderr}");
+    assert!(stderr.contains("-->") && stderr.contains(":2"), "missing pointer, stderr:\n{stderr}");
+    assert!(stderr.contains("x - d2q - y;"), "missing source line, stderr:\n{stderr}");
+    assert!(stderr.contains('^'), "missing caret, stderr:\n{stderr}");
+}
+
 /// 素子名と衝突する宣言名(reg / wire / ポート)はパース時にエラーになる。
 /// インスタンス化を待たず発火するので module 呼び出しは不要。
 #[test]

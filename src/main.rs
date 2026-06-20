@@ -106,6 +106,9 @@ fn main() -> ExitCode {
         }
     };
 
+    // 診断のキャレット表示用にソースを登録(字句解析前に 1 回)。
+    diag::set_source(&file, &src);
+
     let result = (|| -> diag::RvResult<(Duration, Duration, interp::RunTimings)> {
         let t0 = Instant::now();
         let mut prog = ast::Program::default();
@@ -130,7 +133,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("[error] {}", e);
+            diag::report_error(&e);
             ExitCode::FAILURE
         }
     }

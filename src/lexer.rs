@@ -3,7 +3,7 @@
 //! バイト列を走査してトークン列を生成する。文字列リテラルのエスケープ・`//` 行コメント・
 //! `/* */` ブロックコメント・2 文字演算子 (`<=` `>=` `==` `!=` `&&` `||`) をここで処理する。
 
-use crate::diag::{fail, RvResult};
+use crate::diag::{fail_at, RvResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Tk {
@@ -22,12 +22,18 @@ pub struct Token {
     /// Num の値
     pub num: i64,
     pub line: i32,
+    /// このトークンが始まる **桁**(行内の 1 始まりバイト位置)。診断のキャレット用。
+    pub col: i32,
+    /// ソース上でこのトークンが占めるバイト長(キャレットの下線幅)。
+    pub len: i32,
 }
 
 pub struct Lexer {
     s: Vec<u8>,
     p: usize,
     line: i32,
+    /// 現在行の先頭バイト位置(桁 = `p - line_start + 1`)。改行を消すたびに更新する。
+    line_start: usize,
 }
 
 impl Lexer {
@@ -36,6 +42,7 @@ impl Lexer {
             s: src.into().into_bytes(),
             p: 0,
             line: 1,
+            line_start: 0,
         }
     }
 
@@ -48,9 +55,10 @@ impl Lexer {
             }
             let c = self.s[self.p];
             let ln = self.line;
+            let b = self.p; // トークン開始バイト
+            let col = (self.p - self.line_start) as i32 + 1; // 1 始まりの桁
 
             if c.is_ascii_alphabetic() || c == b'_' {
-                let b = self.p;
                 while self.p < self.s.len()
                     && (self.s[self.p].is_ascii_alphanumeric() || self.s[self.p] == b'_')
                 {
@@ -62,6 +70,8 @@ impl Lexer {
                     s: text,
                     num: 0,
                     line: ln,
+                    col,
+                    len: (self.p - b) as i32,
                 });
             } else if c.is_ascii_digit() {
                 let mut v: i64 = 0;
@@ -74,6 +84,8 @@ impl Lexer {
                     s: String::new(),
                     num: v,
                     line: ln,
+                    col,
+                    len: (self.p - b) as i32,
                 });
             } else if c == b'"' {
                 self.p += 1;
@@ -96,13 +108,14 @@ impl Lexer {
                     } else {
                         if ch == b'\n' {
                             self.line += 1;
+                            self.line_start = self.p + 1;
                         }
                         bytes.push(ch);
                     }
                     self.p += 1;
                 }
                 if self.p >= self.s.len() {
-                    return fail(ln, "unterminated string literal");
+                    return fail_at(ln, col, 1, "unterminated string literal");
                 }
                 self.p += 1;
                 out.push(Token {
@@ -110,6 +123,8 @@ impl Lexer {
                     s: String::from_utf8_lossy(&bytes).into_owned(),
                     num: 0,
                     line: ln,
+                    col,
+                    len: (self.p - b) as i32,
                 });
             } else {
                 // comments
@@ -128,11 +143,12 @@ impl Lexer {
                     {
                         if self.s[self.p] == b'\n' {
                             self.line += 1;
+                            self.line_start = self.p + 1;
                         }
                         self.p += 1;
                     }
                     if self.p + 1 >= self.s.len() {
-                        return fail(ln, "unterminated block comment");
+                        return fail_at(ln, col, 2, "unterminated block comment");
                     }
                     self.p += 2;
                     continue;
@@ -148,12 +164,15 @@ impl Lexer {
                         }
                     }
                 }
+                let plen = pc.len() as i32;
                 self.p += pc.len();
                 out.push(Token {
                     k: Tk::Punct,
                     s: pc,
                     num: 0,
                     line: ln,
+                    col,
+                    len: plen,
                 });
             }
         }
@@ -162,6 +181,8 @@ impl Lexer {
             s: String::new(),
             num: 0,
             line: self.line,
+            col: (self.p - self.line_start) as i32 + 1,
+            len: 1,
         });
         Ok(out)
     }
@@ -172,6 +193,7 @@ impl Lexer {
             if c == b'\n' {
                 self.line += 1;
                 self.p += 1;
+                self.line_start = self.p;
             } else if c.is_ascii_whitespace() {
                 self.p += 1;
             } else {

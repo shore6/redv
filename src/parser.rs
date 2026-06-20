@@ -4,7 +4,7 @@
 //! `Program` は各メソッドに `&mut` 引数として渡す(構造体に保持しない)。
 
 use crate::ast::*;
-use crate::diag::{fail, warn, RvResult};
+use crate::diag::{fail, fail_at, warn, RvResult};
 use crate::lexer::{Lexer, Tk, Token};
 use std::collections::HashMap;
 use std::fs;
@@ -50,8 +50,7 @@ impl Parser {
                 self.i += 1;
                 self.parse_module(prog)?;
             } else {
-                return fail(
-                    self.cur().line,
+                return self.err_cur(
                     "expected 'param', 'logic', 'module', or '#' directive at top level",
                 );
             }
@@ -68,6 +67,12 @@ impl Parser {
         let idx = (self.i + n).min(self.toks.len() - 1);
         &self.toks[idx]
     }
+    /// 現在トークンの位置(行・桁・長さ)を指すエラー。構文エラーのキャレットは
+    /// 「想定外だった今のトークン」を指すのが自然なので、ここに集約する。
+    fn err_cur<T>(&self, msg: impl Into<String>) -> RvResult<T> {
+        let t = self.cur();
+        fail_at(t.line, t.col, t.len, msg)
+    }
     fn is_punct(&self, s: &str) -> bool {
         self.cur().k == Tk::Punct && self.cur().s == s
     }
@@ -76,14 +81,14 @@ impl Parser {
     }
     fn expect_punct(&mut self, s: &str) -> RvResult<()> {
         if !self.is_punct(s) {
-            return fail(self.cur().line, format!("expected '{}'", s));
+            return self.err_cur(format!("expected '{}'", s));
         }
         self.i += 1;
         Ok(())
     }
     fn expect_ident(&mut self, what: &str) -> RvResult<String> {
         if self.cur().k != Tk::Ident {
-            return fail(self.cur().line, format!("expected {}", what));
+            return self.err_cur(format!("expected {}", what));
         }
         let r = self.cur().s.clone();
         self.i += 1;
@@ -625,7 +630,7 @@ impl Parser {
                 self.expect_punct("}")?;
                 has_sim = true;
             } else {
-                return fail(self.cur().line, "expected 'var' or 'sim' in module body");
+                return self.err_cur("expected 'var' or 'sim' in module body");
             }
         }
         self.expect_punct("}")?;
@@ -714,7 +719,7 @@ impl Parser {
                 self.i += 1;
                 SimStmt::WaitInit { line: ln }
             } else {
-                return fail(ln, "expected '#<ticks>' or '#init'");
+                return self.err_cur("expected '#<ticks>' or '#init'");
             };
             if self.is_punct(";") {
                 self.i += 1; // optional ';'
@@ -735,7 +740,7 @@ impl Parser {
             return self.parse_var_decl();
         }
         if self.is_ident("sim") {
-            return fail(ln, "nested sim block is not allowed");
+            return self.err_cur("nested sim block is not allowed");
         }
 
         if self.is_ident("if") {
@@ -909,8 +914,7 @@ impl Parser {
                 if self.is_punct(",") {
                     self.i += 1;
                 } else if !self.is_punct(")") {
-                    return fail(
-                        self.cur().line,
+                    return self.err_cur(
                         "expected ',' or ')' after format string",
                     );
                 }
@@ -1062,6 +1066,6 @@ impl Parser {
             self.expect_punct(")")?;
             return Ok(e);
         }
-        fail(ln, "expected expression")
+        self.err_cur("expected expression")
     }
 }
