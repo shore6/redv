@@ -54,6 +54,8 @@ A plain `cargo build` is all you need.
   produces `redv`.
 - **Strict diagnostics** — Reports out-of-range signals, unconnected outputs, invalid
   components, non-convergent oscillation, and more as errors / warnings.
+- **Rust-style caret diagnostics** — Errors / warnings print `--> file:line:col` with the
+  source line and a `^` underline; syntax errors point at the exact column.
 
 ## Install and Build
 
