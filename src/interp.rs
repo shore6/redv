@@ -7,7 +7,7 @@
 //! 必要な値を一旦ローカルへ集めてから適用する。
 
 use crate::ast::*;
-use crate::circuit::{Circuit, Config, NodeKind, SeqKind};
+use crate::circuit::{Circuit, Config, NodeKind, SeqKind, Vcd};
 use crate::diag::{fail, warn, RvResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
@@ -1109,11 +1109,17 @@ pub struct ModuleExec<'a> {
 }
 
 impl<'a> ModuleExec<'a> {
-    pub fn new(prog: &'a Program, m: &'a ModuleDef, cfg: Config, trace: bool) -> Self {
+    pub fn new(
+        prog: &'a Program,
+        m: &'a ModuleDef,
+        cfg: Config,
+        trace: bool,
+        vcd: Option<Vcd>,
+    ) -> Self {
         ModuleExec {
             prog,
             m,
-            c: Circuit::new(cfg, trace),
+            c: Circuit::new(cfg, trace, vcd),
             vars: HashMap::new(),
             insts: BTreeMap::new(),
             out_bind: BTreeMap::new(),
@@ -1889,7 +1895,23 @@ pub struct RunTimings {
     pub modules: usize,
 }
 
-pub fn run_program(prog: &Program, trace: bool) -> RvResult<RunTimings> {
+/// `--vcd <path>` で複数 module 時のファイル名を分割する。
+/// 単一 module は `path` をそのまま使い、複数なら拡張子直前に `.<module名>` を挿入する
+/// (例: `out.vcd` → `out.clock.vcd`)。拡張子が無ければ末尾に `.<module名>` を足す。
+fn vcd_path_for(path: &str, module: &str, many: bool) -> String {
+    if !many {
+        return path.to_string();
+    }
+    match path.rfind('.') {
+        // ディレクトリ区切りより後ろにある '.' のみ拡張子とみなす。
+        Some(i) if i > path.rfind(['/', '\\']).map_or(0, |p| p + 1) => {
+            format!("{}.{}{}", &path[..i], module, &path[i..])
+        }
+        _ => format!("{}.{}", path, module),
+    }
+}
+
+pub fn run_program(prog: &Program, trace: bool, vcd: Option<&str>) -> RvResult<RunTimings> {
     let mut cfg = Config::default();
     if let Some(v) = prog.defines.get("INIT_TIMEOUT") {
         cfg.init_timeout = *v;
@@ -1921,7 +1943,17 @@ pub fn run_program(prog: &Program, trace: bool) -> RvResult<RunTimings> {
         if many {
             println!("=== module {} ===", m.name);
         }
-        let mut ex = ModuleExec::new(prog, m, cfg, trace);
+        let vcd_sink = match vcd {
+            Some(path) => {
+                let p = vcd_path_for(path, &m.name, many);
+                match Vcd::create(&p, &m.name) {
+                    Ok(v) => Some(v),
+                    Err(e) => return fail(0, format!("cannot open VCD file '{}': {}", p, e)),
+                }
+            }
+            None => None,
+        };
+        let mut ex = ModuleExec::new(prog, m, cfg, trace, vcd_sink);
         ex.run()?;
         timings.sim += ex.sim_dur;
         assert_total += ex.assert_total;

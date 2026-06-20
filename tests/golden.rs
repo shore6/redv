@@ -242,6 +242,47 @@ fn time_flag_reports_to_stderr() {
     );
 }
 
+/// `--vcd <file>` で生成した VCD が `tests/expected/<name>.vcd` とバイト一致するか検証する
+/// (issue #46)。VCD はファイルへ出るので stdout でなく生成ファイルを比較する。
+#[test]
+fn vcd_demo() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let rv = format!("{manifest}/examples/vcd_demo.rv");
+    let expected_path = format!("{manifest}/tests/expected/vcd_demo.vcd");
+    let expected = std::fs::read(&expected_path)
+        .unwrap_or_else(|e| panic!("read {expected_path}: {e}"));
+
+    // 並行実行で衝突しないよう PID 入りの一意な一時パスに書く。
+    let out_path = std::env::temp_dir().join(format!("redv_vcd_{}.vcd", std::process::id()));
+    let out = Command::new(bin())
+        .arg("--vcd")
+        .arg(&out_path)
+        .arg(&rv)
+        .output()
+        .expect("spawn redv");
+    assert!(
+        out.status.success(),
+        "vcd_demo: exit {:?}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let got = std::fs::read(&out_path).expect("read generated VCD");
+    let _ = std::fs::remove_file(&out_path);
+
+    // VCD 生成は Windows で CRLF が混ざりうるので CR を落として LF 比較する。
+    let strip_cr = |v: &[u8]| -> Vec<u8> { v.iter().copied().filter(|&b| b != b'\r').collect() };
+    let got = strip_cr(&got);
+    let expected = strip_cr(&expected);
+    if got != expected {
+        panic!(
+            "vcd_demo: VCD mismatch\n--- expected ---\n{}\n--- got ---\n{}",
+            String::from_utf8_lossy(&expected),
+            String::from_utf8_lossy(&got)
+        );
+    }
+}
+
 /// 与えたソースを一時ファイルに書いて redv に渡し、(終了コード, stderr) を返す。
 fn run_source(tag: &str, src: &str) -> (Option<i32>, String) {
     let path = std::env::temp_dir().join(format!("redv_test_{tag}.rv"));

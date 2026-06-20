@@ -1,3 +1,5 @@
 # ゴールデンテストの期待値は生バイトで比較されるため、改行を LF に固定する。
 # (sim の stdout は LF 出力。core.autocrlf=true な環境でも CRLF 化させない)
 tests/expected/*.txt text eol=lf
+# VCD 波形ゴールデン(--vcd 出力)も LF 固定(issue #46)。
+tests/expected/*.vcd text eol=lf

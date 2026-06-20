@@ -66,6 +66,7 @@ cargo build --release            # Produces target/release/redv
 ```sh
 ./target/release/redv examples/not_gate.rv        # Compile + simulate
 ./target/release/redv -t examples/or_gate.rv      # -t: trace all node values every tick to stderr
+./target/release/redv --vcd out.vcd examples/clock.rv  # --vcd: dump the waveform as VCD (view in GTKWave, etc.)
 cargo run --release -- examples/clock.rv          # Can also run via cargo run
 cargo test                                        # Golden tests for all examples + CLI tests
 ```
@@ -76,6 +77,7 @@ cargo test                                        # Golden tests for all example
 |---|---|
 | `redv <file.rv>` | Compile and simulate the circuit (exit code 0 on success, 1 on error) |
 | `-t`, `--trace` | Trace all node values every tick to stderr |
+| `--vcd <file>` | Dump the waveform in VCD (Value Change Dump) format to `<file>` (view in GTKWave, etc.). Records public nodes (regs / ports whose name has no `#`) as 4-bit vectors of strength 0–15; time is the raw tick (includes `#init` settling, same as `-t`); split into `<file>.<module>.vcd` when there are multiple modules |
 | `-T`, `--time` | Print compile / simulation timings to stderr |
 | `-h`, `--help` | Show usage (exit code 0) |
 | `-v`, `--version` | Show version |
@@ -103,6 +105,7 @@ cargo test                                        # Golden tests for all example
 | `examples/bus_or4.rv` | Bus `reg[N]`: wire all 4 lanes in one line with `in - r - buf;` |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses (multi-I/O) |
 | `examples/param_notN.rv` | N-bit NOT with width parameterized by a `param` constant |
+| `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` (torch inversion + repeater delay) |
 
 ## Project Layout
 

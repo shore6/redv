@@ -20,6 +20,8 @@
 
 use crate::diag::{fail, warn, RvResult};
 use std::collections::VecDeque;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -129,6 +131,59 @@ pub struct ZeroRep {
     pub out: usize,
 }
 
+/// VCD(Value Change Dump)波形出力。`--vcd <path>` で有効化される。
+///
+/// 公開ノード(`dump_trace` と同じく名前が空でなく `#` を含まないルートノード)を
+/// 4bit ベクタ信号として書き出す。時刻は生 tick(`Circuit::tick`、`#init` 整定
+/// ティックも含む。`-t` トレースと一致)。値変化のみを各 `#<tick>` 節に出す。
+#[derive(Debug)]
+pub struct Vcd {
+    w: BufWriter<File>,
+    /// `$scope module <scope> $end` に使う名前(= module 名)。
+    scope: String,
+    /// ヘッダ確定後に固定する信号表。`started` が true になるまで空。
+    sigs: Vec<VcdSig>,
+    /// ヘッダ + 初期 `$dumpvars` を書き終えたか。
+    started: bool,
+}
+
+/// VCD 信号 1 本。`node` はルートノード添字、`code` は VCD 識別子、`last` は直近出力値。
+#[derive(Debug)]
+struct VcdSig {
+    node: usize,
+    code: String,
+    last: i32,
+}
+
+impl Vcd {
+    /// 出力ファイルを作成して VCD ライタを用意する。ヘッダはまだ書かない
+    /// (信号名はエラボレーション後にしか分からないため、最初の dump で遅延出力)。
+    pub fn create(path: &str, scope: &str) -> std::io::Result<Vcd> {
+        let f = File::create(path)?;
+        Ok(Vcd {
+            w: BufWriter::new(f),
+            scope: scope.to_string(),
+            sigs: Vec::new(),
+            started: false,
+        })
+    }
+
+    /// VCD 識別子(印字可能 ASCII 33..=126 の base-94)。i ごとに一意。
+    fn id(i: usize) -> String {
+        let mut n = i;
+        let mut s = String::new();
+        loop {
+            s.push((33u8 + (n % 94) as u8) as char);
+            n /= 94;
+            if n == 0 {
+                break;
+            }
+            n -= 1;
+        }
+        s
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Circuit {
     pub cfg: Config,
@@ -141,13 +196,16 @@ pub struct Circuit {
     pub zero_reps: Vec<ZeroRep>,
     pub tick: i64,
     pub trace: bool,
+    /// `--vcd` 指定時の波形出力。None なら何もしない。
+    pub vcd: Option<Vcd>,
 }
 
 impl Circuit {
-    pub fn new(cfg: Config, trace: bool) -> Self {
+    pub fn new(cfg: Config, trace: bool, vcd: Option<Vcd>) -> Self {
         Circuit {
             cfg,
             trace,
+            vcd,
             ..Default::default()
         }
     }
@@ -551,7 +609,75 @@ impl Circuit {
         if self.trace {
             self.dump_trace();
         }
+        if self.vcd.is_some() {
+            self.dump_vcd();
+        }
         changed
+    }
+
+    /// この tick の公開ノード値を VCD に書き出す。最初の呼び出しでヘッダ +
+    /// 初期 `$dumpvars`(全 0)を出し、以降は値変化のあった信号だけを `#<tick>` 節に出す。
+    fn dump_vcd(&mut self) {
+        // self.nodes を借りるため Vcd を一旦取り出して使い終わったら戻す(借用衝突回避)。
+        let mut v = match self.vcd.take() {
+            Some(v) => v,
+            None => return,
+        };
+
+        if !v.started {
+            // 信号表を確定(ルート・名前付き・`#` を含まないノード = dump_trace と同基準)。
+            let mut idx = 0usize;
+            for n in 0..self.nodes.len() {
+                if self.find(n) != n {
+                    continue;
+                }
+                let nd = &self.nodes[n];
+                if nd.name.is_empty() || nd.name.contains('#') {
+                    continue;
+                }
+                v.sigs.push(VcdSig {
+                    node: n,
+                    code: Vcd::id(idx),
+                    last: 0,
+                });
+                idx += 1;
+            }
+            // ヘッダ。$date/$version は決定性のため出さない(ゴールデン固定のため)。
+            let _ = writeln!(v.w, "$comment redv VCD output $end");
+            let _ = writeln!(v.w, "$timescale 100 ms $end");
+            let _ = writeln!(v.w, "$scope module {} $end", v.scope);
+            for s in &v.sigs {
+                let _ = writeln!(v.w, "$var wire 4 {} {} $end", s.code, self.nodes[s.node].name);
+            }
+            let _ = writeln!(v.w, "$upscope $end");
+            let _ = writeln!(v.w, "$enddefinitions $end");
+            // 初期状態(全 0)を #0 で確定。
+            let _ = writeln!(v.w, "#0");
+            let _ = writeln!(v.w, "$dumpvars");
+            for s in &v.sigs {
+                let _ = writeln!(v.w, "b{:04b} {}", s.last & 0xF, s.code);
+            }
+            let _ = writeln!(v.w, "$end");
+            v.started = true;
+        }
+
+        // この tick の変化を収集してから書く(変化が無ければ #<tick> 節は出さない)。
+        let mut changes: Vec<(String, i32)> = Vec::new();
+        for s in &mut v.sigs {
+            let cur = self.nodes[s.node].value;
+            if cur != s.last {
+                changes.push((s.code.clone(), cur));
+                s.last = cur;
+            }
+        }
+        if !changes.is_empty() {
+            let _ = writeln!(v.w, "#{}", self.tick);
+            for (code, cur) in changes {
+                let _ = writeln!(v.w, "b{:04b} {}", cur & 0xF, code);
+            }
+        }
+
+        self.vcd = Some(v);
     }
 
     fn dump_trace(&mut self) {

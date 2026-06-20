@@ -24,6 +24,7 @@ Redstone circuit HDL simulator.\n\
 options:\n\
 \x20 -t, --trace    dump named node values to stderr every tick\n\
 \x20 -T, --time     print compile/sim timings to stderr\n\
+\x20     --vcd FILE write a VCD waveform dump to FILE\n\
 \x20 -h, --help     show this help\n\
 \x20 -v, --version  show version\n"
     );
@@ -51,12 +52,22 @@ fn main() -> ExitCode {
     let mut file: Option<String> = None;
     let mut trace = false;
     let mut time = false;
+    let mut vcd: Option<String> = None;
+    // `--vcd FILE` の FILE を次トークンとして待っている状態。
+    let mut expect_vcd = false;
 
     for a in &argv[1..] {
-        if a == "-t" || a == "--trace" {
+        if expect_vcd {
+            vcd = Some(a.clone());
+            expect_vcd = false;
+        } else if a == "-t" || a == "--trace" {
             trace = true;
         } else if a == "-T" || a == "--time" {
             time = true;
+        } else if a == "--vcd" {
+            expect_vcd = true;
+        } else if let Some(p) = a.strip_prefix("--vcd=") {
+            vcd = Some(p.to_string());
         } else if a == "-h" || a == "--help" {
             usage();
             return ExitCode::SUCCESS;
@@ -72,6 +83,11 @@ fn main() -> ExitCode {
             eprintln!("[error] multiple input files given");
             return ExitCode::from(2);
         }
+    }
+
+    if expect_vcd {
+        eprintln!("[error] --vcd requires a file path");
+        return ExitCode::from(2);
     }
 
     let file = match file {
@@ -98,7 +114,7 @@ fn main() -> ExitCode {
         ps.parse_file(&mut prog)?;
         let parse_dur = t0.elapsed();
         let t1 = Instant::now();
-        let timings = interp::run_program(&prog, trace)?;
+        let timings = interp::run_program(&prog, trace, vcd.as_deref())?;
         let run_dur = t1.elapsed();
         Ok((parse_dur, run_dur, timings))
     })();

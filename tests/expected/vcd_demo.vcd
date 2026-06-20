@@ -1,0 +1,27 @@
+$comment redv VCD output $end
+$timescale 100 ms $end
+$scope module test_chain $end
+$var wire 4 ! chain(x).x $end
+$var wire 4 " chain(x).y $end
+$var wire 4 # chain(x).a $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+b0000 !
+b0000 "
+b0000 #
+$end
+#1
+b1111 #
+#3
+b1111 "
+#5
+b1111 !
+#6
+b0000 #
+#8
+b0000 !
+b0000 "
+#9
+b1111 #
