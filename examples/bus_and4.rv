@@ -7,12 +7,12 @@ logic and4(input[4] a, input[4] b2, output[4] y)
 {
     reg[4] na;
     reg[4] nb;
-    reg[4] o;
+    reg[4] m;
     a - t - na;        // na = NOT a(4 レーンへトーチ一括)
     b2 - t - nb;        // nb = NOT b2
-    na - o;            // o = na OR nb(各レーンで max 合流)
-    nb - o;
-    o - t - y;         // y = NOT o = a AND b2
+    na - m;            // m = na OR nb(各レーンで max 合流)
+    nb - m;
+    m - t - y;         // y = NOT m = a AND b2
 }
 
 module test_and4()

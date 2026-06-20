@@ -1,11 +1,11 @@
 /* OR回路: リピータ2本でダストに合流 (合流点は最大値をとる) */
 logic or_gate(input x1, input x2, output y)
 {
-    reg o;
-    x1-r-o;         // リピータで a と o を接続
-    x2-r-o;        // リピータで b と o を接続
-    o = d;         // 合流点はダスト (max合成 = OR)
-    y = o;         // 出力ポートを o に接続(長さ0)
+    reg m;
+    x1-r-m;         // リピータで a と m を接続
+    x2-r-m;        // リピータで b と m を接続
+    m = d;         // 合流点はダスト (max合成 = OR)
+    y = m;         // 出力ポートを m に接続(長さ0)
 }
 
 module test_or_gate()
