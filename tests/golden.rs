@@ -175,6 +175,12 @@ fn bus_and4() {
     run_golden("bus_and4");
 }
 
+/// param 定数: 幅 `input[W]`/`var[W]` と sim 式での W 参照(issue #41 Phase 1)。
+#[test]
+fn param_not_n() {
+    run_golden("param_notN");
+}
+
 /// CLI 動作: 引数なしは usage を出して終了コード 2。
 #[test]
 fn no_args_exits_2() {
@@ -532,6 +538,76 @@ fn bus_ports_misuse_is_error() {
         ),
     ] {
         let (code, stderr) = run_source(&format!("busport_{tag}"), src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
+    }
+}
+
+/// param 定数: 幅(リテラル/param/定数式)・#define 流用・sim 式参照は受理される(issue #41)。
+#[test]
+fn param_basic_is_accepted() {
+    for (tag, src) in [
+        // param をバス幅に
+        (
+            "param_width",
+            "param W=2;\nmodule m(){ var[W] x; sim{ x=0; monitor(\"%\", x[0]); } }",
+        ),
+        // 定数式を幅に(W+1 -> 幅 3)
+        (
+            "param_expr_width",
+            "param W=2;\nmodule m(){ var[W+1] x; sim{ x=0; monitor(\"%\", x[2]); } }",
+        ),
+        // param から param を導出
+        (
+            "param_from_param",
+            "param W=4;\nparam H=W*2;\nmodule m(){ var x; sim{ x=H; monitor(\"%\", x); } }",
+        ),
+        // 数値 #define を幅として流用
+        (
+            "define_as_width",
+            "#define W 3\nmodule m(){ var[W] x; sim{ x=0; monitor(\"%\", x[2]); } }",
+        ),
+        // sim 式での param 参照(for 上限)
+        (
+            "param_in_sim_expr",
+            "param W=3;\nmodule m(){ var[W] x; var i; sim{ x=0; for(i=0;i<W;i=i+1){ x[i]=15; } } }",
+        ),
+    ] {
+        let (code, stderr) = run_source(&format!("param_{tag}"), src);
+        assert_eq!(code, Some(0), "{tag}: expected success, stderr:\n{stderr}");
+    }
+}
+
+/// param 定数の誤用(未定義参照・幅 < 1・前方参照・式中の禁止構文)は **エラー**(issue #41)。
+#[test]
+fn param_misuse_is_error() {
+    for (tag, src, want) in [
+        // 未定義の定数を幅に
+        (
+            "unknown_in_width",
+            "module m(){ var[NOPE] x; sim{ x=0; } }",
+            "unknown constant",
+        ),
+        // param から幅 0
+        (
+            "param_width_zero",
+            "param Z=0;\nmodule m(){ var[Z] x; sim{ x=0; } }",
+            "bus width must be >= 1",
+        ),
+        // 前方参照(まだ未定義の param)
+        (
+            "forward_ref",
+            "param A=B;\nmodule m(){ var u; sim{ u=A; } }",
+            "unknown constant",
+        ),
+        // 定数式での添字は不可
+        (
+            "index_in_const",
+            "param W=4;\nmodule m(){ var[W[0]] x; sim{ x=0; } }",
+            "constant expression",
+        ),
+    ] {
+        let (code, stderr) = run_source(&format!("parambad_{tag}"), src);
         assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
         assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }

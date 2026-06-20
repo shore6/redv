@@ -47,6 +47,9 @@ A plain `cargo build` is all you need.
 - **Buses (`reg[N]` / `input[N]` / `output[N]` / `var[N]`)** — Declare several lanes as one
   bundle and wire them all in a single line: `in - r - buf;` (simplifies dense circuits). Pick a
   single lane with `a[k]`, and bind **multi-I/O** directly through bus ports and sim bus vars.
+- **Parameter constants (`param W = 4;`)** — Declare integer constants usable in bus widths
+  (`input[W]` / `reg[W+1]`) and sim expressions, so one definition serves many widths instead
+  of hard-coding a literal.
 - **Zero dependencies, single binary** — No external crates. `cargo build --release`
   produces `redv`.
 - **Strict diagnostics** — Reports out-of-range signals, unconnected outputs, invalid
@@ -99,6 +102,7 @@ cargo test                                        # Golden tests for all example
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets the var to 0 after w ticks |
 | `examples/bus_or4.rv` | Bus `reg[N]`: wire all 4 lanes in one line with `in - r - buf;` |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses (multi-I/O) |
+| `examples/param_notN.rv` | N-bit NOT with width parameterized by a `param` constant |
 
 ## Project Layout
 
