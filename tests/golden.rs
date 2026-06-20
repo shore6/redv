@@ -193,6 +193,12 @@ fn param_not_n() {
     run_golden("param_notN");
 }
 
+/// バスのスライス `a[hi:lo]`(ビット反転)と連結 `{a, b}`(左ローテート)(issue #43)。
+#[test]
+fn bus_slice_concat() {
+    run_golden("bus_slice_concat");
+}
+
 /// CLI 動作: 引数なしは usage を出して終了コード 2。
 #[test]
 fn no_args_exits_2() {
@@ -559,6 +565,42 @@ fn bus_misuse_is_error() {
             "bus_as_mid_chunk",
             "reg[2] p; reg z; a-p-z; z-y;",
             "cannot appear inside a chain",
+        ),
+        // スライス / 連結(issue #43)
+        (
+            "slice_on_non_bus",
+            "reg z; a-z[1:0]; z-y;",
+            "is not a bus",
+        ),
+        (
+            "slice_out_of_range",
+            "reg[2] p; a-p[0]; p[3:0]-y;",
+            "bus slice index out of range",
+        ),
+        (
+            "empty_concat",
+            "{} - y; a-y;",
+            "empty concatenation",
+        ),
+        (
+            "nested_concat",
+            "reg[2] p; a-p[0]; {a, {p}} - y;",
+            "nested concatenation",
+        ),
+        (
+            "side_in_concat",
+            "reg cmp; {a, cmp.side} - y;",
+            "cannot appear inside a concatenation",
+        ),
+        (
+            "concat_width_mismatch",
+            "reg[2] p; a-p[0]; {a, p} - y;",
+            "width mismatch",
+        ),
+        (
+            "concat_as_mid_chunk",
+            "reg[2] p; a-p[0]; a - {p} - y;",
+            "on a mid-chain chunk",
         ),
     ] {
         let src = format!("logic g(input a, output y){{ {body} }}\n{call}");

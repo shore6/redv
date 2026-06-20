@@ -16,6 +16,27 @@ pub fn dir_of(path: &str) -> String {
     }
 }
 
+/// 端点が「裸の名前」(添字・`.side`・連結なし)ならその名前を返す。
+/// チェーンの中間チャンク(素子列 / wire 名)はこの形でなければならない。
+fn endpoint_bare_name(ep: &Endpoint) -> Option<String> {
+    match ep {
+        Endpoint::Ref { name, side: false, sel: Sel::All } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// 端点を「名前 + `.side` + レーン選択」へ落とす。連結は `=` 右辺では使えないのでエラー。
+fn endpoint_simple(ep: Endpoint, line: i32) -> RvResult<(String, bool, Sel)> {
+    match ep {
+        Endpoint::Ref { name, side, sel } => Ok((name, side, sel)),
+        Endpoint::Concat(_) => fail(
+            line,
+            "a concatenation '{...}' is not allowed on the right-hand side of '='; \
+             use a chain to wire a bus",
+        ),
+    }
+}
+
 pub struct Parser {
     toks: Vec<Token>,
     i: usize,
@@ -412,60 +433,71 @@ impl Parser {
             return fail(ln, "'const'/'mutable' must be followed by 'reg'");
         }
 
-        // 先頭の識別子(端点には `.side` が付き得る)を読む。
+        // 先頭の端点を読む(スカラ / バス全体 / レーン / スライス / 連結)。
         // 次が '-' ならチェーン接続文、'=' なら代入/インスタンス。
-        let head = self.parse_chain_part()?;
+        let head = self.parse_endpoint()?;
         if self.is_punct("-") {
             // チェーン接続文:  from -chunks...- to
-            let mut parts: Vec<(String, bool, Option<i32>)> = vec![head];
+            let mut parts = vec![head];
             while self.is_punct("-") {
                 self.i += 1;
-                parts.push(self.parse_chain_part()?);
+                parts.push(self.parse_endpoint()?);
             }
             self.expect_punct(";")?;
-            // 中間チャンク(素子列 / wire 名)に `.side` / `[k]` は付けられない
-            for (tok, side, idx) in &parts[1..parts.len() - 1] {
-                if *side {
-                    return fail(
-                        ln,
-                        format!("'.side' cannot appear on a mid-chain chunk '{}'", tok),
-                    );
-                }
-                if idx.is_some() {
-                    return fail(
-                        ln,
-                        format!("a lane index '[..]' cannot appear on a mid-chain chunk '{}'", tok),
-                    );
+            let n = parts.len();
+            // 中間チャンク(素子列 / wire 名)は裸の名前のみ。
+            // レーン/スライス添字・`.side`・連結 `{...}` は端点 2 つにしか付けられない。
+            let mut chunks = Vec::with_capacity(n.saturating_sub(2));
+            for ep in &parts[1..n - 1] {
+                match endpoint_bare_name(ep) {
+                    Some(name) => chunks.push(name),
+                    None => {
+                        return fail(
+                            ln,
+                            "a lane/slice index, '.side', or concatenation '{...}' cannot appear \
+                             on a mid-chain chunk (only the two endpoints can)",
+                        )
+                    }
                 }
             }
-            let (from, from_side, from_idx) = parts.first().unwrap().clone();
-            let (to, to_side, to_idx) = parts.last().unwrap().clone();
-            let chunks: Vec<String> = parts[1..parts.len() - 1]
-                .iter()
-                .map(|(t, _, _)| t.clone())
-                .collect();
+            let from = parts.first().unwrap().clone();
+            let to = parts.last().unwrap().clone();
             stmts.push(LogicStmt::Chain {
                 line: ln,
                 from,
-                from_side,
-                from_idx,
                 to,
-                to_side,
-                to_idx,
                 chunks,
             });
             return Ok(());
         }
-        let (target, target_side, target_idx) = head;
-        if target_side {
-            return fail(ln, "'.side' is only valid as a chain endpoint");
-        }
-        if target_idx.is_some() {
-            return fail(
-                ln,
-                "cannot assign to a bus lane '[..]' yet; drive it with a chain (e.g. 'src - a[0];')",
-            );
-        }
+        // チェーンでない: head は代入対象の素朴な名前(添字・連結・`.side` 不可)。
+        let target = match head {
+            Endpoint::Ref { name, side, sel } => {
+                if side {
+                    return fail(ln, "'.side' is only valid as a chain endpoint");
+                }
+                match sel {
+                    Sel::All => name,
+                    Sel::Lane(_) => {
+                        return fail(
+                            ln,
+                            "cannot assign to a bus lane '[..]' yet; drive it with a chain \
+                             (e.g. 'src - a[0];')",
+                        )
+                    }
+                    Sel::Slice(..) => {
+                        return fail(
+                            ln,
+                            "cannot assign to a bus slice '[..:..]'; drive it with a chain \
+                             (e.g. 'src - a[3:0];')",
+                        )
+                    }
+                }
+            }
+            Endpoint::Concat(_) => {
+                return fail(ln, "a concatenation '{...}' is only valid as a chain endpoint")
+            }
+        };
         self.expect_punct("=")?;
         // 階層インスタンス化:  output = callee(args...)
         if self.cur().k == Tk::Ident && self.peek(1).k == Tk::Punct && self.peek(1).s == "(" {
@@ -515,14 +547,16 @@ impl Parser {
             });
         } else {
             // 各パートは「素子チャンク or 端点」。端点には `.side` が付き得る。
-            let mut parts: Vec<(String, bool, Option<i32>)> = vec![self.parse_chain_part()?];
+            // `=` の右辺は wire 素子列定義 / エイリアスで、バス(レーン/スライス/連結)は不可。
+            let mut parts: Vec<(String, bool, Sel)> =
+                vec![endpoint_simple(self.parse_endpoint()?, ln)?];
             while self.is_punct("-") {
                 self.i += 1;
-                parts.push(self.parse_chain_part()?);
+                parts.push(endpoint_simple(self.parse_endpoint()?, ln)?);
             }
-            // 添字は代入(wire 素子列定義 / エイリアス)では使えない(Phase 1a)。
-            for (tok, _side, idx) in &parts {
-                if idx.is_some() {
+            // 添字/スライスは代入(wire 素子列定義 / エイリアス)では使えない(Phase 1a)。
+            for (tok, _side, sel) in &parts {
+                if !matches!(sel, Sel::All) {
                     return fail(
                         ln,
                         format!(
@@ -534,7 +568,7 @@ impl Parser {
                 }
             }
             if parts.len() == 1 {
-                let (rhs, side, _idx) = parts.into_iter().next().unwrap();
+                let (rhs, side, _sel) = parts.into_iter().next().unwrap();
                 if side {
                     return fail(ln, "'.side' is only valid as a wire endpoint");
                 }
@@ -546,7 +580,7 @@ impl Parser {
                 });
             } else {
                 // 中間チャンク(素子列)に `.side` は付けられない
-                for (tok, side, _idx) in &parts[1..parts.len() - 1] {
+                for (tok, side, _sel) in &parts[1..parts.len() - 1] {
                     if *side {
                         return fail(
                             ln,
@@ -575,22 +609,40 @@ impl Parser {
         Ok(())
     }
 
-    /// ワイヤーチェーンの 1 パート(素子チャンク or 端点)を読む。
-    /// 端点には `[k]`(バスのレーン添字)と `.side`(コンパレータの横入力端子)が付き得る。
-    /// 返り値は (名前, side か, 添字 Option)。素子チャンクには添字・side は付かない。
-    fn parse_chain_part(&mut self) -> RvResult<(String, bool, Option<i32>)> {
-        let name = self.expect_ident("element chunk or endpoint")?;
-        let mut idx = None;
-        if self.is_punct("[") {
+    /// チェーンの 1 パート(素子チャンク or 端点)を `Endpoint` として読む。
+    /// 端点は素朴な名前・レーン `name[k]`・スライス `name[hi:lo]`・連結 `{...}` のいずれか。
+    /// `.side`(コンパレータ/リピーターの横入力端子)も付き得る(連結内は不可)。
+    fn parse_endpoint(&mut self) -> RvResult<Endpoint> {
+        if self.is_punct("{") {
+            // 連結 `{e1, e2, ...}`。各要素は名前/レーン/スライス(`.side`・ネスト不可)。
             let ln = self.cur().line;
             self.i += 1;
-            if self.cur().k != Tk::Num {
-                return fail(ln, "expected an integer lane index after '['");
+            if self.is_punct("}") {
+                return fail(ln, "empty concatenation '{}' is not allowed");
             }
-            idx = Some(self.cur().num as i32);
-            self.i += 1;
-            self.expect_punct("]")?;
+            let mut elems = Vec::new();
+            loop {
+                if self.is_punct("{") {
+                    return fail(self.cur().line, "nested concatenation '{...}' is not allowed");
+                }
+                elems.push(self.parse_ref(false)?);
+                if self.is_punct(",") {
+                    self.i += 1;
+                    continue;
+                }
+                break;
+            }
+            self.expect_punct("}")?;
+            return Ok(Endpoint::Concat(elems));
         }
+        self.parse_ref(true)
+    }
+
+    /// 名前 + レーン選択(`[k]` / `[hi:lo]`)+ 任意の `.side` を読み、`Endpoint::Ref` を返す。
+    /// `allow_side` が false(連結要素)なら `.side` はエラー。
+    fn parse_ref(&mut self, allow_side: bool) -> RvResult<Endpoint> {
+        let name = self.expect_ident("element chunk or endpoint")?;
+        let sel = self.parse_sel()?;
         let mut side = false;
         if self.is_punct(".") {
             let ln = self.cur().line;
@@ -602,9 +654,45 @@ impl Parser {
                     format!("unknown terminal '.{}' (only '.side' is supported)", suf),
                 );
             }
+            if !allow_side {
+                return fail(ln, "'.side' cannot appear inside a concatenation '{...}'");
+            }
+            if !matches!(sel, Sel::All) {
+                return fail(
+                    ln,
+                    format!("'{}' cannot take both a lane/slice index and '.side'", name),
+                );
+            }
             side = true;
         }
-        Ok((name, side, idx))
+        Ok(Endpoint::Ref { name, side, sel })
+    }
+
+    /// バスのレーン選択 `[k]`(単一)/ `[hi:lo]`(スライス、包含)を読む。`[` が無ければ `All`。
+    fn parse_sel(&mut self) -> RvResult<Sel> {
+        if !self.is_punct("[") {
+            return Ok(Sel::All);
+        }
+        let ln = self.cur().line;
+        self.i += 1;
+        if self.cur().k != Tk::Num {
+            return fail(ln, "expected an integer lane index after '['");
+        }
+        let a = self.cur().num as i32;
+        self.i += 1;
+        if self.is_punct(":") {
+            self.i += 1;
+            if self.cur().k != Tk::Num {
+                return fail(ln, "expected an integer after ':' in a bus slice '[hi:lo]'");
+            }
+            let b = self.cur().num as i32;
+            self.i += 1;
+            self.expect_punct("]")?;
+            Ok(Sel::Slice(a, b))
+        } else {
+            self.expect_punct("]")?;
+            Ok(Sel::Lane(a))
+        }
     }
 
     // ---- module ------------------------------------------------------------

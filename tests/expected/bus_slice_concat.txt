@@ -1,0 +1,17 @@
+a=0000 rev=0000 rotl=0000
+a=0001 rev=1000 rotl=0010
+a=0010 rev=0100 rotl=0100
+a=0011 rev=1100 rotl=0110
+a=0100 rev=0010 rotl=1000
+a=0101 rev=1010 rotl=1010
+a=0110 rev=0110 rotl=1100
+a=0111 rev=1110 rotl=1110
+a=1000 rev=0001 rotl=0001
+a=1001 rev=1001 rotl=0011
+a=1010 rev=0101 rotl=0101
+a=1011 rev=1101 rotl=0111
+a=1100 rev=0011 rotl=1001
+a=1101 rev=1011 rotl=1011
+a=1110 rev=0111 rotl=1101
+a=1111 rev=1111 rotl=1111
+bus slice/concat: all passed

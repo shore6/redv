@@ -1,0 +1,52 @@
+/* バスのスライス a[hi:lo] と連結 {a, b} のデモ(issue #43)。
+ * いずれもバス糖衣の範囲で完結し、レーン列へ展開するだけ(circuit エンジンは無変更)。
+ *
+ *  - rev4 : スライスの向きでビット反転配線。a[3:0] - y[0:3] は
+ *           a[3]->y[0], a[2]->y[1], a[1]->y[2], a[0]->y[3]。
+ *  - rotl4: 連結で 1 ビット左ローテート。{a[2:0], a[3]} を out[3:0] へ。
+ *           a2->o3, a1->o2, a0->o1, a3->o0(= bit i が (i+1)%4 へ)。
+ */
+logic rev4(input[4] a, output[4] y)
+{
+    a[3:0] - y[0:3];     // 反転: 降順スライス源を昇順スライス先へ
+}
+
+logic rotl4(input[4] a, output[4] out)
+{
+    {a[2:0], a[3]} - out[3:0];   // 連結を一括配線(幅は各要素の和 = 3 + 1)
+}
+
+module test_slice_concat()
+{
+    var[4] a, rv, rl;
+    var i, ng;
+    var b0, b1, b2, b3;
+    sim {
+        a = 0; ng = 0;
+        rv = rev4(a);
+        rl = rotl4(a);
+        #init
+        for (i = 0; i < 16; i = i + 1) {
+            b0 = (i % 2) * 15;
+            b1 = (i / 2 % 2) * 15;
+            b2 = (i / 4 % 2) * 15;
+            b3 = (i / 8 % 2) * 15;
+            a[0] = b0; a[1] = b1; a[2] = b2; a[3] = b3;
+            #2
+            // rev: y[k] = a[3-k]
+            if (rv[0] != a[3] || rv[1] != a[2] || rv[2] != a[1] || rv[3] != a[0]) {
+                ng = ng + 1;
+            }
+            // rotl: out[(k+1)%4] = a[k]
+            if (rl[1] != a[0] || rl[2] != a[1] || rl[3] != a[2] || rl[0] != a[3]) {
+                ng = ng + 1;
+            }
+            monitor("a=%1%1%1%1 rev=%1%1%1%1 rotl=%1%1%1%1\n",
+                    a[3] / 15, a[2] / 15, a[1] / 15, a[0] / 15,
+                    rv[3] / 15, rv[2] / 15, rv[1] / 15, rv[0] / 15,
+                    rl[3] / 15, rl[2] / 15, rl[1] / 15, rl[0] / 15);
+        }
+        if (ng == 0) { monitor("bus slice/concat: all passed\n"); }
+        else         { monitor("bus slice/concat: % failure(s)\n", ng); }
+    }
+}
