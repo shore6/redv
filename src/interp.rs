@@ -76,10 +76,7 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
         let c = b[i];
         if c == b'd' {
             i += 1;
-            if i < b.len() && b[i] == b'x' {
-                out.push(Elem { k: 'x', n: 1, line });
-                i += 1;
-            } else if i < b.len() && b[i].is_ascii_digit() {
+            if i < b.len() && b[i].is_ascii_digit() {
                 let mut n = 0i32;
                 while i < b.len() && b[i].is_ascii_digit() {
                     n = n * 10 + (b[i] - b'0') as i32;
@@ -580,7 +577,7 @@ impl<'p> Elaborator<'_, 'p> {
         for e in &es {
             idx += 1;
             match e.k {
-                'd' | 'x' => decay += 1,
+                'd' => decay += 1,
                 'b' => {
                     let nn = self
                         .c

@@ -801,3 +801,17 @@ fn monitor_fmt_bare_and_width_is_accepted() {
     let (code, stderr) = run_source("monfmt_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
+
+/// 旧 `dx`(十字ダスト)は廃止(issue #66)。`d` と挙動が同一で `reg` の繋ぎ方で
+/// 表現できるため不要。素子列中では `d` のあとの `x` が未知素子として弾かれる。
+#[test]
+fn dust_cross_dx_is_error() {
+    let src =
+        "logic g(input x, output y){\n    wire seg;\n    seg = dx;\n    x-seg-y;\n}\nmodule m(){ var a,y; sim{ a=15; y=g(a); #init } }";
+    let (code, stderr) = run_source("dust_dx", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("unknown element 'x'"),
+        "unexpected stderr:\n{stderr}"
+    );
+}

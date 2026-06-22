@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// 素子。`k` は素子種別、`n` はリピータ遅延。
 #[derive(Debug, Clone, Copy)]
 pub struct Elem {
-    /// 'd' dust, 'x' dust-cross, 'b' block, 'r' repeater, 't' torch,
+    /// 'd' dust, 'b' block, 'r' repeater, 't' torch,
     /// 'C' comparator(compare), 'S' comparator(subtract)
     pub k: char,
     pub n: i32,
