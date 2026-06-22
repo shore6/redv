@@ -1,0 +1,18 @@
+fan-in : a=0000 -> y= 0  ok
+fan-in : a=0001 -> y=15  ok
+fan-in : a=0010 -> y=15  ok
+fan-in : a=0011 -> y=15  ok
+fan-in : a=0100 -> y=15  ok
+fan-in : a=0101 -> y=15  ok
+fan-in : a=0110 -> y=15  ok
+fan-in : a=0111 -> y=15  ok
+fan-in : a=1000 -> y=15  ok
+fan-in : a=1001 -> y=15  ok
+fan-in : a=1010 -> y=15  ok
+fan-in : a=1011 -> y=15  ok
+fan-in : a=1100 -> y=15  ok
+fan-in : a=1101 -> y=15  ok
+fan-in : a=1110 -> y=15  ok
+fan-in : a=1111 -> y=15  ok
+fan-out: s=1 -> bus=1111
+bus<->scalar: all passed

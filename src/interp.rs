@@ -1052,25 +1052,31 @@ impl<'p> Elaborator<'_, 'p> {
                 (s, d) => {
                     // 少なくとも片方がバス(全体 / スライス / 連結)。幅(レーン数)一致で
                     // element-wise に展開する。スカラは幅 1 として扱う。
-                    let sl = s.lanes();
-                    let dl = d.lanes();
+                    // 片側が幅 1 なら相手の幅へブロードキャストする(issue #63):
+                    //   bus[N] - scalar … N レーンが scalar へ合流(fan-in。circuit の MAX 合流で
+                    //                      scalar = max(lanes))。
+                    //   scalar - bus[N] … scalar が N レーンを駆動(fan-out)。
+                    // いずれも有向エッジなので逆流は起きない。両端が幅 >1 で不一致のときのみエラー。
+                    let mut sl = s.lanes();
+                    let mut dl = d.lanes();
                     if sl.len() != dl.len() {
-                        let msg = match (&s, &d) {
-                            (Ep::Bus(_), Ep::Bus(_)) => format!(
-                                "bus width mismatch in chain: '{}' has {} lane(s) but '{}' has {}",
-                                endpoint_desc(from_ep),
-                                sl.len(),
-                                endpoint_desc(to_ep),
-                                dl.len()
-                            ),
-                            _ => format!(
-                                "bus/scalar width mismatch in chain between '{}' and '{}' \
-                                 (index a lane like 'name[0]', or make both whole buses of equal width)",
-                                endpoint_desc(from_ep),
-                                endpoint_desc(to_ep)
-                            ),
-                        };
-                        return fail(line, msg);
+                        if sl.len() == 1 {
+                            sl = vec![sl[0]; dl.len()];
+                        } else if dl.len() == 1 {
+                            dl = vec![dl[0]; sl.len()];
+                        } else {
+                            return fail(
+                                line,
+                                format!(
+                                    "bus width mismatch in chain: '{}' has {} lane(s) but '{}' has {} \
+                                     (widths must be equal, or one side must be a scalar to broadcast)",
+                                    endpoint_desc(from_ep),
+                                    sl.len(),
+                                    endpoint_desc(to_ep),
+                                    dl.len()
+                                ),
+                            );
+                        }
                     }
                     for i in 0..sl.len() {
                         let label = format!("#ch{}_{}", k + 1, i);
