@@ -106,6 +106,12 @@ fn until_wait() {
     run_golden("until_wait");
 }
 
+/// クロック生成シュガー `clock(var, N)`: var を各レベル N tick 保持で 0/15 に自動トグル(issue #44)。
+#[test]
+fn clock_sugar() {
+    run_golden("clock_sugar");
+}
+
 /// assert / expect による自己検証テストベンチ(全 assert が通れば exit 0)(issue #40)。
 #[test]
 fn assert_selfcheck() {

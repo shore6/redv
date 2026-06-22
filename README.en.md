@@ -106,6 +106,7 @@ cargo test                                        # Golden tests for all example
 | `examples/repeater_0tick.rv` | 0-tick repeater (`r0`) vs. a normal repeater (`r1`): timing comparison |
 | `examples/observer.rv` | Observer (`o`): detects input changes and emits a 1-tick pulse (rising/falling/strength change) |
 | `examples/until_wait.rv` | `#until(cond)`: event-driven wait that advances ticks until the condition holds (wait for an output to rise without knowing the delay) |
+| `examples/clock_sugar.rv` | `clock(var, N)`: generate a test clock in one line (auto-toggles 0/15, holding each level for N ticks) |
 | `examples/wire_reuse.rv` | Define a wire as a reusable component sequence used in several places |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets the var to 0 after w ticks |
 | `examples/bus_or4.rv` | Bus `reg[N]`: wire all 4 lanes in one line with `in - r - buf;` |

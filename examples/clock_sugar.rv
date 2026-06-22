@@ -1,0 +1,25 @@
+/* clock(var, N): テスト用クロックのシンタックスシュガー。
+ *  - var を「各レベル N tick 保持」で 0/15 に自動トグルする(full period = 2N, 50% デューティ)。
+ *  - 呼び出し直後は Low(0)。以降 N tick ごとに反転する。
+ *  - clock() 自体は時刻を進めない。後続の #n / wait / #until が tick を刻む間にトグルする
+ *    (パルス代入 v = x ~ w と同型の遅延機構)。
+ *  - 同じ var への通常代入でクロックは解除される。
+ * トーチ+リピータで発振源を手組みする examples/clock.rv の、テスト刺激用の置き換え。
+ * y は clk を直結で観測した「回路から見たクロック波形」: 0,0,15,15,0,0,15,15(各レベル2tick)。
+ * monitor の clk 列は次 tick に適用される値を映すため 1 tick 先行する(パルス代入と同じ挙動)。 */
+logic buf(input a, output y)
+{
+    a-y;               // 直結(遅延なし): y は適用クロックそのもの
+}
+
+module test_clock()
+{
+    var clk, y;
+    sim {
+        clk = 0;
+        y = buf(clk);
+        clock(clk, 2);             // clk を各レベル2tick保持で自動トグル(周期4)
+        ?monitor("t=%2 | clk=%2 | y=%2\n", $time, clk, y);
+        #1 #1 #1 #1 #1 #1 #1 #1
+    }
+}
