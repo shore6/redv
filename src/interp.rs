@@ -394,6 +394,9 @@ impl PortShape {
     }
 }
 
+/// ポート列 = (ポート名, 形)の並び。`elaborate` の入出力ポート列に使う。
+type Ports = Vec<(String, PortShape)>;
+
 /// 階層インスタンスの親側端点(reg/ポート = スカラ、内部バス reg/バスポート = バス)を
 /// `PortShape` として解決する。
 fn resolve_parent_ref(
@@ -661,7 +664,7 @@ impl<'p> Elaborator<'_, 'p> {
         top_level: bool,
         call_line: i32,
         arg_count: usize,
-    ) -> RvResult<(Vec<(String, PortShape)>, Vec<(String, PortShape)>)> {
+    ) -> RvResult<(Ports, Ports)> {
         if self.stack.iter().any(|n| n == &l.name) {
             self.stack.push(l.name.clone());
             return fail(
@@ -681,8 +684,8 @@ impl<'p> Elaborator<'_, 'p> {
         let mut wire_names: HashSet<String> = HashSet::new();
         // バス reg(`reg[n] a;`)/ バスポート。name -> レーンノード列。scope とは別空間。
         let mut buses: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut inputs: Vec<(String, PortShape)> = Vec::new();
-        let mut outs: Vec<(String, PortShape)> = Vec::new();
+        let mut inputs: Ports = Vec::new();
+        let mut outs: Ports = Vec::new();
         // 階層インスタンス文(全ノード確定後にまとめて結線する)
         let mut instances: Vec<(i32, String, String, Vec<String>)> = Vec::new();
         // 無名チェーン文(wire 名を介さない直結。全ノード確定後にまとめて構築)。
