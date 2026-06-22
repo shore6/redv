@@ -205,6 +205,11 @@ fn bus_slice_concat() {
     run_golden("bus_slice_concat");
 }
 
+#[test]
+fn bus_scalar() {
+    run_golden("bus_scalar");
+}
+
 /// CLI 動作: 引数なしは usage を出して終了コード 2。
 #[test]
 fn no_args_exits_2() {
@@ -532,6 +537,26 @@ fn bus_basic_is_accepted() {
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
+/// バス↔スカラの直結はブロードキャストとして受理される(issue #63)。
+/// fan-in(bus[N]-scalar = レーンの MAX 合流)・fan-out(scalar-bus[N] = 全レーン駆動)、
+/// 素子列を挟む形・スライス/連結の幅 1 相手も同様。
+#[test]
+fn bus_scalar_broadcast_is_accepted() {
+    for (tag, body) in [
+        ("fanin", "reg[4] p; reg z; a-p[0]; a-p[1]; a-p[2]; a-p[3]; p-z; z-y;"),
+        ("fanin_elem", "reg[4] p; reg z; a-p[0]; a-p[1]; a-p[2]; a-p[3]; p-r-z; z-y;"),
+        ("fanout", "reg[4] p; a-p; p[0]-y;"),
+        ("fanout_elem", "reg[4] p; a-r-p; p[0]-y;"),
+        ("slice_fanin", "reg[4] p; a-p[0]; a-p[1]; a-p[2]; a-p[3]; reg z; p[3:0]-z; z-y;"),
+        ("concat_fanin", "reg[2] p; reg z; a-p[0]; a-p[1]; {a, p} - z; z-y;"),
+    ] {
+        let src = format!("logic g(input a, output y){{ {body} }}\n\
+                           module m(){{ var u,v; sim{{ u=15; v=g(u); #init }} }}");
+        let (code, stderr) = run_source(&format!("bus_bc_{tag}"), &src);
+        assert_eq!(code, Some(0), "{tag}: expected success, stderr:\n{stderr}");
+    }
+}
+
 /// バスチェーンの幅不一致・スカラ混在・範囲外添字・非バス添字は **エラー**(issue #11)。
 #[test]
 fn bus_misuse_is_error() {
@@ -541,11 +566,6 @@ fn bus_misuse_is_error() {
             "width_mismatch",
             "reg[2] p; reg[3] q; a-p[0]; p-r-q; q[0]-y;",
             "bus width mismatch",
-        ),
-        (
-            "bus_scalar_mismatch",
-            "reg[2] p; reg z; a-p[0]; p-r-z; z-y;",
-            "bus/scalar width mismatch",
         ),
         (
             "index_out_of_range",
@@ -597,11 +617,6 @@ fn bus_misuse_is_error() {
             "side_in_concat",
             "reg cmp; {a, cmp.side} - y;",
             "cannot appear inside a concatenation",
-        ),
-        (
-            "concat_width_mismatch",
-            "reg[2] p; a-p[0]; {a, p} - y;",
-            "width mismatch",
         ),
         (
             "concat_as_mid_chunk",

@@ -1,0 +1,63 @@
+/* バス↔スカラの直結(issue #63)
+ * 片側が幅 1 のとき、もう片方の幅へブロードキャストして接続する。
+ *   - fan-out: スカラ 1 点をバス全レーンへ直結(`a - in;` = a を全レーンへ複製駆動)
+ *   - fan-in : バス全レーンをスカラ 1 点へ直結(`buf - y;` = レーンの MAX 合流 = OR)
+ * いずれも有向接続(src -> dst)なので逆流はしない。レッドストーンでよく使う組み方。 */
+
+/* fan-in: 4 入力をバスに集め、バス全体を 1 出力へ直結 = MAX 合流(OR4)。
+ * 旧来は `buf[0]-y; buf[1]-y; ...` と 4 行書いていたものを `buf - y;` の 1 行で書ける。 */
+logic or4(input a0, input a1, input a2, input a3, output y)
+{
+    reg[4] in;
+    reg[4] buf;
+    a0 - in[0];
+    a1 - in[1];
+    a2 - in[2];
+    a3 - in[3];
+    in - r - buf;          // 1 行で 4 レーン(各レーンにリピータ)
+    buf - y;               // ★ fan-in: バス全体を y へ直結(4 レーンを MAX 合流 = OR)
+}
+
+/* fan-out: スカラ入力をバス出力全レーンへ複製する。
+ * `a - y;`(y は output[4])で a が 4 レーンすべてを駆動する。 */
+logic split(input a, output[4] y)
+{
+    a - r - y;             // ★ fan-out: a を 4 レーンへ複製(各レーンにリピータ)
+}
+
+module test()
+{
+    var a0, a1, a2, a3, y;
+    var s; var[4] q;
+    var i, ng, exp;
+    sim {
+        a0 = 0; a1 = 0; a2 = 0; a3 = 0; ng = 0;
+        s = 0;
+        y = or4(a0, a1, a2, a3);
+        q = split(s);
+        #init
+
+        // fan-in (OR4): 入力の OR をとる
+        for (i = 0; i < 16; i = i + 1) {
+            a0 = (i % 2) * 15;
+            a1 = (i / 2 % 2) * 15;
+            a2 = (i / 4 % 2) * 15;
+            a3 = (i / 8 % 2) * 15;
+            #2
+            exp = 0;
+            if (i > 0) { exp = 15; }
+            monitor("fan-in : a=%1%1%1%1 -> y=%2", a3 / 15, a2 / 15, a1 / 15, a0 / 15, y);
+            if (y != exp) { monitor("  <- NG!\n"); ng = ng + 1; }
+            else          { monitor("  ok\n"); }
+        }
+
+        // fan-out (split): 1 入力が 4 レーンへ複製される(全レーン同値)
+        s = 15;
+        #2
+        monitor("fan-out: s=1 -> bus=%1%1%1%1\n", q[3] / 15, q[2] / 15, q[1] / 15, q[0] / 15);
+        if (q[0] != 15 || q[1] != 15 || q[2] != 15 || q[3] != 15) { ng = ng + 1; }
+
+        if (ng == 0) { monitor("bus<->scalar: all passed\n"); }
+        else         { monitor("bus<->scalar: % failure(s)\n", ng); }
+    }
+}

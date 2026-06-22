@@ -48,7 +48,8 @@ A plain `cargo build` is all you need.
   bundle and wire them all in a single line: `in - r - buf;` (simplifies dense circuits). Pick a
   single lane with `a[k]`, and bind **multi-I/O** directly through bus ports and sim bus vars.
   Endpoints also accept **slices `a[hi:lo]`** (sub-bus; reverse bits by flipping the direction)
-  and **concatenation `{a, b}`** (joins each part's lanes).
+  and **concatenation `{a, b}`** (joins each part's lanes). When one side is a scalar, **bus↔scalar
+  wiring** works directly (`x - y;` for fan-in = MAX merge / fan-out = broadcast).
 - **Parameter constants (`param W = 4;`)** — Declare integer constants usable in bus widths
   (`input[W]` / `reg[W+1]`) and sim expressions, so one definition serves many widths instead
   of hard-coding a literal.
@@ -113,6 +114,7 @@ cargo test                                        # Golden tests for all example
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses (multi-I/O) |
 | `examples/param_notN.rv` | N-bit NOT with width parameterized by a `param` constant |
 | `examples/bus_slice_concat.rv` | Bus slice `a[hi:lo]` (bit reversal) and concatenation `{a, b}` (left rotate) |
+| `examples/bus_scalar.rv` | Bus↔scalar wiring: fan-in (`buf - y;` = MAX merge) and fan-out (`a - y;` = broadcast) |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` (torch inversion + repeater delay) |
 
 ## Project Layout
