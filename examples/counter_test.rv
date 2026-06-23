@@ -1,27 +1,27 @@
 /* for/while/if を使ったスイープテスト: 全入力組み合わせでANDを検証 */
 logic and_gate(input x1, input x2, output y)
 {
-    reg m;
-    m = d;
-    x1-t-m;
-    x2-t-m;
-    m-t-y;
+    reg s;
+    s = d;
+    x1-t-s;
+    x2-t-s;
+    s-t-y;
 }
 
 module sweep_and()
 {
-    var a, b, y;
+    var x1, x2, y;
     var i, ng;
     sim {
-        a = 0; b = 0; ng = 0;
-        y = and_gate(a, b);
+        x1 = 0; x2 = 0; ng = 0;
+        y = and_gate(x1, x2);
         #init
         for (i = 0; i < 4; i = i + 1) {
-            a = (i / 2) * 15;
-            b = (i % 2) * 15;
+            x1 = (i / 2) * 15;
+            x2 = (i % 2) * 15;
             #3                          // 伝搬を待つ(トーチ2段=2tick+余裕)
-            monitor("a=%2 b=%2 -> y=%2", a, b, y);
-            if ((a > 0 && b > 0) != (y > 0)) {
+            monitor("x1=%2 x2=%2 -> y=%2", x1, x2, y);
+            if ((x1 > 0 && x2 > 0) != (y > 0)) {
                 monitor("   <- NG!\n");
                 ng = ng + 1;
             } else {

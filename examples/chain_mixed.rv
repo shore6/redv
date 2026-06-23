@@ -1,24 +1,24 @@
-/* 接続記法のデモ: チェーン文で 2 経路を同じ点 m に合流させる。
+/* 接続記法のデモ: チェーン文で 2 経路を同じ点 s に合流させる。
  * 合流点は強度の最大値をとる(OR 的な振る舞い)。 */
 logic mix(input x1, input x2, output y)
 {
-    reg m;
-    x1-d-r-m;            // ダスト1個 -> リピータ -> m
-    x2-r-m;             // 別経路も同じ m に合流(max 合成)
-    m-d2-y;             // m から y へダスト2個ぶん減衰させて出力
+    reg s;
+    x1-d-r-s;           // ダスト1個 -> リピータ -> s
+    x2-r-s;             // 別経路も同じ s に合流(max 合成)
+    s-d2-y;             // s から y へダスト2個ぶん減衰させて出力
 }
 
 module test_mix()
 {
-    var a, b, y;
+    var x1, x2, y;
     sim {
-        a = 0; b = 0;
-        y = mix(a, b);
+        x1 = 0; x2 = 0;
+        y = mix(x1, x2);
         #init
-        ?monitor("t=% | a=%2 b=%2 | y=%2\n", $time, a, b, y);
+        ?monitor("t=% | x1=%2 x2=%2 | y=%2\n", $time, x1, x2, y);
 
-        a = 15;  #3     // a 経由 ON
-        b = 8;   #3     // b も ON(m は max=15 のまま)
-        a = 0;   #3     // a OFF(b=8 が残る)
+        x1 = 15; #3     // x1 経由 ON
+        x2 = 8;  #3     // x2 も ON(s は max=15 のまま)
+        x1 = 0;  #3     // x1 OFF(x2=8 が残る)
     }
 }

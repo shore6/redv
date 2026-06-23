@@ -1,4 +1,4 @@
-t=0 | a=12 b= 5 | sub= 7 | cmp=12
-t=2 | a=12 b=12 | sub= 0 | cmp=12
-t=4 | a=12 b=15 | sub= 0 | cmp= 0
-t=6 | a=15 b=15 | sub= 0 | cmp=15
+t=0 | x1=12 x2= 5 | sub= 7 | cmp=12
+t=2 | x1=12 x2=12 | sub= 0 | cmp=12
+t=4 | x1=12 x2=15 | sub= 0 | cmp= 0
+t=6 | x1=15 x2=15 | sub= 0 | cmp=15

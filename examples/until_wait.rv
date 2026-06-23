@@ -4,25 +4,25 @@
  *  - INIT_TIMEOUT 超過(発振 or 永遠に成立しない)でエラー。
  * ここではリピータ列の遅延を数えず、#until で出力の立ち上がり/立ち下がりを待つ。
  * 経過 tick($time)は実行結果が教えてくれる(立ち上がり t=8、立ち下がり t=16)。 */
-logic delayed(input a, output y)
+logic delayed(input x, output y)
 {
-    a-r4r3-y;          // r4 -> r3 のリピータ列で遅延再増幅
+    x-r4r3-y;          // r4 -> r3 のリピータ列で遅延再増幅
 }
 
 module test_until()
 {
-    var a, y;
+    var x, y;
     sim {
-        a = 0;
-        y = delayed(a);
+        x = 0;
+        y = delayed(x);
         #init                      // (時刻0) y=0 に整定
 
-        a = 15;                    // 入力を立てる
+        x = 15;                    // 入力を立てる
         #until(y > 0);             // 遅延を知らずに出力が立つまで進める -> t=8
 
-        a = 0;                     // 入力を落とす
+        x = 0;                     // 入力を落とす
         #until(y == 0);            // 出力が落ちるまで進める -> t=16
 
-        ?monitor("t=%2 | a=%2 | y=%2\n", $time, a, y);
+        ?monitor("t=%2 | x=%2 | y=%2\n", $time, x, y);
     }
 }

@@ -5,33 +5,33 @@
  * monitor 出力(ゴールデン文字列)ではなく終了コードで合否が分かるのが要点。 */
 logic and_gate(input x1, input x2, output y)
 {
-    reg m;
-    m = d;
-    x1-t-m;            // トーチで NOT
-    x2-t-m;            // 合流点 m = NOR(NOT x1, NOT x2)
-    m-t-y;             // もう一段 NOT = AND
+    reg s;
+    s = d;
+    x1-t-s;            // トーチで NOT
+    x2-t-s;            // 合流点 s = NOR(NOT x1, NOT x2)
+    s-t-y;             // もう一段 NOT = AND
 }
 
 module test_and_selfcheck()
 {
-    var a, b, y, i;
+    var x1, x2, y, i;
     sim {
-        a = 0; b = 0;
-        y = and_gate(a, b);
+        x1 = 0; x2 = 0;
+        y = and_gate(x1, x2);
         #init
 
         // 真理値表を一括検証(失敗行があれば stderr に全部出る)
         for (i = 0; i < 4; i = i + 1) {
-            a = (i / 2) * 15;
-            b = (i % 2) * 15;
+            x1 = (i / 2) * 15;
+            x2 = (i % 2) * 15;
             #3                                   // トーチ 2 段の伝搬待ち
-            assert((a > 0 && b > 0) == (y > 0));
+            assert((x1 > 0 && x2 > 0) == (y > 0));
         }
 
         // 代表値を expect で確認
-        a = 15; b = 15; #3
+        x1 = 15; x2 = 15; #3
         expect(y, 15);
-        a = 0;  b = 0;  #3
+        x1 = 0;  x2 = 0;  #3
         expect(y, 0);
 
         monitor("AND gate: all cases verified\n");

@@ -1,5 +1,5 @@
-a= 0 b= 0 -> y= 0   ok
-a= 0 b=15 -> y= 0   ok
-a=15 b= 0 -> y= 0   ok
-a=15 b=15 -> y=15   ok
+x1= 0 x2= 0 -> y= 0   ok
+x1= 0 x2=15 -> y= 0   ok
+x1=15 x2= 0 -> y= 0   ok
+x1=15 x2=15 -> y=15   ok
 AND truth table: all passed
