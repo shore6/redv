@@ -45,6 +45,7 @@ A plain `cargo build` is all you need.
 
 ```sh
 git clone git@github.com:shore6/redv.git
+cd redv
 cargo build --release                       # Produces target/release/redv
 ```
 
