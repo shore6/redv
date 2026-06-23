@@ -1,27 +1,27 @@
 /* wire を「再利用可能な素子列」として定義し、複数箇所で使い回すデモ。
- * wire は端点を持たない素子列のテンプレートで、各使用箇所(a-seg-m / b-seg-m)で
+ * wire は端点を持たない素子列のテンプレートで、各使用箇所(x1-seg-s / x2-seg-s)で
  * 独立に展開される(物理的に別々の素子列になる)。 */
 logic reuse(input x1, input x2, output y)
 {
-    reg m;
+    reg s;
     wire seg;
     seg = d2ccd2;      // ダスト2 + コンパレータ(比較) + ダスト2 の中継素子列
-    x1-seg-m;          // x1 を seg 経由で m へ
-    x2-seg-m;          // 同じ seg を x2 -> m にも再利用(m で max 合流)
-    m-d-y;             // m から y へ(ダスト1個ぶん減衰)
+    x1-seg-s;          // x1 を seg 経由で s へ
+    x2-seg-s;          // 同じ seg を x2 -> s にも再利用(s で max 合流)
+    s-d-y;             // s から y へ(ダスト1個ぶん減衰)
 }
 
 module test_reuse()
 {
-    var a, b, y;
+    var x1, x2, y;
     sim {
-        a = 0; b = 0;
-        y = reuse(a, b);
+        x1 = 0; x2 = 0;
+        y = reuse(x1, x2);
         #init
-        ?monitor("t=% | a=%2 b=%2 | y=%2\n", $time, a, b, y);
+        ?monitor("t=% | x1=%2 x2=%2 | y=%2\n", $time, x1, x2, y);
 
-        a = 15;  #3     // a 経由 ON
-        b = 8;   #3     // b も ON(m は max)
-        a = 0;   #3     // a OFF(b 経由が残る)
+        x1 = 15; #3     // x1 経由 ON
+        x2 = 8;  #3     // x2 も ON(s は max)
+        x1 = 0;  #3     // x1 OFF(x2 経由が残る)
     }
 }

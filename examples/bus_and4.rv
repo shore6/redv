@@ -1,44 +1,44 @@
 /* Phase 1b: バスポート + バス var + バス束縛のデモ。
- * 2 本の 4 ビットバス a, b2 のビット単位 AND を、各行 1 文でまとめて配線する。
- *   a AND b2 = NOT( NOT a OR NOT b2 )   (ド・モルガン)
+ * 2 本の 4 ビットバス x1, x2 のビット単位 AND を、各行 1 文でまとめて配線する。
+ *   x1 AND x2 = NOT( NOT x1 OR NOT x2 )   (ド・モルガン)
  * バスポート input[4]/output[4]・内部バス reg・バス全体チェーンで密に書ける
  * (スカラ 4 本ぶんの配線が 1 行になる)。 */
-logic and4(input[4] a, input[4] b2, output[4] y)
+logic and4(input[4] x1, input[4] x2, output[4] y)
 {
-    reg[4] na;
-    reg[4] nb;
-    reg[4] m;
-    a - t - na;        // na = NOT a(4 レーンへトーチ一括)
-    b2 - t - nb;        // nb = NOT b2
-    na - m;            // m = na OR nb(各レーンで max 合流)
-    nb - m;
-    m - t - y;         // y = NOT m = a AND b2
+    reg[4] nx1;
+    reg[4] nx2;
+    reg[4] s;
+    x1 - t - nx1;       // nx1 = NOT x1(4 レーンへトーチ一括)
+    x2 - t - nx2;       // nx2 = NOT x2
+    nx1 - s;            // s = nx1 OR nx2(各レーンで max 合流)
+    nx2 - s;
+    s - t - y;          // y = NOT s = x1 AND x2
 }
 
 module test_and4()
 {
-    var[4] a;          // バス var: a[0]..a[3]
-    var[4] b2;
+    var[4] x1;         // バス var: x1[0]..x1[3]
+    var[4] x2;
     var[4] y;
     var i, k, ng, bit;
     sim {
-        a = 0; b2 = 0; ng = 0;       // バス全体へブロードキャスト代入
-        y = and4(a, b2);             // バス出力をバス var へ束縛(レーン対応)
+        x1 = 0; x2 = 0; ng = 0;      // バス全体へブロードキャスト代入
+        y = and4(x1, x2);            // バス出力をバス var へ束縛(レーン対応)
         #init
-        b2[1] = 15; b2[2] = 15;       // b2 = 0110 固定
+        x2[1] = 15; x2[2] = 15;      // x2 = 0110 固定
         for (i = 0; i < 16; i = i + 1) {
-            a[0] = (i % 2) * 15;     // a を 4 ビットのパターンに(添字代入)
-            a[1] = (i / 2 % 2) * 15;
-            a[2] = (i / 4 % 2) * 15;
-            a[3] = (i / 8 % 2) * 15;
+            x1[0] = (i % 2) * 15;    // x1 を 4 ビットのパターンに(添字代入)
+            x1[1] = (i / 2 % 2) * 15;
+            x1[2] = (i / 4 % 2) * 15;
+            x1[3] = (i / 8 % 2) * 15;
             #6                       // トーチ 2 段の伝搬を待つ(焼き切れ保護に触れない間隔)
             for (k = 0; k < 4; k = k + 1) {    // 各レーンを検証(実行時添字)
                 bit = 0;
-                if (a[k] > 0 && b2[k] > 0) { bit = 1; }
+                if (x1[k] > 0 && x2[k] > 0) { bit = 1; }
                 if ((y[k] > 0) != bit) { ng = ng + 1; }
             }
-            monitor("a=%1%1%1%1 & b2=0110 -> y=%1%1%1%1\n",
-                    a[3] / 15, a[2] / 15, a[1] / 15, a[0] / 15,
+            monitor("x1=%1%1%1%1 & x2=0110 -> y=%1%1%1%1\n",
+                    x1[3] / 15, x1[2] / 15, x1[1] / 15, x1[0] / 15,
                     y[3] / 15, y[2] / 15, y[1] / 15, y[0] / 15);
         }
         if (ng == 0) { monitor("bus AND4: all passed\n"); }

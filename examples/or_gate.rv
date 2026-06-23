@@ -1,31 +1,31 @@
 /* OR回路: リピータ2本でダストに合流 (合流点は最大値をとる) */
 logic or_gate(input x1, input x2, output y)
 {
-    reg m;
-    x1-r-m;         // リピータで a と m を接続
-    x2-r-m;        // リピータで b と m を接続
-    m = d;         // 合流点はダスト (max合成 = OR)
-    y = m;         // 出力ポートを m に接続(長さ0)
+    reg s;
+    x1-r-s;        // リピータで x1 と s を接続
+    x2-r-s;        // リピータで x2 と s を接続
+    s = d;         // 合流点はダスト (max合成 = OR)
+    y = s;         // 出力ポートを s に接続(長さ0)
 }
 
 module test_or_gate()
 {
-    var a, b;
+    var x1, x2;
     var y;
     sim {
-        a = 0; b = 0;
-        y = or_gate(a, b);
+        x1 = 0; x2 = 0;
+        y = or_gate(x1, x2);
         #init              // (時刻0)
 
-        a = 1; b = 0;
+        x1 = 1; x2 = 0;
         #1                 // (時刻1)
         #1                 // (時刻2)
         #1                 // (時刻3)
 
-        a = 0; b = 12;
+        x1 = 0; x2 = 12;
         #1                 // (時刻4)
         #1                 // (時刻5)
 
-        ?monitor("時刻=% | a=%, b=% | 出力y=%\n", $time, a, b, y);
+        ?monitor("時刻=% | x1=%, x2=% | 出力y=%\n", $time, x1, x2, y);
     }
 }

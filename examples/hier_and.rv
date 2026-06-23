@@ -1,5 +1,5 @@
 /* 階層化のデモ: 既存の not_gate / or_gate を組み合わせて AND を構成。
-   ド・モルガン則  a AND b = NOT( (NOT a) OR (NOT b) )  を logic の入れ子で記述する。 */
+   ド・モルガン則  x1 AND x2 = NOT( (NOT x1) OR (NOT x2) )  を logic の入れ子で記述する。 */
 
 logic not_gate(input x, output y) {
     x-t-y;              // トーチ 1 本で NOT
@@ -12,27 +12,27 @@ logic or_gate(input x1, input x2, output y) {
 
 /* 下位 logic を 4 個インスタンス化して AND を組む */
 logic and2(input x1, input x2, output y) {
-    reg na, nb, m;      // 中間ノード(階層インスタンスの結線端点)
-    na = not_gate(x1);   // na = !a
-    nb = not_gate(x2);  // nb = !b
-    m  = or_gate(na, nb);   // m = na | nb = !a | !b
-    y  = not_gate(m);   // y = !m = a & b
+    reg nx1, nx2, s;     // 中間ノード(階層インスタンスの結線端点)
+    nx1 = not_gate(x1);  // nx1 = !x1
+    nx2 = not_gate(x2);  // nx2 = !x2
+    s   = or_gate(nx1, nx2);   // s = nx1 | nx2 = !x1 | !x2
+    y   = not_gate(s);   // y = !s = x1 & x2
 }
 
 module sweep_and()
 {
-    var a, b, y;
+    var x1, x2, y;
     var i, ng;
     sim {
-        a = 0; b = 0; ng = 0;
-        y = and2(a, b);
+        x1 = 0; x2 = 0; ng = 0;
+        y = and2(x1, x2);
         #init
         for (i = 0; i < 4; i = i + 1) {
-            a = (i / 2) * 15;
-            b = (i % 2) * 15;
+            x1 = (i / 2) * 15;
+            x2 = (i % 2) * 15;
             #6                          // 階層 4 段(トーチ/リピータ)の伝搬を待つ
-            monitor("a=%2 b=%2 -> y=%2", a, b, y);
-            if ((a > 0 && b > 0) != (y > 0)) {
+            monitor("x1=%2 x2=%2 -> y=%2", x1, x2, y);
+            if ((x1 > 0 && x2 > 0) != (y > 0)) {
                 monitor("   <- NG!\n");
                 ng = ng + 1;
             } else {

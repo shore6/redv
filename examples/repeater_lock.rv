@@ -17,19 +17,19 @@ logic lockable(input x, input lk, output y)
 
 module test_repeater_lock()
 {
-    var a, lk, y;
+    var x, lk, y;
     sim {
-        a = 15;
+        x = 15;
         lk = 0;
-        y = lockable(a, lk);
-        #init                       // 通常動作: a=15 → y=15
-        ?monitor("t=% | a=%2 lk=%2 | y=%2\n", $time, a, lk, y);
+        y = lockable(x, lk);
+        #init                       // 通常動作: x=15 → y=15
+        ?monitor("t=% | x=%2 lk=%2 | y=%2\n", $time, x, lk, y);
 
         lk = 15;  #2                // ロック開始: y=15 を保持
-        a = 0;    #2                // 後ろを 0 に下げてもロック中は y=15 のまま
+        x = 0;    #2                // 後ろを 0 に下げてもロック中は y=15 のまま
         lk = 0;   #2                // ロック解除 → 後ろ(0)を反映して y=0
         lk = 15;  #2                // 今度は y=0 の状態でロック
-        a = 15;   #2                // 後ろを 15 に上げてもロック中は y=0 のまま
+        x = 15;   #2                // 後ろを 15 に上げてもロック中は y=0 のまま
         lk = 0;   #2                // ロック解除 → 後ろ(15)を反映して y=15
     }
 }
