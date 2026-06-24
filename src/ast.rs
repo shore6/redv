@@ -22,9 +22,20 @@ pub struct Port {
     pub input: bool,
     pub name: String,
     pub line: i32,
-    /// `Some(n)` なら **バスポート**(`input[n]` / `output[n]`): n 本の並列レーン。
+    /// `Some(we)` なら **バスポート**(`input[n]` / `output[n]`): n 本の並列レーン。
     /// 本体では内部バス reg(§4.2)と同じく添字 / バス全体で使える。`None` はスカラ。
-    pub width: Option<i32>,
+    /// 幅は `WidthExpr`(リテラル即決 or 遅延式)で、logic のジェネリック param を
+    /// 含む場合のみ式のまま残り、インスタンス時に解決される(§ Phase 2)。
+    pub width: Option<WidthExpr>,
+}
+
+/// バス幅。`Lit(n)` は parse 時に解決済みのリテラル(既存挙動)。
+/// `Expr(e)` は logic ローカル param を含むため elaborate 時に `param_env` 下で解決する
+/// **遅延式**(Phase 2 のジェネリック幅。例: `input[W]` / `reg[W+1]`)。
+#[derive(Debug, Clone)]
+pub enum WidthExpr {
+    Lit(i32),
+    Expr(Expr),
 }
 
 /// reg 宣言の初期化子。`strength == -1` は信号強度未指定。
@@ -80,7 +91,7 @@ pub enum LogicStmt {
         name: String,
         qual: Qual,
         init: Option<RegInit>,
-        width: Option<i32>,
+        width: Option<WidthExpr>,
     },
     /// `target = elem-chunks...` — wire への **素子列定義**。
     ///
@@ -115,13 +126,15 @@ pub enum LogicStmt {
         strength: i32,
         rhs: String,
     },
-    /// `output = callee(args...)` — 別 logic の階層インスタンス化。
-    /// `output` は親の reg / ポート、`args` は親の reg / ポート名。
+    /// `output = callee#(P=v, ...)(args...)` — 別 logic の階層インスタンス化。
+    /// `output` は親の reg / ポート、`args` は親の reg / ポート名。`params` はジェネリック幅
+    /// の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
     Instance {
         line: i32,
         output: String,
         callee: String,
         args: Vec<String>,
+        params: Vec<(String, Expr)>,
     },
 }
 
@@ -131,6 +144,9 @@ pub struct LogicDef {
     pub line: i32,
     pub ports: Vec<Port>,
     pub stmts: Vec<LogicStmt>,
+    /// ジェネリック幅パラメータ宣言 `#(W=4, X)`(Phase 2)。各エントリは (名前, 既定値)。
+    /// 既定値が `None` の param は呼び出し側で `#(W=...)` 必須。空なら従来の非ジェネリック logic。
+    pub params: Vec<(String, Option<i64>)>,
 }
 
 // ---- module / sim (testbench) side -------------------------------------
@@ -208,11 +224,14 @@ pub enum SimStmt {
         value: Expr,
         pulse: Option<Expr>,
     },
+    /// `target = callee#(P=v, ...)(args)` — sim から logic をインスタンス化する束縛。
+    /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
     CallBind {
         line: i32,
         target: String,
         callee: String,
         bind_args: Vec<String>,
+        params: Vec<(String, Expr)>,
     },
     WaitTicks {
         line: i32,

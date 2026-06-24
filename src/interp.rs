@@ -136,6 +136,159 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
     Ok(out)
 }
 
+// ---- width expression resolution (Phase 2) -----------------------------
+
+/// `WidthExpr` を実 i32 へ解決する。`param_env` は logic ローカルのジェネリック param
+/// 環境(`#(W=8)` で渡された実引数 + 既定値)、`defines` はトップレベル `param` / 数値
+/// `#define`(`Program::defines`)。値は 1 以上でなければエラー。
+fn resolve_width(
+    we: &WidthExpr,
+    param_env: &HashMap<String, i64>,
+    defines: &HashMap<String, i64>,
+    line: i32,
+) -> RvResult<i32> {
+    let v = match we {
+        WidthExpr::Lit(n) => *n as i64,
+        WidthExpr::Expr(e) => eval_const_expr(e, param_env, defines, line)?,
+    };
+    if v < 1 {
+        return fail(line, format!("bus width must be >= 1 (got {})", v));
+    }
+    if v > i32::MAX as i64 {
+        return fail(line, format!("bus width too large: {}", v));
+    }
+    Ok(v as i32)
+}
+
+/// 幅式 / `#(P=expr)` 実引数の評価。`params` を最優先で引き、未マッチなら `defines`
+/// にフォールバック。`$time` / 添字 / 比較・論理は不可(`param` の `eval_const` 流儀)。
+fn eval_const_expr(
+    e: &Expr,
+    params: &HashMap<String, i64>,
+    defines: &HashMap<String, i64>,
+    fallback_line: i32,
+) -> RvResult<i64> {
+    match e {
+        Expr::Num { num, .. } => Ok(*num),
+        Expr::Time { line } => fail(*line, "$time is not allowed in a width / param expression"),
+        Expr::Var { line, name, index } => {
+            if index.is_some() {
+                return fail(
+                    *line,
+                    format!("cannot index '{}' in a width / param expression", name),
+                );
+            }
+            if let Some(v) = params.get(name) {
+                return Ok(*v);
+            }
+            if let Some(v) = defines.get(name) {
+                return Ok(*v);
+            }
+            let ln = if *line == 0 { fallback_line } else { *line };
+            fail(
+                ln,
+                format!(
+                    "unknown identifier '{}' in width / param expression (no such logic parameter, \
+                     param constant, or numeric #define)",
+                    name
+                ),
+            )
+        }
+        Expr::Un { line, op, a } => {
+            let v = eval_const_expr(a, params, defines, fallback_line)?;
+            match op.as_str() {
+                "-" => Ok(-v),
+                "!" => Ok((v == 0) as i64),
+                _ => fail(
+                    *line,
+                    format!("operator '{}' not allowed in a width / param expression", op),
+                ),
+            }
+        }
+        Expr::Bin { line, op, a, b } => {
+            let a = eval_const_expr(a, params, defines, fallback_line)?;
+            let b = eval_const_expr(b, params, defines, fallback_line)?;
+            match op.as_str() {
+                "+" => Ok(a + b),
+                "-" => Ok(a - b),
+                "*" => Ok(a * b),
+                "/" => {
+                    if b == 0 {
+                        return fail(*line, "division by zero in width / param expression");
+                    }
+                    Ok(a / b)
+                }
+                "%" => {
+                    if b == 0 {
+                        return fail(*line, "modulo by zero in width / param expression");
+                    }
+                    Ok(a % b)
+                }
+                _ => fail(
+                    *line,
+                    format!("operator '{}' not allowed in a width / param expression", op),
+                ),
+            }
+        }
+    }
+}
+
+/// 呼び出し側の `#(P=expr, ...)` 実引数と、callee の `LogicDef.params`(宣言+既定値)を
+/// 突き合わせて、callee の `param_env` を構築する。
+/// - 実引数の名前が callee 宣言に無ければエラー
+/// - 既定値も実引数も無い param はエラー
+/// - 実引数の式は `caller_env` + `defines` で評価する(親 logic ローカル param も参照可)
+fn build_callee_param_env(
+    callee_name: &str,
+    decl_params: &[(String, Option<i64>)],
+    actual: &[(String, Expr)],
+    caller_env: &HashMap<String, i64>,
+    defines: &HashMap<String, i64>,
+    line: i32,
+) -> RvResult<HashMap<String, i64>> {
+    for (an, _) in actual {
+        if !decl_params.iter().any(|(dn, _)| dn == an) {
+            return fail(
+                line,
+                format!("logic '{}' has no parameter '{}'", callee_name, an),
+            );
+        }
+    }
+    let mut env: HashMap<String, i64> = HashMap::new();
+    for (pn, default) in decl_params {
+        if let Some((_, ae)) = actual.iter().find(|(n, _)| n == pn) {
+            let v = eval_const_expr(ae, caller_env, defines, line)?;
+            env.insert(pn.clone(), v);
+        } else if let Some(d) = default {
+            env.insert(pn.clone(), *d);
+        } else {
+            return fail(
+                line,
+                format!(
+                    "logic '{}' requires parameter '{}' (no default; pass it with '#({}=...)' at the call site)",
+                    callee_name, pn, pn,
+                ),
+            );
+        }
+    }
+    Ok(env)
+}
+
+/// インスタンスキャッシュキー用に `param_env` を正規化文字列へ。
+/// 並び順は `decl_params` 宣言順とする(`#(W=8,X=2)` と `#(X=2,W=8)` は同一インスタンス)。
+fn param_env_key(decl_params: &[(String, Option<i64>)], env: &HashMap<String, i64>) -> String {
+    if decl_params.is_empty() {
+        return String::new();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (pn, _) in decl_params {
+        if let Some(v) = env.get(pn) {
+            parts.push(format!("{}={}", pn, v));
+        }
+    }
+    format!("#({})", parts.join(","))
+}
+
 /// 名前全体が素子列として解釈できる(= 素子名と衝突する)なら true。
 /// reg / wire / ポート名がこれに該当するのは禁止する: チェーン内に置いたとき
 /// 「名前付きの点」と「素子列」が曖昧になり、回路が読みにくくバグの温床になる。
@@ -394,6 +547,11 @@ impl PortShape {
 /// ポート列 = (ポート名, 形)の並び。`elaborate` の入出力ポート列に使う。
 type Ports = Vec<(String, PortShape)>;
 
+/// 保留中の階層インスタンス文(`out = callee#(P=v)(args)`)。
+/// 順序: (line, output, callee, args, call_params)。call_params は `#(...)` 実引数で、
+/// callee の `param_env` ビルド時に親 logic の環境下で評価する(Phase 2)。
+type PendingInstance = (i32, String, String, Vec<String>, Vec<(String, Expr)>);
+
 /// 階層インスタンスの親側端点(reg/ポート = スカラ、内部バス reg/バスポート = バス)を
 /// `PortShape` として解決する。
 fn resolve_parent_ref(
@@ -458,6 +616,9 @@ struct Elaborator<'c, 'p> {
     c: &'c mut Circuit,
     /// 階層インスタンス化の解決に使う logic 定義表
     logics: &'p HashMap<String, LogicDef>,
+    /// トップレベル `param` / 数値 `#define`。幅式の解決でフォールバック参照する
+    /// (logic ローカル param に無い名前はここを引く)。
+    defines: &'p HashMap<String, i64>,
     /// 現在エラボレート中の logic 名(再帰インスタンス化検出用)
     stack: Vec<String>,
     /// サブインスタンスのノード名を一意化する連番
@@ -661,6 +822,7 @@ impl<'p> Elaborator<'_, 'p> {
         top_level: bool,
         call_line: i32,
         arg_count: usize,
+        param_env: HashMap<String, i64>,
     ) -> RvResult<(Ports, Ports)> {
         if self.stack.iter().any(|n| n == &l.name) {
             self.stack.push(l.name.clone());
@@ -683,8 +845,10 @@ impl<'p> Elaborator<'_, 'p> {
         let mut buses: HashMap<String, Vec<usize>> = HashMap::new();
         let mut inputs: Ports = Vec::new();
         let mut outs: Ports = Vec::new();
-        // 階層インスタンス文(全ノード確定後にまとめて結線する)
-        let mut instances: Vec<(i32, String, String, Vec<String>)> = Vec::new();
+        // 階層インスタンス文(全ノード確定後にまとめて結線する)。
+        // 各要素は (line, output, callee, args, call_params)。call_params はジェネリック幅
+        // の `#(P=expr)` 実引数で、callee の param_env をビルドする際に評価する(Phase 2)。
+        let mut instances: Vec<PendingInstance> = Vec::new();
         // 無名チェーン文(wire 名を介さない直結。全ノード確定後にまとめて構築)。
         // 両端の `Endpoint`(スカラ / バス全体 / レーン / スライス / 連結)を保持する。
         let mut anon_chains: Vec<(i32, Endpoint, Endpoint, Vec<String>)> = Vec::new();
@@ -700,7 +864,8 @@ impl<'p> Elaborator<'_, 'p> {
             };
             // バスポート(`input[n]` / `output[n]`)は n 本のレーンへ展開し buses に登録。
             // 本体では内部バス reg と同じく添字 / バス全体で使える。
-            let shape = if let Some(w) = p.width {
+            let shape = if let Some(we) = &p.width {
+                let w = resolve_width(we, &param_env, self.defines, p.line)?;
                 let mut lanes = Vec::with_capacity(w as usize);
                 for i in 0..w {
                     let id = self
@@ -752,8 +917,15 @@ impl<'p> Elaborator<'_, 'p> {
                     output,
                     callee,
                     args,
+                    params,
                 } => {
-                    instances.push((*line, output.clone(), callee.clone(), args.clone()));
+                    instances.push((
+                        *line,
+                        output.clone(),
+                        callee.clone(),
+                        args.clone(),
+                        params.clone(),
+                    ));
                 }
                 LogicStmt::DeclWire { line, names } => {
                     for n in names {
@@ -775,7 +947,7 @@ impl<'p> Elaborator<'_, 'p> {
                     }
                     // バス reg(`reg[n] a;`): n 本の plain レーン a[0]..a[n-1] を展開する。
                     // バスは純粋な糖衣で、各レーンは独立したスカラ点(circuit 意味論は不変)。
-                    if let Some(w) = width {
+                    if let Some(we) = width {
                         if *qual != Qual::Plain {
                             return fail(
                                 *line,
@@ -788,8 +960,9 @@ impl<'p> Elaborator<'_, 'p> {
                                 "a bus reg cannot have an initializer (drive each lane via a chain)",
                             );
                         }
-                        let mut lanes = Vec::with_capacity(*w as usize);
-                        for i in 0..*w {
+                        let w = resolve_width(we, &param_env, self.defines, *line)?;
+                        let mut lanes = Vec::with_capacity(w as usize);
+                        for i in 0..w {
                             let id = self
                                 .c
                                 .new_node(format!("{}.{}[{}]", prefix, name, i), NodeKind::Plain);
@@ -1091,7 +1264,7 @@ impl<'p> Elaborator<'_, 'p> {
 
         // 階層インスタンスの結線(親ノード <-> サブ logic のポート)。
         // スカラ/バスは PortShape として解決し、レーン対応で結線する(幅整合は厳格)。
-        for (line, output, callee, args) in &instances {
+        for (line, output, callee, args, call_params) in &instances {
             let sub = match self.logics.get(callee) {
                 Some(s) => s,
                 None => return fail(*line, format!("unknown logic: {}", callee)),
@@ -1113,11 +1286,20 @@ impl<'p> Elaborator<'_, 'p> {
                 }
                 arg_refs.push(resolve_parent_ref(a, &scope, &buses, &wire_names, *line)?);
             }
+            // 親 logic の param_env(`param_env` 引数)を caller env として、callee 側 env を作る。
+            let sub_env = build_callee_param_env(
+                callee,
+                &sub.params,
+                call_params,
+                &param_env,
+                self.defines,
+                *line,
+            )?;
             // サブ logic を展開(入力ポートは Plain ノードになる)
             self.counter += 1;
             let sub_prefix = format!("{}/{}#{}", prefix, callee, self.counter);
             let (sub_in, sub_out) =
-                self.elaborate(sub, &sub_prefix, false, *line, args.len())?;
+                self.elaborate(sub, &sub_prefix, false, *line, args.len(), sub_env)?;
             if sub_out.is_empty() {
                 return fail(*line, format!("{} has no output port to bind", callee));
             }
@@ -1651,13 +1833,28 @@ impl<'a> ModuleExec<'a> {
         target: &str,
         callee: &str,
         bind_args: &[String],
+        call_params: &[(String, Expr)],
     ) -> RvResult<()> {
         let prog: &'a Program = self.prog;
         let lit = match prog.logics.get(callee) {
             Some(l) => l,
             None => return fail(line, format!("unknown logic: {}", callee)),
         };
-        let key = format!("{}({})", callee, bind_args.join(","));
+        // sim 側からの呼び出しは caller env(logic ローカル param)を持たない。
+        // 既定値 + `#(...)` 実引数だけで callee の `param_env` を作る。
+        let caller_env: HashMap<String, i64> = HashMap::new();
+        let env = build_callee_param_env(
+            callee,
+            &lit.params,
+            call_params,
+            &caller_env,
+            &prog.defines,
+            line,
+        )?;
+        // インスタンスキャッシュキーには `#(...)` 部分も含める。`#(W=4)` と `#(W=8)` は
+        // 別インスタンス(別ノード群)としてエラボレートする。
+        let param_part = param_env_key(&lit.params, &env);
+        let key = format!("{}{}({})", callee, param_part, bind_args.join(","));
         if !self.insts.contains_key(&key) {
             for a in bind_args {
                 if !self.vars.contains_key(a) && !self.var_buses.contains_key(a) {
@@ -1669,10 +1866,11 @@ impl<'a> ModuleExec<'a> {
                 let mut el = Elaborator {
                     c: &mut self.c,
                     logics: &prog.logics,
+                    defines: &prog.defines,
                     stack: Vec::new(),
                     counter: 0,
                 };
-                el.elaborate(lit, &key, true, line, bind_args.len())?
+                el.elaborate(lit, &key, true, line, bind_args.len(), env)?
             };
             if outputs.is_empty() {
                 return fail(line, format!("{} has no output port to bind", callee));
@@ -1894,11 +2092,15 @@ impl<'a> ModuleExec<'a> {
                 target,
                 callee,
                 bind_args,
+                params,
             } => {
                 if callee == "scan" {
+                    if !params.is_empty() {
+                        return fail(*line, "scan() does not take generic '#(...)' parameters");
+                    }
                     self.do_scan(*line, target, bind_args)?;
                 } else {
-                    self.do_call_bind(*line, target, callee, bind_args)?;
+                    self.do_call_bind(*line, target, callee, bind_args, params)?;
                 }
             }
             SimStmt::WaitTicks { ticks, .. } => {

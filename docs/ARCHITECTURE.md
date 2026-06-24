@@ -231,14 +231,31 @@ reg cmp = cd;  →  back ノード ─┐
 
 ### 4.5 階層インスタンス化
 
-`out = callee(args...)` は `instances` に貯め、**全ノード確定後にまとめて結線** する:
+`out = callee#(P=v, ...)(args...)` は `instances` に貯め、**全ノード確定後にまとめて結線** する:
 
 - サブ logic を `top_level = false` で再帰エラボレート(入力ポートは `Input` でなく `Plain` ノードになる)。
 - 親の引数ノード → サブ入力ポート、サブ出力ポート → 親の出力先を `connect_ports`(減衰なし直結 = エッジ decay 0)で結ぶ。
 - **再帰インスタンス化**(自己・相互の循環)は `stack` で検出してエラー。出力ポートは **ちょうど 1 個**
   (ただしバスでよい)。未接続 output ポートはエラー。
 
-### 4.6 エラボレーションのエラーは「呼び出されて初めて」発火する
+### 4.6 ジェネリック幅 param(`#(...)`)と `param_env`
+
+logic ごとのジェネリック幅(`logic g #(W=4)(input[W] x, ...)`、LANGUAGE.md §8.4)は
+**per-instance のパラメータ環境** をエラボレーションに流すだけで実装している。`elaborate()` は
+`param_env: HashMap<String, i64>` を 1 個受け取り、`Port` / `DeclReg` の `width`(= `WidthExpr`)を
+`resolve_width(we, &param_env, &defines)` で解決する。`WidthExpr::Lit(n)` は parse 時に確定済みの
+即値(従来挙動と一致)、`WidthExpr::Expr(e)` は logic ローカル param を含むため遅延された定数式。
+
+`build_callee_param_env()` が「callee の宣言 param + 既定値 + 呼び出し側の `#(...)` 実引数」を
+突き合わせて環境を組む。実引数の式は **呼び出し側の `param_env`** で eval するので、親 logic の
+param 値が子インスタンスへそのまま流れる(`s = inner#(N=W)(...)`)。
+
+シミュレーションエンジンと意味論は完全に非介入:`#(W=4)` と `#(W=8)` は `do_call_bind` の
+インスタンスキャッシュキー(`param_env_key` を含めた `callee#(W=8)(args)`)が変わるので
+別インスタンスとして展開され、各々独立したノード群を持つ。`var[N]`(module 側)はジェネリック
+対象外で、`DeclVar.width` は parse 時に `i32` へ即時解決する(`WidthExpr` を持たない)。
+
+### 4.7 エラボレーションのエラーは「呼び出されて初めて」発火する
 
 `logic` 単体を書いただけでは展開されない。`module` 内で `v = g(...)` とインスタンス化されて初めて
 `elaborate` が走り、エラーが出る。**logic だけのファイルは `[warning] no module to run` で素通り** する。
@@ -406,7 +423,7 @@ phase 1(出力)と phase 4(期待出力 = 据え置き)の **両方** で `rep_l
   書き換えても期待値 `.txt` は不変で緑のまま → 記法変更・構文糖衣のリグレッション確認に使える。
 - **CLI テスト**: 引数なし/不明オプション/ファイル無しの終了コード、`--time` の stderr 出力。
 - **エラーケーステスト**: `run_source()` でソース文字列を一時ファイル化して叩き、(終了コード, stderr) を
-  検証する。エラボレーションのエラーは module 呼び出しを添えないと発火しない(§4.6)ので注意。
+  検証する。エラボレーションのエラーは module 呼び出しを添えないと発火しない(§4.7)ので注意。
 - **ノード名の `#`**: 内部ノード(`foo.w#i3` 等)は `dump_trace` でスキップされる。`-t` で公開したい点は
   名前に `#` を含めない。`--vcd <file>` の VCD 波形出力(`circuit.rs::dump_vcd`、`Vcd`)も **同じ公開ノード
   基準** で信号を選び、`dump_trace` と並んで `step()` から毎 tick 駆動される。値変化のみを記録し、時刻は

@@ -37,7 +37,7 @@ A plain `cargo build` is all you need.
 - **Write circuits as text.** Lay out components as strings and connect two points with a chain.
 - **Tick-accurate simulation.** Repeater delay, torch inversion, dust attenuation, and max-value merging follow the game's rules. The fixed-point solver converges deterministically and is order-independent.
 - **Verilog-style testbench.** Drive inputs in a `sim` block, advance time with `#init` / `#n` / `#until(cond)` / `wait()`, and observe with `monitor`. `assert` and `expect` let the exit code carry the pass/fail.
-- **Buses and parameter constants.** `reg[N]` bundles lanes and wires them in one line; slicing, concatenation, and bus-to-scalar broadcasting are supported. `param W = 4;` lets one definition serve many widths.
+- **Buses and parameter constants.** `reg[N]` bundles lanes and wires them in one line; slicing, concatenation, and bus-to-scalar broadcasting are supported. `param W = 4;` lets one definition serve many widths, and `logic g #(W=4)(...)` makes the width itself a per-call generic parameter.
 - **Zero dependencies, single binary.** No external crates. `cargo build --release` produces `redv`.
 - **Rust-style caret diagnostics.** Errors and warnings print `--> file:line:col` with the source line and a `^` underline. Syntax errors point at the exact column.
 
@@ -83,6 +83,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/comparator_side.rv` | Comparator side input (subtract and compare) |
 | `examples/repeater_lock.rv` | Repeater lock (`.side` freezes the output) |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses |
+| `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |
 
