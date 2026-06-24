@@ -74,11 +74,67 @@ impl Lexer {
                     len: (self.p - b) as i32,
                 });
             } else if c.is_ascii_digit() {
-                let mut v: i64 = 0;
-                while self.p < self.s.len() && self.s[self.p].is_ascii_digit() {
-                    v = v * 10 + (self.s[self.p] - b'0') as i64;
-                    self.p += 1;
-                }
+                // 接頭辞 `0b` / `0x` の後に最低 1 つの有効な数字が続くときだけ
+                // 2 / 16 進リテラルとして扱う。`0b` 単独や `0xg` はフォールバックして
+                // `0` (Num) + 後続 (Ident) として lex する(`const reg n = 0b;` の
+                // 「強度 0 + ブロック」を従来どおり許すため)。
+                let radix: Option<u32> = if c == b'0' && self.p + 2 < self.s.len() {
+                    let pref = self.s[self.p + 1];
+                    let nxt = self.s[self.p + 2];
+                    if pref == b'b' && (nxt == b'0' || nxt == b'1') {
+                        Some(2)
+                    } else if pref == b'x' && nxt.is_ascii_hexdigit() {
+                        Some(16)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let v: i64 = if let Some(r) = radix {
+                    self.p += 2; // skip "0b" / "0x"
+                    let mut acc: i64 = 0;
+                    while self.p < self.s.len() {
+                        let ch = self.s[self.p];
+                        let d: i64 = if r == 2 {
+                            match ch {
+                                b'0' => 0,
+                                b'1' => 1,
+                                _ => break,
+                            }
+                        } else {
+                            match ch {
+                                b'0'..=b'9' => (ch - b'0') as i64,
+                                b'a'..=b'f' => (ch - b'a' + 10) as i64,
+                                b'A'..=b'F' => (ch - b'A' + 10) as i64,
+                                _ => break,
+                            }
+                        };
+                        acc = acc * r as i64 + d;
+                        self.p += 1;
+                    }
+                    // 2 進リテラル直後の `2`–`9` は typo の可能性が高いので明示的に弾く。
+                    // (16 進は `g`–`z` が来たら自然に Ident 境界になるので静かに止める)
+                    if r == 2 && self.p < self.s.len() && self.s[self.p].is_ascii_digit() {
+                        return fail_at(
+                            ln,
+                            col,
+                            (self.p - b) as i32 + 1,
+                            format!(
+                                "digit '{}' is not valid in a binary literal (0b accepts only 0 or 1)",
+                                self.s[self.p] as char
+                            ),
+                        );
+                    }
+                    acc
+                } else {
+                    let mut acc: i64 = 0;
+                    while self.p < self.s.len() && self.s[self.p].is_ascii_digit() {
+                        acc = acc * 10 + (self.s[self.p] - b'0') as i64;
+                        self.p += 1;
+                    }
+                    acc
+                };
                 out.push(Token {
                     k: Tk::Num,
                     s: String::new(),

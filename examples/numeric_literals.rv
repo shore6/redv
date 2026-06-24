@@ -1,0 +1,38 @@
+/* 2 進 / 16 進整数リテラル (issue #49):
+ *   `0b1010` = 10, `0xf` = 15, `0xff` = 255。値は i64 として保持し、
+ *   従来 10 進が書けた場所 (強度・バス幅・param・`#define`・sim 代入・tick 数)
+ *   すべてで使える。既存の強度ブロック `15b` 等もそのまま動く
+ *   (16 進で書くときは `0xf` と `b` の間を空白で切る: `0xf b`)。
+ */
+#define HI 0b1111                 // 15(#define)
+
+param W = 0x4;                    // バス幅 4(16 進)
+
+logic make_hi(output y)
+{
+    const reg hi = 0xf b;         // 強度 15 ブロック(`15b` と等価)
+    hi - y;
+}
+
+logic notN(input[W] a, output[W] y)
+{
+    a - t - y;
+}
+
+module test_literals()
+{
+    var[W] a, y;
+    var z;
+    sim {
+        a = 0;
+        y = notN(a);
+        z = make_hi();
+        #init
+        a[0] = HI;  a[2] = 0xf;   // a = 0101(レーン 0 と 2 を HIGH)
+        #0b10                     // 2 tick(2 進で書いた)
+        monitor("a[3..0] = %1%1%1%1\n", a[3] / 15, a[2] / 15, a[1] / 15, a[0] / 15);
+        monitor("y[3..0] = %1%1%1%1\n", y[3] / 15, y[2] / 15, y[1] / 15, y[0] / 15);
+        monitor("hi = %\n", z);
+        monitor("0b1010=% 0xff=% 0x10=%\n", 0b1010, 0xff, 0x10);
+    }
+}
