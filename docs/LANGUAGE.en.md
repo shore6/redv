@@ -63,6 +63,26 @@ module test() {
 Connecting components with `-` (the chain statement) is the basis of circuit description (§5.1).
 The `sim` block syntax is covered in §7.
 
+### 1.3 Numeric Literals
+
+Integer literals can be written in decimal, binary, or hexadecimal.
+
+| Form | Examples | Value |
+|---|---|---|
+| Decimal | `10`, `255` | as written |
+| Binary | `0b1010`, `0b1111` | 10, 15 |
+| Hexadecimal | `0xf`, `0xff`, `0x10` | 15, 255, 16 |
+
+All three forms produce the same integer token from the lexer.
+They are interchangeable anywhere an integer is accepted: strengths, bus widths, `param`, `#define`, sim expressions, tick counts, and so on.
+
+When the `0b` / `0x` prefix is not followed by a valid digit (`0b` alone, `0x` alone, or `0xg` where the following byte is not a digit), the literal interpretation is rejected and the input is split into `0` and the rest as separate tokens.
+This split preserves existing forms such as the strength-0 block declaration `const reg n = 0b;`.
+
+To write a strength-15 block in hex, separate `0xf` from `b` with whitespace (`const reg hi = 0xf b;`).
+`0xfb` is lexed as `251` and exceeds the strength range (0–15), producing an error.
+A binary literal followed by a `2`–`9` decimal digit (e.g. `0b12`) is rejected as a typo.
+
 ---
 
 ## 2. Names and Declarators
@@ -987,6 +1007,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/bus_scalar.rv` | Bus-to-scalar wiring: fan-in (MAX merge) and fan-out (broadcast) |
 | `examples/param_notN.rv` | N-bit NOT with width parameterized by a `param` constant |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at 4 and 8 bits as separate instances |
+| `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`): usable in strengths, bus widths, `param`, `#define`, sim assignments, and tick counts (§1.3) |
 
 ### 12.5 Waveform Output
 

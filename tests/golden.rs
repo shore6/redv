@@ -212,6 +212,14 @@ fn bus_slice_concat() {
     run_golden("bus_slice_concat");
 }
 
+/// 2 進 / 16 進整数リテラル `0b1010` / `0xff`(issue #49):
+/// 強度・バス幅・param・#define・sim 代入・tick 数など、従来 10 進が書けた
+/// 場所すべてで使えること。
+#[test]
+fn numeric_literals() {
+    run_golden("numeric_literals");
+}
+
 #[test]
 fn bus_scalar() {
     run_golden("bus_scalar");
