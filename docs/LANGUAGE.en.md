@@ -743,7 +743,48 @@ Resolution rules:
 - Disallowed in a const-expr: `$time`, bus indices, comparison and logical operators, undefined names
 - In sim expressions, a same-named `var` shadows the `param`. Only when no `var` matches does it fall through to `param`
 
-Per-logic generic widths (`logic adder #(W=4)(...)`) are future work.
+### 8.4 Per-Logic Generic Widths
+
+The form `logic name #(P=default, ...)(...)` declares **generic width parameters** on a logic.
+Each call can pick its own values, so a single definition can be instantiated at multiple widths.
+
+```rv
+logic notN #(W=4)(input[W] x, output[W] y)
+{
+    reg[W] s;
+    x - s;
+    s - t - y;
+}
+
+module m()
+{
+    var[4] x4, y4;
+    var[8] x8, y8;
+    sim {
+        x4 = 0;  x8 = 0;
+        y4 = notN(x4);            // Expanded with the default W=4
+        y8 = notN#(W=8)(x8);      // Expanded as a separate instance with W=8
+        #init
+    }
+}
+```
+
+Declaration and call rules:
+
+- Declaration: write `#(P=expr, Q, ...)` between the logic name and the port list. Each param may carry an optional default after `=`
+- Defaults are evaluated as ordinary `param`-style const expressions at parse time. They cannot reference other generic params
+- Call site: write `callee#(P=expr, ...)(args)`. Omit `#(...)` to fall back to defaults for every param
+- Actual arguments are evaluated in the caller scope and may reference top-level `param` / numeric `#define`, **plus** the caller logic's own generic params (so values pass through hierarchies)
+- It is an error to instantiate a param that has neither a default nor an actual argument
+
+Inside the logic body, declared params can be used in width expressions such as `input[W]` or `reg[W+1]`.
+Expressions that reference a generic param are deferred to instantiation time and resolved per instance.
+Width expressions that do not reference any generic param (`input[4]`, `reg[5]`) are still resolved at parse time and behave exactly as before.
+
+Instance identity is the full call key: `callee` + `#(...)` + the argument list.
+`g#(W=4)(x)` and `g#(W=8)(x)` are separate instances with their own node groups, while calling `g#(W=4)(x)` twice reuses the same instance.
+
+Module-side `var[N]` is **not** generic; it is still resolved at parse time using `param` / `#define`.
 
 ---
 
@@ -945,6 +986,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/bus_slice_concat.rv` | Slice `a[hi:lo]` (bit reversal) and concatenation `{a, b}` (left rotate) |
 | `examples/bus_scalar.rv` | Bus-to-scalar wiring: fan-in (MAX merge) and fan-out (broadcast) |
 | `examples/param_notN.rv` | N-bit NOT with width parameterized by a `param` constant |
+| `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at 4 and 8 bits as separate instances |
 
 ### 12.5 Waveform Output
 

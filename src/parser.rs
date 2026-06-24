@@ -6,7 +6,7 @@
 use crate::ast::*;
 use crate::diag::{fail, fail_at, warn, RvResult};
 use crate::lexer::{Lexer, Tk, Token};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 pub fn dir_of(path: &str) -> String {
@@ -44,6 +44,11 @@ pub struct Parser {
     /// パラメータ定数表(`param` / 数値 `#define`)。幅 `[expr]` と式の解決に使う
     /// **パース時** のミラー。確定値は `prog.defines` 側にも書く(interp が読む)。
     consts: HashMap<String, i64>,
+    /// 現在パース中の logic のジェネリック幅 param 名(Phase 2)。
+    /// この集合に含まれる名前を参照する `[expr]` は `WidthExpr::Expr` で遅延し、
+    /// elaborate 時に呼び出しごとの `param_env` で解決する。空なら logic 内でも従来通り
+    /// 即時 `WidthExpr::Lit` に簡約(後方互換)。
+    logic_params: HashSet<String>,
 }
 
 impl Parser {
@@ -53,6 +58,7 @@ impl Parser {
             i: 0,
             base_dir,
             consts: HashMap::new(),
+            logic_params: HashSet::new(),
         }
     }
 
@@ -285,7 +291,8 @@ impl Parser {
     }
 
     /// バス幅 `[<定数式>]`(省略可)を解析する。`[` が無ければ `None`。
-    /// `what` は診断用のラベル(例: "reg[")。
+    /// `what` は診断用のラベル(例: "var[")。`param` / 数値 `#define` のみ参照可で、
+    /// 値はパース時に i32 へ即時解決する(`var[N]` 等、ジェネリック幅 param 非対応コンテキスト用)。
     fn parse_width(&mut self, what: &str) -> RvResult<Option<i32>> {
         if !self.is_punct("[") {
             return Ok(None);
@@ -304,6 +311,84 @@ impl Parser {
         Ok(Some(n as i32))
     }
 
+    /// 同上、ただし **logic 本体内** の幅式用(`input[W]` / `reg[W+1]` 等)。
+    /// 現在の logic に宣言されたジェネリック param(`self.logic_params`)を参照する式は
+    /// `WidthExpr::Expr` のまま残し、elaborate 時に呼び出しごとの環境で解決する。
+    /// param を参照しない式は `WidthExpr::Lit(n)` へ即時簡約する(従来挙動と一致)。
+    fn parse_width_expr(&mut self, what: &str) -> RvResult<Option<WidthExpr>> {
+        if !self.is_punct("[") {
+            return Ok(None);
+        }
+        let ln = self.cur().line;
+        self.i += 1;
+        if self.is_punct("]") {
+            return fail(ln, format!("expected a bus width after '{}'", what));
+        }
+        let e = self.parse_expr()?;
+        self.expect_punct("]")?;
+        // logic param を含まなければ即時簡約(回帰しないように Lit に倒す)。
+        if self.logic_params.is_empty() || !Self::expr_refs_logic_param(&e, &self.logic_params) {
+            let n = self.eval_const(&e)?;
+            if n < 1 {
+                return fail(ln, format!("bus width must be >= 1 (got {})", n));
+            }
+            return Ok(Some(WidthExpr::Lit(n as i32)));
+        }
+        Ok(Some(WidthExpr::Expr(e)))
+    }
+
+    /// 式 `e` が `params` 内の名前を参照しているか(再帰)。
+    fn expr_refs_logic_param(e: &Expr, params: &HashSet<String>) -> bool {
+        match e {
+            Expr::Num { .. } | Expr::Time { .. } => false,
+            Expr::Var { name, index, .. } => {
+                if params.contains(name) {
+                    return true;
+                }
+                if let Some(ix) = index {
+                    Self::expr_refs_logic_param(ix, params)
+                } else {
+                    false
+                }
+            }
+            Expr::Un { a, .. } => Self::expr_refs_logic_param(a, params),
+            Expr::Bin { a, b, .. } => {
+                Self::expr_refs_logic_param(a, params) || Self::expr_refs_logic_param(b, params)
+            }
+        }
+    }
+
+    /// `#( P=v, Q=w, ... )` — ジェネリック幅 param の **実引数列** を解析。
+    /// 識別子直後の `#` を消費して `(...)` を読む。`#(` が来ていなければ空の Vec。
+    /// 値式はそのまま AST に残し、elaborate 時に評価する(`self.consts` を流す)。
+    fn parse_logic_call_params(&mut self) -> RvResult<Vec<(String, Expr)>> {
+        if !self.is_punct("#") {
+            return Ok(Vec::new());
+        }
+        self.i += 1;
+        self.expect_punct("(")?;
+        let mut out: Vec<(String, Expr)> = Vec::new();
+        if !self.is_punct(")") {
+            loop {
+                let ln = self.cur().line;
+                let name = self.expect_ident("logic parameter name")?;
+                if out.iter().any(|(n, _)| n == &name) {
+                    return fail(ln, format!("duplicate logic parameter '{}' in '#(...)'", name));
+                }
+                self.expect_punct("=")?;
+                let e = self.parse_expr()?;
+                out.push((name, e));
+                if self.is_punct(",") {
+                    self.i += 1;
+                    continue;
+                }
+                break;
+            }
+        }
+        self.expect_punct(")")?;
+        Ok(out)
+    }
+
     // ---- logic -------------------------------------------------------------
 
     fn parse_logic(&mut self, prog: &mut Program) -> RvResult<()> {
@@ -312,6 +397,56 @@ impl Parser {
         if prog.logics.contains_key(&name) {
             return fail(line, format!("duplicate logic definition: {}", name));
         }
+        // ジェネリック幅 param 宣言 `#(W=4, X)`(Phase 2)。logic 名直後・ポート列の前にだけ書ける。
+        // 各 param は名前と省略可能な既定値(`= <定数式>`、`self.consts` で即時評価)。
+        let mut params: Vec<(String, Option<i64>)> = Vec::new();
+        let mut local_params: HashSet<String> = HashSet::new();
+        if self.is_punct("#") {
+            self.i += 1;
+            self.expect_punct("(")?;
+            if !self.is_punct(")") {
+                loop {
+                    let ln = self.cur().line;
+                    let pname = self.expect_ident("logic parameter name")?;
+                    if local_params.contains(&pname) {
+                        return fail(
+                            ln,
+                            format!("duplicate logic parameter '{}' in '#(...)'", pname),
+                        );
+                    }
+                    let default = if self.is_punct("=") {
+                        self.i += 1;
+                        let e = self.parse_expr()?;
+                        Some(self.eval_const(&e)?)
+                    } else {
+                        None
+                    };
+                    local_params.insert(pname.clone());
+                    params.push((pname, default));
+                    if self.is_punct(",") {
+                        self.i += 1;
+                        continue;
+                    }
+                    break;
+                }
+            }
+            self.expect_punct(")")?;
+        }
+        // ポート列・本体を `self.logic_params` のスコープでパースする(本体の `[expr]` が
+        // ローカル param を参照したとき遅延式へ落とすため)。終端で必ず clear する。
+        self.logic_params = local_params;
+        let result = self.parse_logic_body(line, name, params, prog);
+        self.logic_params.clear();
+        result
+    }
+
+    fn parse_logic_body(
+        &mut self,
+        line: i32,
+        name: String,
+        params: Vec<(String, Option<i64>)>,
+        prog: &mut Program,
+    ) -> RvResult<()> {
         let mut ports = Vec::new();
         self.expect_punct("(")?;
         if !self.is_punct(")") {
@@ -322,8 +457,8 @@ impl Parser {
                     return fail(pl, "port must start with 'input' or 'output'");
                 }
                 // バスポート `input[N]` / `output[N]`(`[N]` は input/output と名前の間)。
-                // 幅はリテラルのほか param 定数や定数式(`input[W]` / `input[W+1]`)を許可。
-                let width = self.parse_width(&format!("{}[", pk))?;
+                // 幅はリテラル・`param` 定数・定数式・logic ローカル param(Phase 2)を許可。
+                let width = self.parse_width_expr(&format!("{}[", pk))?;
                 let pname = self.expect_ident("port name")?;
                 self.check_decl_name(&pname, "port", pl)?;
                 ports.push(Port {
@@ -353,6 +488,7 @@ impl Parser {
                 line,
                 ports,
                 stmts,
+                params,
             },
         );
         Ok(())
@@ -387,8 +523,8 @@ impl Parser {
         if self.is_ident("reg") {
             self.i += 1;
             // バス幅 `reg[N]`(`[N]` は reg と名前の間に置き、宣言列全体に適用)。
-            // 幅はリテラルのほか param 定数や定数式(`reg[W]` / `reg[W+1]`)を許可。
-            let width = self.parse_width("reg[")?;
+            // 幅はリテラル・`param` 定数・定数式・logic ローカル param(Phase 2)を許可。
+            let width = self.parse_width_expr("reg[")?;
             loop {
                 let name = self.expect_ident("reg name")?;
                 self.check_decl_name(&name, "reg", ln)?;
@@ -417,7 +553,7 @@ impl Parser {
                     name,
                     qual,
                     init,
-                    width,
+                    width: width.clone(),
                 });
                 if self.is_punct(",") {
                     self.i += 1;
@@ -499,10 +635,16 @@ impl Parser {
             }
         };
         self.expect_punct("=")?;
-        // 階層インスタンス化:  output = callee(args...)
-        if self.cur().k == Tk::Ident && self.peek(1).k == Tk::Punct && self.peek(1).s == "(" {
+        // 階層インスタンス化:  output = callee#(P=v, ...)(args...)
+        // ジェネリック幅 param は `#(...)` で実引数を渡す(Phase 2)。`#(` 部分は省略可。
+        if self.cur().k == Tk::Ident
+            && self.peek(1).k == Tk::Punct
+            && (self.peek(1).s == "(" || self.peek(1).s == "#")
+        {
             let callee = self.cur().s.clone();
-            self.i += 2; // ident '('
+            self.i += 1; // skip callee
+            let call_params = self.parse_logic_call_params()?; // `#(...)` があれば消費
+            self.expect_punct("(")?;
             let mut args = Vec::new();
             if !self.is_punct(")") {
                 loop {
@@ -532,6 +674,7 @@ impl Parser {
                 output: target,
                 callee,
                 args,
+                params: call_params,
             });
             return Ok(());
         }
@@ -932,13 +1075,16 @@ impl Parser {
             }
             if self.peek(1).k == Tk::Punct && self.peek(1).s == "=" {
                 self.i += 2;
-                // CallBind?  target = callee(args...)
+                // CallBind?  target = callee#(P=v, ...)(args...)
+                // ジェネリック幅 param は `#(...)` で実引数を渡す(Phase 2)。`#(` は省略可。
                 if self.cur().k == Tk::Ident
                     && self.peek(1).k == Tk::Punct
-                    && self.peek(1).s == "("
+                    && (self.peek(1).s == "(" || self.peek(1).s == "#")
                 {
                     let callee = self.cur().s.clone();
-                    self.i += 2; // ident '('
+                    self.i += 1; // skip callee
+                    let call_params = self.parse_logic_call_params()?; // `#(...)` があれば消費
+                    self.expect_punct("(")?;
                     let mut bind_args = Vec::new();
                     if !self.is_punct(")") {
                         loop {
@@ -969,6 +1115,7 @@ impl Parser {
                         target: name,
                         callee,
                         bind_args,
+                        params: call_params,
                     });
                 }
                 // plain Assign(`~ width` を付けるとパルス代入)

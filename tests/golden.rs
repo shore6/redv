@@ -199,6 +199,13 @@ fn param_not_n() {
     run_golden("param_notN");
 }
 
+/// logic ごとのジェネリック幅 `#(W=4)`(issue #41 Phase 2):
+/// 同じ logic 定義を呼び出しごとに異なる幅で別インスタンスへ展開する。
+#[test]
+fn generic_logic_width() {
+    run_golden("generic_logic_width");
+}
+
 /// バスのスライス `a[hi:lo]`(ビット反転)と連結 `{a, b}`(左ローテート)(issue #43)。
 #[test]
 fn bus_slice_concat() {
@@ -774,6 +781,95 @@ fn param_misuse_is_error() {
         ),
     ] {
         let (code, stderr) = run_source(&format!("parambad_{tag}"), src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
+    }
+}
+
+/// logic ごとのジェネリック幅 `#(W=4)` の正常系(issue #41 Phase 2):
+/// 既定値のみ・実引数あり・複数 param・logic 内 `reg[W]`・階層パススルーの 5 ケース。
+#[test]
+fn generic_logic_width_is_accepted() {
+    for (tag, src) in [
+        // 既定値のみで呼び出し(`#(...)` 省略 = `#(W=4)`)
+        (
+            "default_only",
+            "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
+             module m(){ var[4] x,y; sim{ x=0; y=g(x); #init } }",
+        ),
+        // 実引数で別幅を指定
+        (
+            "explicit_arg",
+            "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
+             module m(){ var[8] x,y; sim{ x=0; y=g#(W=8)(x); #init } }",
+        ),
+        // 複数 param
+        (
+            "multi_param",
+            "logic g #(W=4, K=2)(input[W] x, output[W] y){ reg[W] s; x-s; s-t-y; }\n\
+             module m(){ var[8] x,y; sim{ x=0; y=g#(W=8, K=4)(x); #init } }",
+        ),
+        // logic 内の `reg[W+1]` などの派生幅
+        (
+            "derived_reg_width",
+            "logic g #(W=4)(input[W] x, output[W] y){ reg[W] s; x-s; s-t-y; }\n\
+             module m(){ var[4] x,y; sim{ x=0; y=g(x); #init } }",
+        ),
+        // 階層: 外側 param を内側 param に渡す
+        (
+            "passthrough",
+            "logic inner #(N=2)(input[N] x, output[N] y){ x-t-y; }\n\
+             logic outer #(W=4)(input[W] a, output[W] z){ z = inner#(N=W)(a); }\n\
+             module m(){ var[8] a,z; sim{ a=0; z = outer#(W=8)(a); #init } }",
+        ),
+    ] {
+        let (code, stderr) = run_source(&format!("genericw_{tag}"), src);
+        assert_eq!(code, Some(0), "{tag}: expected success, stderr:\n{stderr}");
+    }
+}
+
+/// logic ごとのジェネリック幅の誤用は **エラー**(issue #41 Phase 2):
+/// 未知 param・既定値なしの未指定・重複・幅 0 / 負の各ケースを検査する。
+#[test]
+fn generic_logic_width_is_error() {
+    for (tag, src, want) in [
+        // 呼び出し側に logic に無い param 名
+        (
+            "unknown_param",
+            "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
+             module m(){ var[4] x,y; sim{ x=0; y=g#(X=2)(x); #init } }",
+            "has no parameter 'X'",
+        ),
+        // 既定値なし、呼び出し側でも未指定
+        (
+            "missing_required_param",
+            "logic g #(W)(input[W] x, output[W] y){ x-t-y; }\n\
+             module m(){ var[4] x,y; sim{ x=0; y=g(x); #init } }",
+            "requires parameter 'W'",
+        ),
+        // 呼び出し側の `#(...)` で param 重複
+        (
+            "dup_param_at_call",
+            "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
+             module m(){ var[4] x,y; sim{ x=0; y=g#(W=4, W=8)(x); #init } }",
+            "duplicate logic parameter 'W'",
+        ),
+        // 宣言側の `#(...)` で param 重複
+        (
+            "dup_param_at_decl",
+            "logic g #(W=4, W=8)(input[W] x, output[W] y){ x-t-y; }\n\
+             module m(){ var[4] x,y; sim{ x=0; y=g(x); #init } }",
+            "duplicate logic parameter 'W'",
+        ),
+        // 実引数が 0 幅
+        (
+            "zero_width",
+            "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
+             module m(){ var[4] x,y; sim{ x=0; y=g#(W=0)(x); #init } }",
+            "bus width must be >= 1",
+        ),
+    ] {
+        let (code, stderr) = run_source(&format!("genericwbad_{tag}"), src);
         assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
         assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }
