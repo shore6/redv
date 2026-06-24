@@ -1,0 +1,26 @@
+/*
+ * --json モード(issue #49)。
+ *
+ * `redv --json file.rv` で monitor / assert / 警告を改行区切り JSON(JSONL)
+ * として stderr / stdout に出力する。CI 連携や回帰比較で stdout を構造化
+ * データとして取り回せる。
+ *
+ * 本ソース自体は通常モードでも実行でき(`redv file.rv`)、その場合は従来どおり
+ * `monitor()` の整形済み文字列が stdout に出る。--json モードでは同じ起動を
+ * `{"time":N,"values":[...],"fmt":"..."}` の JSONL に置き換える。
+ */
+
+logic not_gate(input x, output y) { x-t-y; }
+
+module test() {
+    var x, y;
+    sim {
+        x = 0;
+        y = not_gate(x);
+        #init
+        ?monitor("t=% x=% y=%\n", $time, x, y);
+        x = 15; #2
+        x = 0;  #2
+        expect(y, 15);              // x=0 が 2 tick 経って torch が再点灯
+    }
+}

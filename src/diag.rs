@@ -63,6 +63,7 @@ struct Source {
 }
 
 static SOURCE: OnceLock<Source> = OnceLock::new();
+static JSON_MODE: OnceLock<bool> = OnceLock::new();
 
 /// 診断のキャレット表示で引くソースを登録する(字句解析前に 1 回)。
 pub fn set_source(file: &str, src: &str) {
@@ -72,14 +73,69 @@ pub fn set_source(file: &str, src: &str) {
     });
 }
 
-/// エラーを Rust 風のキャレット診断で stderr に出す(main の終了処理から呼ぶ)。
-pub fn report_error(e: &RvError) {
-    render("error", e.line, e.col, e.len, &e.msg);
+/// `--json` モードを有効化する(main から起動時に 1 回)。
+/// JSON モードでは `warn` / `report_error` / monitor / assert / expect を
+/// 改行区切り JSON(JSONL)で出す。
+pub fn set_json_mode() {
+    let _ = JSON_MODE.set(true);
 }
 
-/// stderr へ警告を出力する(エラーと同じキャレット表示)。
+/// JSON モードかどうか。interp 等が出力経路を分岐するのに使う。
+pub fn is_json_mode() -> bool {
+    *JSON_MODE.get().unwrap_or(&false)
+}
+
+/// 文字列を JSON の文字列リテラルとして `out` に追記する(両端の `"` 付き)。
+/// 制御文字は `\uXXXX` でエスケープ(LF/CR/Tab は短縮形)。
+pub fn json_escape_into(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// エラーを Rust 風のキャレット診断(または JSON モードでは JSONL)で stderr に出す。
+pub fn report_error(e: &RvError) {
+    if is_json_mode() {
+        emit_json_diag("error", e.line, &e.msg);
+    } else {
+        render("error", e.line, e.col, e.len, &e.msg);
+    }
+}
+
+/// stderr へ警告を出力する(キャレット表示。JSON モードでは JSONL)。
 pub fn warn(line: i32, msg: impl AsRef<str>) {
-    render("warning", line, 0, 0, msg.as_ref());
+    if is_json_mode() {
+        emit_json_diag("warning", line, msg.as_ref());
+    } else {
+        render("warning", line, 0, 0, msg.as_ref());
+    }
+}
+
+fn emit_json_diag(kind: &str, line: i32, msg: &str) {
+    let mut s = String::new();
+    s.push_str("{\"kind\":");
+    json_escape_into(kind, &mut s);
+    if line > 0 {
+        use std::fmt::Write;
+        let _ = write!(s, ",\"line\":{}", line);
+    }
+    s.push_str(",\"msg\":");
+    json_escape_into(msg, &mut s);
+    s.push('}');
+    eprintln!("{}", s);
 }
 
 /// 文字列 `s` の表示上の桁数(タブは 1 桁、その他は 1 文字 1 桁で数える簡易版)。

@@ -8,7 +8,7 @@
 
 use crate::ast::*;
 use crate::circuit::{Circuit, Config, NodeKind, SeqKind, Vcd};
-use crate::diag::{fail, warn, RvResult};
+use crate::diag::{fail, is_json_mode, json_escape_into, warn, RvResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -1375,6 +1375,9 @@ pub struct ModuleExec<'a> {
     assert_total: i64,
     /// 失敗した `assert` / `expect` の数。1 つ以上なら非ゼロ終了。
     assert_failed: i64,
+    /// `--json` モード + 複数 module のとき、各 JSON イベントに `"module"` フィールドを足す。
+    /// 単一 module のときは省略(出力をすっきりさせる)。
+    many_modules: bool,
 }
 
 impl<'a> ModuleExec<'a> {
@@ -1384,6 +1387,7 @@ impl<'a> ModuleExec<'a> {
         cfg: Config,
         trace: bool,
         vcd: Option<Vcd>,
+        many_modules: bool,
     ) -> Self {
         ModuleExec {
             prog,
@@ -1401,6 +1405,7 @@ impl<'a> ModuleExec<'a> {
             sim_dur: Duration::ZERO,
             assert_total: 0,
             assert_failed: 0,
+            many_modules,
         }
     }
 
@@ -1708,6 +1713,10 @@ impl<'a> ModuleExec<'a> {
         for a in &call.args {
             av.push(self.eval_e(a)?);
         }
+        if is_json_mode() {
+            self.emit_monitor_json(&call.fmt, &av);
+            return Ok(());
+        }
         let f: Vec<char> = call.fmt.chars().collect();
         let mut out = String::new();
         let mut ai = 0usize;
@@ -1768,11 +1777,18 @@ impl<'a> ModuleExec<'a> {
         self.assert_total += 1;
         if v == 0 {
             self.assert_failed += 1;
-            eprintln!(
-                "[assert] line {}: assertion failed: {}",
-                line,
-                expr_to_string(&call.args[0])
-            );
+            let expr = expr_to_string(&call.args[0]);
+            if is_json_mode() {
+                let mut s = String::from("{\"kind\":\"assert\"");
+                self.json_append_module(&mut s);
+                use std::fmt::Write;
+                let _ = write!(s, ",\"line\":{},\"expr\":", line);
+                json_escape_into(&expr, &mut s);
+                s.push('}');
+                eprintln!("{}", s);
+            } else {
+                eprintln!("[assert] line {}: assertion failed: {}", line, expr);
+            }
         }
         Ok(())
     }
@@ -1788,15 +1804,67 @@ impl<'a> ModuleExec<'a> {
         self.assert_total += 1;
         if actual != expected {
             self.assert_failed += 1;
-            eprintln!(
-                "[assert] line {}: expect failed: {} = {}, expected {}",
-                line,
-                expr_to_string(&call.args[0]),
-                actual,
-                expected
-            );
+            let expr = expr_to_string(&call.args[0]);
+            if is_json_mode() {
+                let mut s = String::from("{\"kind\":\"expect\"");
+                self.json_append_module(&mut s);
+                use std::fmt::Write;
+                let _ = write!(
+                    s,
+                    ",\"line\":{},\"expr\":",
+                    line
+                );
+                json_escape_into(&expr, &mut s);
+                let _ = write!(s, ",\"actual\":{},\"expected\":{}", actual, expected);
+                s.push('}');
+                eprintln!("{}", s);
+            } else {
+                eprintln!(
+                    "[assert] line {}: expect failed: {} = {}, expected {}",
+                    line,
+                    expr,
+                    actual,
+                    expected
+                );
+            }
         }
         Ok(())
+    }
+
+    /// 1 件の `?monitor` / `monitor` を JSONL に出力する。
+    fn emit_monitor_json(&self, fmt: &str, values: &[i64]) {
+        let mut s = String::from("{");
+        let mut need_comma = false;
+        if self.many_modules {
+            s.push_str("\"module\":");
+            json_escape_into(&self.m.name, &mut s);
+            need_comma = true;
+        }
+        use std::fmt::Write;
+        if need_comma {
+            s.push(',');
+        }
+        let _ = write!(s, "\"time\":{},\"values\":[", self.sim_time);
+        for (i, v) in values.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(s, "{}", v);
+        }
+        s.push_str("],\"fmt\":");
+        json_escape_into(fmt, &mut s);
+        s.push('}');
+        println!("{}", s);
+        std::io::stdout().flush().ok();
+    }
+
+    /// 多モジュール JSON 出力時の `"module":"..."` 接頭辞を `out` に append する
+    /// (頭の `,` 付き)。単一モジュールなら何もしない。
+    fn json_append_module(&self, out: &mut String) {
+        if self.many_modules {
+            out.push_str(",\"module\":");
+            json_escape_into(&self.m.name, out);
+        }
     }
 
     fn fire_monitors(&mut self) -> RvResult<()> {
@@ -2309,7 +2377,9 @@ pub fn run_program(prog: &Program, trace: bool, vcd: Option<&str>) -> RvResult<R
     let mut assert_total = 0i64;
     let mut assert_failed = 0i64;
     for m in &prog.modules {
-        if many {
+        // JSON モードでは `=== module X ===` ヘッダを出さない(JSONL の純度を保つ)。
+        // 代わりに各 monitor イベントに `"module"` フィールドが乗る。
+        if many && !is_json_mode() {
             println!("=== module {} ===", m.name);
         }
         let vcd_sink = match vcd {
@@ -2322,20 +2392,35 @@ pub fn run_program(prog: &Program, trace: bool, vcd: Option<&str>) -> RvResult<R
             }
             None => None,
         };
-        let mut ex = ModuleExec::new(prog, m, cfg, trace, vcd_sink);
+        let mut ex = ModuleExec::new(prog, m, cfg, trace, vcd_sink, many);
         ex.run()?;
         timings.sim += ex.sim_dur;
         assert_total += ex.assert_total;
         assert_failed += ex.assert_failed;
     }
     if assert_total > 0 {
-        if assert_failed > 0 {
-            return fail(
-                0,
-                format!("assertions: {} of {} failed", assert_failed, assert_total),
+        if is_json_mode() {
+            eprintln!(
+                "{{\"kind\":\"summary\",\"total\":{},\"failed\":{}}}",
+                assert_total, assert_failed
             );
+            if assert_failed > 0 {
+                // 終了コードは非ゼロにしたいが診断は既に出したので、`line: 0` の簡易エラーで返す。
+                // JSON モードでは report_error が同じ kind/msg の JSONL を出す。
+                return fail(
+                    0,
+                    format!("assertions: {} of {} failed", assert_failed, assert_total),
+                );
+            }
+        } else {
+            if assert_failed > 0 {
+                return fail(
+                    0,
+                    format!("assertions: {} of {} failed", assert_failed, assert_total),
+                );
+            }
+            eprintln!("[assert] {} assertion(s), all passed", assert_total);
         }
-        eprintln!("[assert] {} assertion(s), all passed", assert_total);
     }
     Ok(timings)
 }

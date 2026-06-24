@@ -720,6 +720,19 @@ EOF(入力切れ)や非数値はエラーとなる。
 
 数値の `#define` はバス幅や sim 式から名前で参照できる(`param` と同じ表に入る、§8.3)。
 
+値は `param` と同じ定数式を受理する。
+リテラル、既出の `#define` / `param`、`+ - * / %`、単項 `-` / `!`、括弧を組み合わせられる。
+
+```rv
+#define W 4
+#define N (W * 2)              // 算術:8
+#define HALF (N / 2)           // ネスト:4
+#define ONES (0b1111)          // 2 進 / 16 進リテラルとの混在(§1.3)
+```
+
+`MODE` のみは将来のモード切替え用の予約名で、識別子値だけを受理する(`element` 以外は警告)。
+未定義の名前を参照したり、ゼロ除算するとエラーとなる。
+
 ### 8.2 `#include`
 
 ```rv
@@ -1003,9 +1016,11 @@ fan-in や fan-out(§6.4)はこの有向モデル上で「複数点を 1 点へ 
 | `examples/param_notN.rv` | param 定数で幅をパラメータ化した N ビット NOT |
 | `examples/generic_logic_width.rv` | logic ごとのジェネリック幅 `#(W=4)`:同じ定義を 4 / 8 ビットで別インスタンス展開 |
 | `examples/numeric_literals.rv` | 2 進 / 16 進整数リテラル(`0b1010` / `0xff`):強度、バス幅、param、`#define`、sim 代入、tick 数すべてで使える(§1.3) |
+| `examples/define_expr.rv` | `#define` の値を定数式(`(W*2)` 等)で書く(§8.1) |
 
-### 12.5 波形出力
+### 12.5 波形出力 / 構造化出力
 
 | ファイル | 内容 |
 |---|---|
 | `examples/vcd_demo.rv` | `--vcd` で波形を VCD 出力するデモ(トーチ反転 + リピータ遅延) |
+| `examples/json_output.rv` | `--json` で monitor / assert / 警告を JSONL として出力するデモ |

@@ -906,6 +906,127 @@ fn monitor_fmt_bare_and_width_is_accepted() {
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
+/// `#define NAME <定数式>` は param と同じ式を受理する(issue #49):
+/// 算術 `(W*2)` / ネスト `(N/2)` / 0b・0x リテラルとの混在ができる。
+#[test]
+fn define_expr() {
+    run_golden("define_expr");
+}
+
+/// `#define BAD UNKNOWN_NAME` は未定義参照でエラー(issue #49)。
+#[test]
+fn define_expr_unknown_const_is_error() {
+    let src = "#define BAD UNKNOWN\nmodule m(){ var a; sim{ a=0; } }";
+    let (code, stderr) = run_source("define_unknown", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(stderr.contains("unknown constant"), "unexpected stderr:\n{stderr}");
+}
+
+/// `#define MODE` は引き続き ident のみ受理する(将来のモード切替え用予約名, issue #49)。
+#[test]
+fn define_mode_keeps_ident_path() {
+    // 'element' は受理、'logic' は警告だが続行
+    let src = "#define MODE element\nmodule m(){ var a; sim{ a=0; } }";
+    let (code, stderr) = run_source("define_mode_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+    assert!(stderr.is_empty(), "no warning expected, stderr:\n{stderr}");
+
+    let src = "#define MODE logic\nmodule m(){ var a; sim{ a=0; } }";
+    let (code, stderr) = run_source("define_mode_warn", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+    assert!(stderr.contains("MODE 'logic'"), "unexpected stderr:\n{stderr}");
+}
+
+/// `--json` モード(issue #49): monitor を JSONL `{"time":N,"values":[...],"fmt":"..."}`
+/// で stdout に出す。同一ソースの通常モード出力との対称比較で挙動を固定する。
+#[test]
+fn json_output_text_mode() {
+    // ?monitor + expect の通常モード(整形済み文字列)
+    run_golden("json_output");
+}
+
+#[test]
+fn json_output_json_mode() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let rv = format!("{manifest}/examples/json_output.rv");
+    let expected_path = format!("{manifest}/tests/expected/json_output.jsonl");
+    let expected =
+        std::fs::read(&expected_path).unwrap_or_else(|e| panic!("read {expected_path}: {e}"));
+    let out = Command::new(bin())
+        .arg("--json")
+        .arg(&rv)
+        .output()
+        .expect("spawn redv");
+    assert!(
+        out.status.success(),
+        "json_output --json: exit {:?}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // CRLF を取り除いて LF で比較(Windows でも安定)。
+    let strip_cr = |v: &[u8]| -> Vec<u8> { v.iter().copied().filter(|&b| b != b'\r').collect() };
+    let got = strip_cr(&out.stdout);
+    let expected = strip_cr(&expected);
+    if got != expected {
+        panic!(
+            "json_output --json: stdout mismatch\n--- expected ---\n{}\n--- got ---\n{}",
+            String::from_utf8_lossy(&expected),
+            String::from_utf8_lossy(&got)
+        );
+    }
+}
+
+/// `--json` モードで assert/expect の失敗を JSONL で stderr に出す(issue #49)。
+#[test]
+fn json_mode_emits_assert_failure_jsonl() {
+    let src = "module m(){ var a; sim{ a=0; assert(a>0); expect(a, 7); } }";
+    let path = std::env::temp_dir().join("redv_test_json_assert.rv");
+    std::fs::write(&path, src).expect("write tmp rv");
+    let out = Command::new(bin())
+        .arg("--json")
+        .arg(&path)
+        .output()
+        .expect("spawn redv");
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(out.status.code(), Some(1), "expected failure");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("\"kind\":\"assert\"") && stderr.contains("\"expr\":\"(a > 0)\""),
+        "missing assert JSON, stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("\"kind\":\"expect\"")
+            && stderr.contains("\"actual\":0")
+            && stderr.contains("\"expected\":7"),
+        "missing expect JSON, stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("\"kind\":\"summary\"") && stderr.contains("\"failed\":2"),
+        "missing summary JSON, stderr:\n{stderr}"
+    );
+}
+
+/// `--json` モードで warning を JSONL で出す(issue #49)。
+#[test]
+fn json_mode_emits_warning_jsonl() {
+    let src = "logic g(input x, output y){ x-t-y; }\n\
+               module m(){ var a,b; sim{ a=999; b=g(a); #init } }";
+    let path = std::env::temp_dir().join("redv_test_json_warn.rv");
+    std::fs::write(&path, src).expect("write tmp rv");
+    let out = Command::new(bin())
+        .arg("--json")
+        .arg(&path)
+        .output()
+        .expect("spawn redv");
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(out.status.code(), Some(0), "expected success");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("\"kind\":\"warning\"") && stderr.contains("\"msg\":"),
+        "missing warning JSON, stderr:\n{stderr}"
+    );
+}
+
 /// 旧 `dx`(十字ダスト)は廃止(issue #66)。`d` と挙動が同一で `reg` の繋ぎ方で
 /// 表現できるため不要。素子列中では `d` のあとの `x` が未知素子として弾かれる。
 #[test]

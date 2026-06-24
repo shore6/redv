@@ -725,6 +725,18 @@ In tests, fixing the input with `redv foo.rv < input.txt` gives a deterministic,
 
 Numeric `#define`s share a single table with `param` (§8.3) and can be referenced by name in bus widths and sim expressions.
 
+The value accepts the same constant expression as `param`: literals, earlier `#define` / `param`, `+ - * / %`, unary `-` / `!`, and parentheses.
+
+```rv
+#define W 4
+#define N (W * 2)              // Arithmetic: 8
+#define HALF (N / 2)           // Nested: 4
+#define ONES (0b1111)          // Mixed with binary / hex literals (§1.3)
+```
+
+Only `MODE` is reserved for future mode switching and still takes an identifier value (anything other than `element` warns).
+Referencing an undefined name or dividing by zero is an error.
+
 ### 8.2 `#include`
 
 ```rv
@@ -1008,9 +1020,11 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/param_notN.rv` | N-bit NOT with width parameterized by a `param` constant |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at 4 and 8 bits as separate instances |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`): usable in strengths, bus widths, `param`, `#define`, sim assignments, and tick counts (§1.3) |
+| `examples/define_expr.rv` | Constant expressions in `#define` values (e.g. `(W*2)`) (§8.1) |
 
-### 12.5 Waveform Output
+### 12.5 Waveform / Structured Output
 
 | File | Contents |
 |---|---|
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` (torch inversion + repeater delay) |
+| `examples/json_output.rv` | Demo of emitting monitor / assert / warning as JSONL via `--json` |
