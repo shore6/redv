@@ -145,31 +145,35 @@ impl Parser {
         let d = self.expect_ident("directive name after '#'")?;
         if d == "define" {
             let name = self.expect_ident("define name")?;
-            match self.cur().k {
-                Tk::Num => {
-                    let num = self.cur().num;
-                    self.consts.insert(name.clone(), num);
-                    prog.defines.insert(name, num);
-                    self.i += 1;
-                }
-                Tk::Ident => {
-                    let v = self.cur().s.clone();
-                    self.i += 1;
-                    if name == "MODE" {
-                        if v != "element" {
-                            warn(
-                                ln,
-                                format!(
-                                    "MODE '{}' is not implemented yet; using element mode",
-                                    v
-                                ),
-                            );
-                        }
-                    } else {
-                        prog.str_defines.insert(name, v);
+            if name == "MODE" {
+                // MODE は将来のモード切替え用の予約名で、識別子のみ受理する。
+                let v = match self.cur().k {
+                    Tk::Ident => {
+                        let s = self.cur().s.clone();
+                        self.i += 1;
+                        s
                     }
+                    _ => {
+                        return fail(
+                            ln,
+                            "#define MODE expects an identifier (e.g. 'element')",
+                        );
+                    }
+                };
+                if v != "element" {
+                    warn(
+                        ln,
+                        format!("MODE '{}' is not implemented yet; using element mode", v),
+                    );
+                } else {
+                    prog.str_defines.insert(name, v);
                 }
-                _ => return fail(ln, "#define expects a value"),
+            } else {
+                // 値は定数式(リテラル・他の数値 define / param ・`+ - * / %`・単項・括弧)。
+                let e = self.parse_expr()?;
+                let v = self.eval_const(&e)?;
+                self.consts.insert(name.clone(), v);
+                prog.defines.insert(name, v);
             }
         } else if d == "include" {
             let fn_;

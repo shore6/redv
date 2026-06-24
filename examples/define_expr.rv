@@ -1,0 +1,27 @@
+/*
+ * #define の式 / 算術(issue #49)。
+ *
+ * `#define NAME <定数式>` は param と同じ定数式(リテラル・他の数値 define / param ・
+ * `+ - * / %`・単項・括弧)を受理する。元の `#define NAME 整数リテラル` は純拡張で
+ * 包含される。
+ *
+ * MODE のような従来の識別子値だけは引き続き ident-only パスで受理する(将来の
+ * モード切替え用の予約名)。
+ */
+
+#define W 4
+#define N (W * 2)                  // 算術: 8
+#define HALF (N / 2)               // ネスト: 4
+#define ONES (0b1111)              // 数値リテラルとの混在
+
+module test() {
+    var[N] x;
+    var i;
+    sim {
+        x = 0;
+        for (i = 0; i < HALF; i = i + 1) { x[i] = ONES; }
+        for (i = 0; i < N; i = i + 1) {
+            monitor("x[%]=%\n", i, x[i]);
+        }
+    }
+}

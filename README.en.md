@@ -66,6 +66,7 @@ cargo test                                             # Golden tests for all ex
 | `redv <file.rv>` | Compiles and simulates the circuit (exit code 0 on success, 1 on error) |
 | `-t`, `--trace` | Traces all node values every tick to stderr |
 | `--vcd <file>` | Dumps the waveform in VCD (Value Change Dump) format to `<file>` (view in GTKWave, etc.). Records public nodes (regs / ports whose name has no `#`) as 4-bit vectors of strength 0–15. Time is the raw tick (includes `#init` settling, same as `-t`). With multiple modules the output is split into `<file>.<module>.vcd` |
+| `--json` | Emit monitor / assert / warning as one JSON object per line (JSONL). monitor events go to stdout; assert / expect / warning and the final summary go to stderr. Useful for CI regression diffs and for piping into other tools |
 | `-T`, `--time` | Prints compile and simulation timings to stderr |
 | `-h`, `--help` | Prints usage (exit code 0) |
 | `-v`, `--version` | Prints version |
@@ -85,8 +86,10 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`) for strengths, widths, `#define`, sim assignments, and more |
+| `examples/define_expr.rv` | Constant expressions in `#define` (e.g. `#define N (W*2)`) |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |
+| `examples/json_output.rv` | Demo of emitting monitor output as JSONL via `--json` |
 
 ## Documentation
 
