@@ -87,6 +87,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`) for strengths, widths, `#define`, sim assignments, and more |
 | `examples/define_expr.rv` | Constant expressions in `#define` (e.g. `#define N (W*2)`) |
+| `examples/monitor_format.rv` | monitor base formats `%b` / `%x` / `%o` with zero-padding, plus `scan("%x")` for matching input |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |
 | `examples/json_output.rv` | Demo of emitting monitor output as JSONL via `--json` |

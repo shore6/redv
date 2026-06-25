@@ -164,6 +164,14 @@ fn scan_and() {
     run_golden_stdin("scan_and", "15 0\n");
 }
 
+/// monitor / scan の基数書式(issue #77):
+/// `%b` / `%x` / `%o` と `%Nb` / `%0Nb`(ゼロ埋め)・負値は `-` 接頭 + 絶対値で
+/// 基数表記。`scan("%b")` 等で入力側も基数指定できる。
+#[test]
+fn monitor_format() {
+    run_golden_stdin("monitor_format", "10 1010 ff 17\n");
+}
+
 #[test]
 fn hier_and() {
     run_golden("hier_and");
@@ -904,6 +912,18 @@ fn monitor_fmt_bare_and_width_is_accepted() {
     let src = "module m(){ var a; sim{ a=0; monitor(\"x=% y=%2\\n\", a, a); } }";
     let (code, stderr) = run_source("monfmt_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// `scan(fmt)` の書式が `%` / `%b` / `%x` / `%o` 以外ならエラー(issue #77)。
+#[test]
+fn scan_fmt_invalid_is_error() {
+    let src = "module m(){ var a; sim{ a = scan(\"%4b\"); } }";
+    let (code, stderr) = run_source("scanfmt_bad", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("scan() format must be one of"),
+        "unexpected stderr:\n{stderr}"
+    );
 }
 
 /// `#define NAME <定数式>` は param と同じ式を受理する(issue #49):

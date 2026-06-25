@@ -226,12 +226,14 @@ pub enum SimStmt {
     },
     /// `target = callee#(P=v, ...)(args)` — sim から logic をインスタンス化する束縛。
     /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
+    /// `fmt` は `scan("%x")` のような書式付き入力で使う(scan のみ。それ以外は常に `None`)。
     CallBind {
         line: i32,
         target: String,
         callee: String,
         bind_args: Vec<String>,
         params: Vec<(String, Expr)>,
+        fmt: Option<String>,
     },
     WaitTicks {
         line: i32,

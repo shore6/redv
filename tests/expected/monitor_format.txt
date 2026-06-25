@@ -1,0 +1,10 @@
+v=10  dec:10   bin:1010   hex:a   oct:12
+v=255 dec:255   bin:11111111   hex:ff   oct:377
+hex pad:  '  ff' '00ff'
+bin pad:  '    1111' '00001111'
+neg:      '-11' ' -11' '-011' '-3' '-003'
+literal %b => 101
+scan dec: 10
+scan bin: 10
+scan hex: 255
+scan oct: 15

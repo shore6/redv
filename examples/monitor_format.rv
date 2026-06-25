@@ -1,0 +1,41 @@
+/* monitor / scan の基数書式 (issue #77):
+ *   monitor("%b", v) で 2 進、`%x` で 16 進(小文字)、`%o` で 8 進。
+ *   幅は `%Nb`(スペース埋め)/ `%0Nb`(ゼロ埋め)で指定する。
+ *   負値は `-` 接頭 + 絶対値を基数表記(例: `%04b` of -3 → `-011`)。
+ *   `%` 単独 / `%N` は従来どおり 10 進。
+ *   scan(fmt) は入力側の基数指定。`scan("%b")` / `scan("%x")` / `scan("%o")`。
+ *   `scan()` と `scan("%")` は 10 進(これまでと同じ挙動)。
+ */
+module test_format()
+{
+    var v, n;
+    sim {
+        // 基本: 10 / 255 を各基数で出す
+        v = 10;
+        monitor("v=10  dec:%   bin:%b   hex:%x   oct:%o\n", v, v, v, v);
+        v = 255;
+        monitor("v=255 dec:%   bin:%b   hex:%x   oct:%o\n", v, v, v, v);
+
+        // 幅 + ゼロ埋め:  '  ff' '00ff' '11111111' '00001111'
+        monitor("hex pad:  '%4x' '%04x'\n", v, v);
+        v = 0b1111;
+        monitor("bin pad:  '%8b' '%08b'\n", v, v);
+
+        // 負値: '-11' ' -11' '-011' '-3' '-003'
+        v = 0 - 3;
+        monitor("neg:      '%b' '%4b' '%04b' '%x' '%04x'\n", v, v, v, v, v);
+
+        // %% リテラルは従来どおり
+        monitor("literal %%b => %b\n", 5);
+
+        // scan: 各基数で 1 整数ずつ読む(入力例 "10 1010 ff 17" → 10, 10, 255, 15)
+        v = scan();      // 10 進
+        monitor("scan dec: %\n", v);
+        v = scan("%b");
+        monitor("scan bin: %\n", v);
+        v = scan("%x");
+        monitor("scan hex: %\n", v);
+        n = scan("%o");
+        monitor("scan oct: %\n", n);
+    }
+}

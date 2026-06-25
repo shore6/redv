@@ -1731,6 +1731,16 @@ impl<'a> ModuleExec<'a> {
                     i += 1;
                     continue;
                 }
+                // フラグ: 先頭が '0' で、後ろに 1 桁以上の数字が続けばゼロ埋め。
+                // ('0' 単独や '0b'/'0x'/'0o' の '0' は幅 0 と解釈し、ゼロ埋め扱いしない)
+                let mut zero_pad = false;
+                if j < f.len() && f[j] == '0'
+                    && j + 1 < f.len()
+                    && f[j + 1].is_ascii_digit()
+                {
+                    zero_pad = true;
+                    j += 1;
+                }
                 let mut width = 0usize;
                 while j < f.len() && f[j].is_ascii_digit() {
                     width = width * 10 + (f[j] as usize - '0' as usize);
@@ -1745,17 +1755,23 @@ impl<'a> ModuleExec<'a> {
                         ),
                     );
                 }
-                let mut v = if ai < av.len() {
-                    let s = av[ai].to_string();
+                let base = match f.get(j) {
+                    Some('b') => Some(2u32),
+                    Some('x') => Some(16),
+                    Some('o') => Some(8),
+                    _ => None,
+                };
+                if base.is_some() {
+                    j += 1;
+                }
+                let val_str = if ai < av.len() {
+                    let v = av[ai];
                     ai += 1;
-                    s
+                    format_int(v, base.unwrap_or(10))
                 } else {
                     "<?>".to_string()
                 };
-                while v.chars().count() < width {
-                    v.insert(0, ' ');
-                }
-                out.push_str(&v);
+                out.push_str(&pad_value(&val_str, width, zero_pad));
                 i = j;
             } else {
                 out.push(c);
@@ -1875,9 +1891,16 @@ impl<'a> ModuleExec<'a> {
         Ok(())
     }
 
-    /// `x = scan();` — stdin から空白/改行区切りの整数を 1 つ読み、変数に代入する。
-    /// EOF・非数値はエラー(厳しめ診断)。
-    fn do_scan(&mut self, line: i32, target: &str, bind_args: &[String]) -> RvResult<()> {
+    /// `x = scan();` または `x = scan("%b" | "%x" | "%o" | "%");` —
+    /// stdin から空白/改行区切りの整数を 1 つ読み、変数に代入する。
+    /// 書式を渡すと指定基数(2 / 16 / 8 / 10)で読む。EOF・非数値はエラー。
+    fn do_scan(
+        &mut self,
+        line: i32,
+        target: &str,
+        bind_args: &[String],
+        fmt: Option<&str>,
+    ) -> RvResult<()> {
         if !bind_args.is_empty() {
             return fail(line, "scan() takes no arguments");
         }
@@ -1890,7 +1913,8 @@ impl<'a> ModuleExec<'a> {
         if !self.vars.contains_key(target) {
             return fail(line, format!("undeclared variable: {}", target));
         }
-        let v = read_stdin_int(line)?;
+        let base = parse_scan_fmt(line, fmt)?;
+        let v = read_stdin_int(line, base)?;
         self.vars.insert(target.to_string(), v);
         Ok(())
     }
@@ -2161,13 +2185,17 @@ impl<'a> ModuleExec<'a> {
                 callee,
                 bind_args,
                 params,
+                fmt,
             } => {
                 if callee == "scan" {
                     if !params.is_empty() {
                         return fail(*line, "scan() does not take generic '#(...)' parameters");
                     }
-                    self.do_scan(*line, target, bind_args)?;
+                    self.do_scan(*line, target, bind_args, fmt.as_deref())?;
                 } else {
+                    if fmt.is_some() {
+                        return fail(*line, "format string is only allowed for scan()");
+                    }
                     self.do_call_bind(*line, target, callee, bind_args, params)?;
                 }
             }
@@ -2281,11 +2309,86 @@ fn expr_to_string(e: &Expr) -> String {
 
 /// stdin から空白/改行区切りの整数トークンを 1 つ読む。
 /// 先読みは区切り 1 バイトのみなので、scan() を複数回呼んでもトークン境界は保たれる。
-fn read_stdin_int(line: i32) -> RvResult<i64> {
+/// 整数 `v` を基数 `base` (2/8/10/16) で文字列化する。
+/// 負値は `-` 接頭 + 絶対値で表現する(64bit ラップではなく読みやすさ優先)。
+/// 16 進は小文字。
+fn format_int(v: i64, base: u32) -> String {
+    if base == 10 {
+        return v.to_string();
+    }
+    let (sign, mag) = if v < 0 {
+        ("-", (v as i128).unsigned_abs())
+    } else {
+        ("", v as u128)
+    };
+    let body = match base {
+        2 => format!("{:b}", mag),
+        8 => format!("{:o}", mag),
+        16 => format!("{:x}", mag),
+        _ => mag.to_string(),
+    };
+    format!("{}{}", sign, body)
+}
+
+/// `val` を最小幅 `width` に右寄せ整形する。
+/// `zero_pad = true` のとき先頭が `-` ならその直後にゼロを挿入し、符号を幅の先頭に保つ
+/// (`%04b` of -3 → `-011`)。スペース埋めは符号も含めて単純に左にスペースを足す。
+fn pad_value(val: &str, width: usize, zero_pad: bool) -> String {
+    let n = val.chars().count();
+    if n >= width {
+        return val.to_string();
+    }
+    let need = width - n;
+    if zero_pad {
+        if let Some(rest) = val.strip_prefix('-') {
+            let mut s = String::from("-");
+            for _ in 0..need {
+                s.push('0');
+            }
+            s.push_str(rest);
+            return s;
+        }
+        let mut s = String::new();
+        for _ in 0..need {
+            s.push('0');
+        }
+        s.push_str(val);
+        s
+    } else {
+        let mut s = String::new();
+        for _ in 0..need {
+            s.push(' ');
+        }
+        s.push_str(val);
+        s
+    }
+}
+
+/// `scan(fmt)` の書式文字列を基数 (2 / 8 / 10 / 16) に変換する。
+/// `None` または `"%"` は 10 進。`"%b"` / `"%x"` / `"%o"` は対応基数。それ以外はエラー。
+fn parse_scan_fmt(line: i32, fmt: Option<&str>) -> RvResult<u32> {
+    let Some(f) = fmt else { return Ok(10) };
+    match f {
+        "%" => Ok(10),
+        "%b" => Ok(2),
+        "%x" => Ok(16),
+        "%o" => Ok(8),
+        _ => fail(
+            line,
+            format!(
+                "scan() format must be one of \"%\", \"%b\", \"%x\", \"%o\" (got {:?})",
+                f
+            ),
+        ),
+    }
+}
+
+fn read_stdin_int(line: i32, base: u32) -> RvResult<i64> {
     use std::io::Read;
     let mut stdin = std::io::stdin();
     let mut buf = [0u8; 1];
     let mut s = String::new();
+    let is_digit_for_base = |c: char, b: u32| -> bool { c.is_digit(b) };
     loop {
         let n = match stdin.read(&mut buf) {
             Ok(n) => n,
@@ -2303,18 +2406,25 @@ fn read_stdin_int(line: i32) -> RvResult<i64> {
             if c.is_whitespace() {
                 continue; // 先頭の空白は読み飛ばす
             }
-            if c == '-' || c == '+' || c.is_ascii_digit() {
+            if c == '-' || c == '+' || is_digit_for_base(c, base) {
                 s.push(c);
             } else {
                 return fail(line, format!("scan(): expected an integer but found '{}'", c));
             }
-        } else if c.is_ascii_digit() {
+        } else if is_digit_for_base(c, base) {
             s.push(c);
         } else {
             break; // 区切り文字でトークン終了(この 1 バイトは捨てる)
         }
     }
-    match s.parse::<i64>() {
+    let parsed = if let Some(rest) = s.strip_prefix('-') {
+        i64::from_str_radix(rest, base).map(|v| -v)
+    } else if let Some(rest) = s.strip_prefix('+') {
+        i64::from_str_radix(rest, base)
+    } else {
+        i64::from_str_radix(&s, base)
+    };
+    match parsed {
         Ok(v) => Ok(v),
         Err(_) => fail(line, format!("scan(): invalid integer literal '{}'", s)),
     }
