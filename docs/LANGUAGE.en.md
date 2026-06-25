@@ -622,6 +622,28 @@ Format string rules:
 
 Type suffixes `%d` / `%t` are removed (specifying them is an error).
 
+Base suffixes `%b` (binary) / `%x` (hex, lowercase) / `%o` (octal) are available, with optional width and zero-pad (`%4b`, `%04b`).
+Negative values print as `-` plus the absolute value in the given base.
+See `docs/LANGUAGE.md` §7.4.1 for the full table.
+
+##### Passing a Bus var as a single argument
+
+Passing a bus var (no index, §7.6) directly to monitor packs each lane's strength (0–15) as a 4-bit nibble, with `lane[0]` at the lowest nibble and `lane[N-1]` at the highest.
+The composed integer is then formatted with the usual `%` / `%b` / `%x` / `%o`.
+
+```rv
+var[4] bus;
+bus[0] = 15;  bus[1] = 0;  bus[2] = 15;  bus[3] = 8;
+// packed = 8*16^3 + 15*16^2 + 0*16^1 + 15*16^0 = 0x8F0F = 36623
+monitor("%x % %b\n", bus, bus, bus);
+// → "8f0f 36623 1000111100001111"
+```
+
+`%x` / `%b` zero-pad to N hex digits / 4N bits by default so lane boundaries stay aligned.
+User-specified width acts as a lower bound on top of that.
+The composition only fires when the bus var appears at the top of a format argument; using it inside an expression (e.g. `bus + 1`) still errs with "index a lane".
+Buses wider than 16 lanes cannot be packed into a single i64 and are an error — monitor lanes individually instead.
+
 #### 7.4.2 `assert` and `expect`
 
 `assert(cond)` records a failure on stderr when `cond` is false (`= 0`).
@@ -1021,6 +1043,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at 4 and 8 bits as separate instances |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`): usable in strengths, bus widths, `param`, `#define`, sim assignments, and tick counts (§1.3) |
 | `examples/define_expr.rv` | Constant expressions in `#define` values (e.g. `(W*2)`) (§8.1) |
+| `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane packs into a 4-bit nibble for display (§7.4.1) |
 
 ### 12.5 Waveform / Structured Output
 
