@@ -1090,7 +1090,13 @@ impl Parser {
                     let call_params = self.parse_logic_call_params()?; // `#(...)` があれば消費
                     self.expect_punct("(")?;
                     let mut bind_args = Vec::new();
-                    if !self.is_punct(")") {
+                    // `scan("%x")` のような書式文字列を受理する(scan のみ。
+                    // 他の callee は従来どおり ident のみ受け付け、エラーは下流で出す)。
+                    let mut scan_fmt: Option<String> = None;
+                    if callee == "scan" && self.cur().k == Tk::Str {
+                        scan_fmt = Some(self.cur().s.clone());
+                        self.i += 1;
+                    } else if !self.is_punct(")") {
                         loop {
                             let an =
                                 self.expect_ident("variable name (logic inputs must be vars)")?;
@@ -1120,6 +1126,7 @@ impl Parser {
                         callee,
                         bind_args,
                         params: call_params,
+                        fmt: scan_fmt,
                     });
                 }
                 // plain Assign(`~ width` を付けるとパルス代入)
