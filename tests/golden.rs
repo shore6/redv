@@ -172,6 +172,14 @@ fn monitor_format() {
     run_golden_stdin("monitor_format", "10 1010 ff 17\n");
 }
 
+/// バス var を 1 引数で monitor に渡す(issue #49 残項目):
+/// 各レーン強度 0-15 を 4 bit のニブルとしてパッキングし(`lane[0]` が最下位)、
+/// `%x` は既定 N 桁・`%b` は 4N bit にゼロ埋め。ユーザー指定幅は下限として効く。
+#[test]
+fn monitor_bus() {
+    run_golden("monitor_bus");
+}
+
 #[test]
 fn hier_and() {
     run_golden("hier_and");
@@ -694,10 +702,11 @@ fn bus_ports_misuse_is_error() {
              module m(){ var x; var y; sim{ x=0; y=g(x); #init } }",
             "bus output",
         ),
-        // バス var を添字なしでスカラ式に使う
+        // バス var を添字なしでスカラ式に使う(monitor 引数は別扱いで合成可、
+        // それ以外の文脈では従来どおりエラー)
         (
             "bus_in_scalar_expr",
-            "module m(){ var[4] x; sim{ x=0; monitor(\"%\", x); } }",
+            "module m(){ var[4] x; sim{ x=0; assert(x); } }",
             "is a bus var",
         ),
         // バス var の範囲外添字

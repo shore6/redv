@@ -1709,12 +1709,16 @@ impl<'a> ModuleExec<'a> {
         if !call.has_fmt {
             return fail(line, "monitor() requires a format string as its first argument");
         }
-        let mut av: Vec<i64> = Vec::new();
+        // 引数を評価する。バス var(添字なし)が直接渡されたときは、各レーン強度を
+        // 下位ニブルからパッキングして 1 個の整数にする(lane[0] = 最下位 4 bit)。
+        // 2 番目の値はバス幅 N(バスでなければ None)で、書式側の既定幅に使う。
+        let mut av: Vec<(i64, Option<i32>)> = Vec::new();
         for a in &call.args {
-            av.push(self.eval_e(a)?);
+            av.push(self.eval_monitor_arg(line, a)?);
         }
         if is_json_mode() {
-            self.emit_monitor_json(&call.fmt, &av);
+            let vals: Vec<i64> = av.iter().map(|(v, _)| *v).collect();
+            self.emit_monitor_json(&call.fmt, &vals);
             return Ok(());
         }
         let f: Vec<char> = call.fmt.chars().collect();
@@ -1765,13 +1769,27 @@ impl<'a> ModuleExec<'a> {
                     j += 1;
                 }
                 let val_str = if ai < av.len() {
-                    let v = av[ai];
+                    let (v, bus_w) = av[ai];
                     ai += 1;
-                    format_int(v, base.unwrap_or(10))
+                    // バス var 引数は無符号整数(全レーンのニブル合成)として表示する。
+                    // %b / %x ではレーン境界を保つため、先に 4N bit / N 桁にゼロ埋めしてから、
+                    // ユーザー指定幅 N を追加分のパディング(ユーザー指定のフラグ)で被せる。
+                    let body = match bus_w {
+                        Some(w) => {
+                            let raw = format_uint(v as u64, base.unwrap_or(10));
+                            match base {
+                                Some(2) => pad_value(&raw, (w as usize) * 4, true),
+                                Some(16) => pad_value(&raw, w as usize, true),
+                                _ => raw,
+                            }
+                        }
+                        None => format_int(v, base.unwrap_or(10)),
+                    };
+                    pad_value(&body, width, zero_pad)
                 } else {
-                    "<?>".to_string()
+                    pad_value("<?>", width, zero_pad)
                 };
-                out.push_str(&pad_value(&val_str, width, zero_pad));
+                out.push_str(&val_str);
                 i = j;
             } else {
                 out.push(c);
@@ -1781,6 +1799,36 @@ impl<'a> ModuleExec<'a> {
         print!("{}", out);
         std::io::stdout().flush().ok();
         Ok(())
+    }
+
+    /// monitor / `?monitor` の 1 引数を評価する。
+    /// 引数がバス var(添字なし)なら、各レーン強度の下位 4 bit を `lane[0]` から
+    /// 順に nibble としてパッキングし(`lane[0]` = 最下位)、合成整数を返す。
+    /// 戻り値 2 番目はバス幅 N(バスでなければ None)で、書式側の既定幅に使う。
+    /// バス幅 16 を超える bus var は i64 に収まらないためエラーにする。
+    fn eval_monitor_arg(&self, line: i32, e: &Expr) -> RvResult<(i64, Option<i32>)> {
+        if let Expr::Var { name, index: None, .. } = e {
+            if let Some(&w) = self.var_buses.get(name) {
+                if w > 16 {
+                    return fail(
+                        line,
+                        format!(
+                            "monitor: bus var '{}' width {} > 16 cannot be packed into one integer; \
+                             monitor lanes individually with '{}[k]'",
+                            name, w, name
+                        ),
+                    );
+                }
+                let mut packed: u64 = 0;
+                for k in 0..w {
+                    let key = Self::lane_key(name, k as i64);
+                    let lane = self.vars.get(&key).copied().unwrap_or(0);
+                    packed |= ((lane as u64) & 0xF) << (4 * k as u32);
+                }
+                return Ok((packed as i64, Some(w)));
+            }
+        }
+        Ok((self.eval_e(e)?, None))
     }
 
     /// `assert(cond);` — cond を評価し、偽(= 0)なら失敗として記録し stderr に出力する。
@@ -2328,6 +2376,19 @@ fn format_int(v: i64, base: u32) -> String {
         _ => mag.to_string(),
     };
     format!("{}{}", sign, body)
+}
+
+/// 整数 `v` を無符号として基数 `base` (2/8/10/16) で文字列化する。
+/// バス var 引数の表示に使う(ニブルパッキング後の値はそのビットパターンを保つため、
+/// 符号ビット相当の上位レーンが立っていても `-` を付けず無符号として読む)。
+fn format_uint(v: u64, base: u32) -> String {
+    match base {
+        2 => format!("{:b}", v),
+        8 => format!("{:o}", v),
+        10 => format!("{}", v),
+        16 => format!("{:x}", v),
+        _ => v.to_string(),
+    }
 }
 
 /// `val` を最小幅 `width` に右寄せ整形する。
