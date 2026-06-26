@@ -12,6 +12,19 @@ use std::fs;
 /// `parse_callee_invocation` の返り値: (callee 名, `#(...)` ジェネリック実引数, 引数 ident 列)。
 type CalleeInvocation = (String, Vec<(String, Expr)>, Vec<String>);
 
+/// バンドル済み標準ライブラリ。`#include "stdlogic"` でビルド時に埋め込まれたソースから読む。
+/// ファイルシステムやインストール場所に依存せず、redv バイナリ単体でライブラリを利用できる。
+const BUNDLED_STDLIBS: &[(&str, &str)] = &[
+    ("stdlogic", include_str!("stdlib/stdlogic.rv")),
+];
+
+fn bundled_stdlib(name: &str) -> Option<&'static str> {
+    BUNDLED_STDLIBS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, src)| *src)
+}
+
 pub fn dir_of(path: &str) -> String {
     match path.rfind(['/', '\\']) {
         Some(p) => path[..p].to_string(),
@@ -187,11 +200,16 @@ impl Parser {
                 }
                 _ => return fail(ln, "#include expects a file name"),
             }
-            if fn_ == "stdlogic" {
-                warn(
-                    ln,
-                    "stdlogic (logic-level mode) is not implemented yet; ignored",
-                );
+            // バンドル済み stdlib (`stdlogic` 等) は埋め込みソースから読む。
+            // 同じ stdlib を 2 度 include しても 2 度目以降は no-op で重複定義エラーを避ける。
+            if let Some(src) = bundled_stdlib(&fn_) {
+                if prog.included_stdlibs.insert(fn_.clone()) {
+                    let toks = Lexer::new(src.to_string()).run()?;
+                    let mut sub = Parser::new(toks, self.base_dir.clone());
+                    sub.consts = self.consts.clone();
+                    sub.parse_file(prog)?;
+                    self.consts.extend(sub.consts);
+                }
                 return Ok(());
             }
             self.include_file(&fn_, ln, prog)?;

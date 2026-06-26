@@ -1,0 +1,30 @@
+/* stdlogic デモ: #include "stdlogic" でバンドル済みの基本ゲート群を取り込む (issue #55)。
+ *
+ * 7 種類のゲート (NOT / AND / OR / XOR / NAND / NOR / XNOR) を 4 通りの入力で sweep し、
+ * stdlogic を 1 行 include するだけでゲート定義を毎回書かずに済むことを示す。 */
+
+#include "stdlogic"
+
+module test_stdlogic_gates() {
+    var x1, x2;
+    var ny, ay, oy, xy, ndy, nry, xny;
+    var i;
+    sim {
+        x1 = 0; x2 = 0;
+        ny  = s_not(x1);
+        ay  = s_and(x1, x2);
+        oy  = s_or(x1, x2);
+        xy  = s_xor(x1, x2);
+        ndy = s_nand(x1, x2);
+        nry = s_nor(x1, x2);
+        xny = s_xnor(x1, x2);
+        #init
+        ?monitor("x1=%2 x2=%2 | NOT=%2 AND=%2 OR=%2 XOR=%2 NAND=%2 NOR=%2 XNOR=%2\n",
+                 x1, x2, ny, ay, oy, xy, ndy, nry, xny);
+        for (i = 0; i < 4; i = i + 1) {
+            x1 = (i / 2) * 15;
+            x2 = (i % 2) * 15;
+            #init
+        }
+    }
+}

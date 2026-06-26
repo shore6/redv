@@ -3,7 +3,7 @@
 //! 構文木。**データ付き enum** で不正状態を表現不能にしてある。
 //! これにより素子種別・文種別を追加した際にコンパイラが網羅性を検査できる。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---- logic (circuit) side ----------------------------------------------
 
@@ -298,4 +298,7 @@ pub struct Program {
     pub str_defines: HashMap<String, String>,
     pub logics: HashMap<String, LogicDef>,
     pub modules: Vec<ModuleDef>,
+    /// 既に取り込んだバンドル stdlib 名(`#include "stdlogic"` の重複取り込み防止用)。
+    /// 同じ stdlib を複数ファイルから include しても 2 度目以降は no-op になる。
+    pub included_stdlibs: HashSet<String>,
 }

@@ -192,6 +192,36 @@ fn half_adder() {
     run_golden("half_adder");
 }
 
+/// `#include "stdlogic"` でバンドル済みの基本ゲート群(NOT/AND/OR/XOR/NAND/NOR/XNOR)を取り込む
+/// (issue #55)。7 ゲートを 4 通りの入力で sweep して真理値表が一致するか検証する。
+#[test]
+fn stdlogic_demo() {
+    run_golden("stdlogic_demo");
+}
+
+/// stdlogic を同じソース内で複数回 include しても重複定義エラーにならない(issue #55)。
+/// 2 度目以降の `#include "stdlogic"` は no-op になる。
+#[test]
+fn stdlogic_double_include_is_noop() {
+    let src = "#include \"stdlogic\"\n#include \"stdlogic\"\n\
+               module m(){ var a,y; sim{ a=0; y=s_not(a); #init } }";
+    let (code, stderr) = run_source("stdlogic_dup", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// 未知の stdlib 名はバンドル一覧にマッチしないため file include へフォールスルーし、
+/// 存在しないファイルとして通常の include エラーになる(issue #55)。
+#[test]
+fn unknown_stdlib_is_file_error() {
+    let src = "#include \"stdfoo\"\nmodule m(){ var a; sim{ a=0; } }";
+    let (code, stderr) = run_source("stdfoo", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("cannot open include file: stdfoo"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
 /// チェーン文で 2 経路を同じ点に合流(max)。
 #[test]
 fn chain_mixed() {
