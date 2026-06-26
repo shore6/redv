@@ -83,6 +83,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/and_gate.rv` | An AND from 3 torches (NOR of NOTs) |
 | `examples/comparator_side.rv` | Comparator side input (subtract and compare) |
 | `examples/repeater_lock.rv` | Repeater lock (`.side` freezes the output) |
+| `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = half_adder(x1, x2);` |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`) for strengths, widths, `#define`, sim assignments, and more |
