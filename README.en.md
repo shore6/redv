@@ -90,6 +90,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/define_expr.rv` | Constant expressions in `#define` (e.g. `#define N (W*2)`) |
 | `examples/monitor_format.rv` | monitor base formats `%b` / `%x` / `%o` with zero-padding, plus `scan("%x")` for matching input |
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane is packed as a 4-bit nibble (lane[0] is the lowest) |
+| `examples/stdlogic_demo.rv` | `#include "stdlogic"` pulls in the basic gate library (NOT / AND / OR / XOR / NAND / NOR / XNOR) |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |
 | `examples/json_output.rv` | Demo of emitting monitor output as JSONL via `--json` |
@@ -123,6 +124,7 @@ src/
   circuit.rs    Circuit graph + tick simulation engine
   interp.rs     Elaboration (logic→circuit) + sim runtime + monitor
   diag.rs       Errors and warnings
+  stdlib/       Bundled standard library (pulled in by `#include "stdlogic"`, etc.)
 examples/       Sample circuits
 tests/
   golden.rs     Golden tests (cargo test)

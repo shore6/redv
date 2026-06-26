@@ -1,0 +1,67 @@
+/* redv 標準ライブラリ: 基本論理ゲート (issue #55)
+ *
+ * `#include "stdlogic"` で取り込む。バイナリに埋め込まれているため、
+ * ファイルを置く必要も相対パスを書く必要もない。
+ *
+ * 提供する logic:
+ *   s_not  (NOT)         input x          -> output y
+ *   s_and  (AND)         input x1, x2     -> output y    (2 tick 遅延)
+ *   s_or   (OR)          input x1, x2     -> output y    (1 tick 遅延)
+ *   s_nand (NAND)        input x1, x2     -> output y    (1 tick 遅延)
+ *   s_nor  (NOR)         input x1, x2     -> output y    (2 tick 遅延)
+ *   s_xor  (XOR)         input x1, x2     -> output y    (4 tick 遅延)
+ *   s_xnor (XNOR)        input x1, x2     -> output y    (5 tick 遅延)
+ *
+ * 入力は 0/15 の論理レベルを想定する(中間強度は丸めず素子の特性に従う)。
+ */
+
+logic s_not(input x, output y) {
+    x - t - y;
+}
+
+logic s_and(input x1, input x2, output y) {
+    reg s;
+    s = d;
+    x1 - t - s;
+    x2 - t - s;
+    s - t - y;
+}
+
+logic s_or(input x1, input x2, output y) {
+    reg s;
+    s = d;
+    x1 - r - s;
+    x2 - r - s;
+    y = s;
+}
+
+logic s_nand(input x1, input x2, output y) {
+    reg s;
+    s = d;
+    x1 - t - s;
+    x2 - t - s;
+    y = s;
+}
+
+logic s_nor(input x1, input x2, output y) {
+    reg s;
+    s = d;
+    x1 - r - s;
+    x2 - r - s;
+    s - t - y;
+}
+
+logic s_xor(input x1, input x2, output y) {
+    reg na, nb, p, q;
+    na = s_not(x1);
+    nb = s_not(x2);
+    p  = s_and(x1, nb);
+    q  = s_and(na, x2);
+    y  = s_or(p, q);
+}
+
+logic s_xnor(input x1, input x2, output y) {
+    reg s;
+    s = s_xor(x1, x2);
+    y = s_not(s);
+}

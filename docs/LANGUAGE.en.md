@@ -812,7 +812,32 @@ Referencing an undefined name or dividing by zero is an error.
 #include "other.rv"            // Pull in a file
 ```
 
-A `stdlogic` include is not yet implemented and produces a warning.
+#### 8.2.1 Bundled standard library
+
+Passing a **bundled name** like `#include "stdlogic"` pulls in a standard library that is embedded inside the `redv` binary.
+You do not need to ship the file separately or write a relative path; the same source is read no matter where `redv` runs from.
+
+| Name | Contents |
+|---|---|
+| `stdlogic` | Basic logic gates (`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`). All are scalar 1–2 input / 1 output |
+
+Repeating `#include` of the same bundled name within one source is a no-op after the first occurrence (no duplicate-definition error).
+The check applies even across nested includes.
+File-based includes do not have this dedup; the caller must avoid circular or double inclusion.
+
+A name not in the bundled list falls back to the normal file include path.
+For example `#include "stdfoo"` is not a bundled name, so `stdfoo` / `stdfoo.rv` is searched as a relative / absolute path, and is an error if not found.
+
+```rv
+#include "stdlogic"
+
+logic equal1(input x1, input x2, output y) {
+    y = s_xnor(x1, x2);        // 1-bit equality detector = XNOR
+}
+```
+
+`s_xor` / `s_xnor` are layered on top of `s_not` / `s_and` / `s_or`, so they take 4–5 ticks total.
+Per-gate propagation delays are listed in the header comment of `examples/stdlogic_demo.rv`.
 
 ### 8.3 `param` (parameter constants)
 
@@ -972,7 +997,6 @@ Unrecoverable conditions raise errors and halt; recoverable conditions print war
 | An out-of-range var was passed as a circuit input | Rounded to 0 or 15; warned once per variable |
 | Reassignment of a wire or reg element | Last assignment is taken; a warning is emitted |
 | Torch burnout | Toggle count in the window exceeded; forced OFF for the cooldown |
-| `#include` of `stdlogic` | Not implemented; warning |
 
 ### 10.2 Errors (execution halts)
 
@@ -1092,6 +1116,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`): usable in strengths, bus widths, `param`, `#define`, sim assignments, and tick counts (§1.3) |
 | `examples/define_expr.rv` | Constant expressions in `#define` values (e.g. `(W*2)`) (§8.1) |
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane packs into a 4-bit nibble for display (§7.4.1) |
+| `examples/stdlogic_demo.rv` | The bundled standard library: `#include "stdlogic"` pulls in 7 basic gates (NOT / AND / OR / XOR / NAND / NOR / XNOR) and the demo sweeps them (§8.2.1) |
 
 ### 12.5 Waveform / Structured Output
 
