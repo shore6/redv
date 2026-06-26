@@ -9,6 +9,9 @@ use crate::lexer::{Lexer, Tk, Token};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
+/// `parse_callee_invocation` の返り値: (callee 名, `#(...)` ジェネリック実引数, 引数 ident 列)。
+type CalleeInvocation = (String, Vec<(String, Expr)>, Vec<String>);
+
 pub fn dir_of(path: &str) -> String {
     match path.rfind(['/', '\\']) {
         Some(p) => path[..p].to_string(),
@@ -362,6 +365,92 @@ impl Parser {
         }
     }
 
+    /// `(t1, t2, ...)` — 多出力束縛 / インスタンス化の **target タプル**を解析。
+    /// 文頭 `(` の直後から `)` までを消費する。各 target は素朴な ident で、添字や `.side` は不可。
+    /// 同名 target の重複はエラー。空タプル `()` もエラー(束縛先が無いと意味が無い)。
+    /// `kind` は診断用ラベル(例: "logic instance output (reg/port name)")。
+    fn parse_target_tuple(&mut self, kind: &str) -> RvResult<Vec<String>> {
+        let ln = self.cur().line;
+        self.expect_punct("(")?;
+        if self.is_punct(")") {
+            return fail(
+                ln,
+                "empty target tuple '()' is not allowed in a logic-instance binding",
+            );
+        }
+        let mut out: Vec<String> = Vec::new();
+        loop {
+            let name_ln = self.cur().line;
+            let name = self.expect_ident(kind)?;
+            if self.is_punct("[") {
+                return fail(
+                    name_ln,
+                    format!(
+                        "cannot bind a logic output to a bus lane '{}[..]'; \
+                         bind the whole bus var/reg/port instead",
+                        name
+                    ),
+                );
+            }
+            if self.is_punct(".") {
+                return fail(
+                    name_ln,
+                    format!(
+                        "'.side' is not a valid logic-output binding target ('{}')",
+                        name
+                    ),
+                );
+            }
+            if out.iter().any(|n| n == &name) {
+                return fail(
+                    name_ln,
+                    format!("duplicate target '{}' in logic-instance binding tuple", name),
+                );
+            }
+            out.push(name);
+            if self.is_punct(",") {
+                self.i += 1;
+                continue;
+            }
+            break;
+        }
+        self.expect_punct(")")?;
+        Ok(out)
+    }
+
+    /// `callee #(P=v, ...) (args...)` を 1 つ消費する。`;` は呼び出し側で消費する。
+    /// 引数は素朴な ident で、`name[..]` のレーン渡しはエラー(現仕様)。
+    /// 返り値は (callee 名, `#(...)` 実引数, 引数 ident 列)。
+    fn parse_callee_invocation(&mut self) -> RvResult<CalleeInvocation> {
+        let callee = self.expect_ident("logic name")?;
+        let call_params = self.parse_logic_call_params()?;
+        self.expect_punct("(")?;
+        let mut args = Vec::new();
+        if !self.is_punct(")") {
+            loop {
+                let an = self.expect_ident("logic input (reg/port/var name)")?;
+                if self.is_punct("[") {
+                    return fail(
+                        self.cur().line,
+                        format!(
+                            "cannot pass a bus lane '{}[..]' as a logic argument; \
+                             pass the whole bus reg/port/var",
+                            an
+                        ),
+                    );
+                }
+                args.push(an);
+                if self.is_punct(",") {
+                    self.i += 1;
+                    continue;
+                }
+                break;
+            }
+        }
+        self.expect_punct(")")?;
+        Ok((callee, call_params, args))
+    }
+
     /// `#( P=v, Q=w, ... )` — ジェネリック幅 param の **実引数列** を解析。
     /// 識別子直後の `#` を消費して `(...)` を読む。`#(` が来ていなければ空の Vec。
     /// 値式はそのまま AST に残し、elaborate 時に評価する(`self.consts` を流す)。
@@ -500,6 +589,22 @@ impl Parser {
 
     fn parse_logic_stmt(&mut self, stmts: &mut Vec<LogicStmt>) -> RvResult<()> {
         let ln = self.cur().line;
+        // 多出力インスタンス化: `(o1, o2, ...) = callee#(...)(args...);`
+        // 文頭 `(` は従来エラーだったので純加算。1 個でも `(o) = callee(...)` の形を許す。
+        if self.is_punct("(") {
+            let outputs = self.parse_target_tuple("logic instance output (reg/port name)")?;
+            self.expect_punct("=")?;
+            let (callee, call_params, args) = self.parse_callee_invocation()?;
+            self.expect_punct(";")?;
+            stmts.push(LogicStmt::Instance {
+                line: ln,
+                outputs,
+                callee,
+                args,
+                params: call_params,
+            });
+            return Ok(());
+        }
         if self.is_ident("wire") {
             self.i += 1;
             let mut names = vec![self.expect_ident("wire name")?];
@@ -639,43 +744,18 @@ impl Parser {
             }
         };
         self.expect_punct("=")?;
-        // 階層インスタンス化:  output = callee#(P=v, ...)(args...)
+        // 階層インスタンス化(1 出力):  out = callee#(P=v, ...)(args...)
+        // タプル形 `(o1, o2) = callee(...)` は文頭 `(` 分岐で別に扱う(多出力)。
         // ジェネリック幅 param は `#(...)` で実引数を渡す(Phase 2)。`#(` 部分は省略可。
         if self.cur().k == Tk::Ident
             && self.peek(1).k == Tk::Punct
             && (self.peek(1).s == "(" || self.peek(1).s == "#")
         {
-            let callee = self.cur().s.clone();
-            self.i += 1; // skip callee
-            let call_params = self.parse_logic_call_params()?; // `#(...)` があれば消費
-            self.expect_punct("(")?;
-            let mut args = Vec::new();
-            if !self.is_punct(")") {
-                loop {
-                    let an = self.expect_ident("logic input (reg/port name)")?;
-                    if self.is_punct("[") {
-                        return fail(
-                            self.cur().line,
-                            format!(
-                                "cannot pass a bus lane '{}[..]' as a logic argument; \
-                                 pass the whole bus reg/port",
-                                an
-                            ),
-                        );
-                    }
-                    args.push(an);
-                    if self.is_punct(",") {
-                        self.i += 1;
-                        continue;
-                    }
-                    break;
-                }
-            }
-            self.expect_punct(")")?;
+            let (callee, call_params, args) = self.parse_callee_invocation()?;
             self.expect_punct(";")?;
             stmts.push(LogicStmt::Instance {
                 line: ln,
-                output: target,
+                outputs: vec![target],
                 callee,
                 args,
                 params: call_params,
@@ -984,6 +1064,23 @@ impl Parser {
             return self.err_cur("nested sim block is not allowed");
         }
 
+        // 多出力束縛: `(t1, t2, ...) = callee#(...)(args...);`
+        // 文頭 `(` は従来エラーだったので純加算。1 個でも `(t) = callee(...)` の形を許す。
+        if self.is_punct("(") {
+            let targets = self.parse_target_tuple("variable name (logic outputs bind to vars)")?;
+            self.expect_punct("=")?;
+            let (callee, call_params, bind_args) = self.parse_callee_invocation()?;
+            self.expect_punct(";")?;
+            return Ok(SimStmt::CallBind {
+                line: ln,
+                targets,
+                callee,
+                bind_args,
+                params: call_params,
+                fmt: None,
+            });
+        }
+
         if self.is_ident("if") {
             self.i += 1;
             self.expect_punct("(")?;
@@ -1079,7 +1176,8 @@ impl Parser {
             }
             if self.peek(1).k == Tk::Punct && self.peek(1).s == "=" {
                 self.i += 2;
-                // CallBind?  target = callee#(P=v, ...)(args...)
+                // CallBind(1 出力):  target = callee#(P=v, ...)(args...)
+                // タプル形 `(t1, t2) = callee(...)` は文頭 `(` 分岐で別に扱う(多出力)。
                 // ジェネリック幅 param は `#(...)` で実引数を渡す(Phase 2)。`#(` は省略可。
                 if self.cur().k == Tk::Ident
                     && self.peek(1).k == Tk::Punct
@@ -1122,7 +1220,7 @@ impl Parser {
                     self.expect_punct(";")?;
                     return Ok(SimStmt::CallBind {
                         line: ln,
-                        target: name,
+                        targets: vec![name],
                         callee,
                         bind_args,
                         params: call_params,

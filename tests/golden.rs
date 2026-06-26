@@ -185,6 +185,13 @@ fn hier_and() {
     run_golden("hier_and");
 }
 
+/// 多出力 logic のタプル束縛 `(sum, carry) = half_adder(x1, x2);`(issue #79)。
+/// 半加算器の 2 出力 (sum = XOR, carry = AND) を同時に受け取る。
+#[test]
+fn half_adder() {
+    run_golden("half_adder");
+}
+
 /// チェーン文で 2 経路を同じ点に合流(max)。
 #[test]
 fn chain_mixed() {
@@ -1054,6 +1061,76 @@ fn json_mode_emits_warning_jsonl() {
         stderr.contains("\"kind\":\"warning\"") && stderr.contains("\"msg\":"),
         "missing warning JSON, stderr:\n{stderr}"
     );
+}
+
+/// 多出力 logic のタプル束縛(issue #79): sim・logic 本体ともに過不足・重複・空・
+/// バスレーン直指定はエラー。1 出力 logic の `(v) = ...` も統一性のため許容する。
+#[test]
+fn multi_output_binding_is_error() {
+    // 共通ヘッダ: g は 2 出力 logic、g0 は 1 出力 logic。
+    let header = "logic g0(input x, output y) { x - r - y; }\n\
+                  logic g(input x, output a1, output a2) {\n\
+                  \x20\x20\x20\x20a1 = g0(x);\n\
+                  \x20\x20\x20\x20a2 = g0(x);\n\
+                  }\n";
+    for (tag, body, want) in [
+        // 不足: 1 ターゲットで 2 出力 logic を受ける
+        (
+            "too_few",
+            "module m(){ var x,p; sim{ x=0; (p) = g(x); #init } }",
+            "g has 2 output port(s) but the binding tuple has 1 target(s)",
+        ),
+        // 過剰: 3 ターゲットで 1 出力 logic を受ける
+        (
+            "too_many",
+            "module m(){ var x,p,q,r2; sim{ x=0; (p,q,r2) = g0(x); #init } }",
+            "g0 has 1 output port(s) but the binding tuple has 3 target(s)",
+        ),
+        // 重複 target
+        (
+            "dup",
+            "module m(){ var x,p; sim{ x=0; (p,p) = g(x); #init } }",
+            "duplicate target 'p' in logic-instance binding tuple",
+        ),
+        // 空タプル
+        (
+            "empty",
+            "module m(){ var x; sim{ x=0; () = g0(x); #init } }",
+            "empty target tuple '()' is not allowed",
+        ),
+        // scan のタプル束縛
+        (
+            "scan_tuple",
+            "module m(){ var a,b2; sim{ (a,b2) = scan(); } }",
+            "scan() returns a single value",
+        ),
+        // バスレーンを target にできない
+        (
+            "bus_lane",
+            "module m(){ var x; var[2] bs; sim{ x=0; (bs[0], bs[1]) = g(x); #init } }",
+            "cannot bind a logic output to a bus lane",
+        ),
+    ] {
+        let src = format!("{header}{body}");
+        let (code, stderr) = run_source(tag, &src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
+    }
+}
+
+/// 1 出力 logic を `(v) = callee(...)` のタプル形でも受けられる(統一性。issue #79)。
+/// 従来形 `v = callee(...)` も引き続き有効(回帰なし)。
+#[test]
+fn multi_output_single_target_tuple_is_accepted() {
+    let src = "logic g(input x, output y) { x - r - y; }\n\
+               module m(){ var x, p, q; sim{\n\
+               \x20\x20\x20\x20x = 0;\n\
+               \x20\x20\x20\x20p = g(x);\n\
+               \x20\x20\x20\x20(q) = g(x);\n\
+               \x20\x20\x20\x20#init\n\
+               } }";
+    let (code, stderr) = run_source("multi_out_single_tuple", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
 /// 旧 `dx`(十字ダスト)は廃止(issue #66)。`d` と挙動が同一で `reg` の繋ぎ方で

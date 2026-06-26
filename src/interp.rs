@@ -547,10 +547,11 @@ impl PortShape {
 /// ポート列 = (ポート名, 形)の並び。`elaborate` の入出力ポート列に使う。
 type Ports = Vec<(String, PortShape)>;
 
-/// 保留中の階層インスタンス文(`out = callee#(P=v)(args)`)。
-/// 順序: (line, output, callee, args, call_params)。call_params は `#(...)` 実引数で、
-/// callee の `param_env` ビルド時に親 logic の環境下で評価する(Phase 2)。
-type PendingInstance = (i32, String, String, Vec<String>, Vec<(String, Expr)>);
+/// 保留中の階層インスタンス文(`(o1, o2, ...) = callee#(P=v)(args)`)。
+/// 順序: (line, outputs, callee, args, call_params)。`outputs` は出力ポートと位置対応の親側
+/// 端点名(reg/ポート/バス reg/バスポート)で、長さは callee の出力ポート数と一致する必要がある。
+/// call_params は `#(...)` 実引数で、callee の `param_env` ビルド時に親 logic の環境下で評価する(Phase 2)。
+type PendingInstance = (i32, Vec<String>, String, Vec<String>, Vec<(String, Expr)>);
 
 /// 階層インスタンスの親側端点(reg/ポート = スカラ、内部バス reg/バスポート = バス)を
 /// `PortShape` として解決する。
@@ -606,10 +607,11 @@ pub struct Instance {
     /// バス入力は幅ぶんのレーン(var キーは `xbus[0]` 等)。
     pub in_vars: Vec<String>,
     pub in_nodes: Vec<usize>,
-    /// 唯一の出力ポートのレーンノード列(スカラ出力は長さ 1)。
+    /// 出力ポートごとのレーンノード列(順序は callee の宣言順)。スカラ出力は長さ 1、
+    /// バス出力は幅ぶんのレーン。多出力 logic は `out_ports.len() > 1` となる。
     /// 束縛先 var は呼び出しごとに `out_bind` へ登録する(複数の var が同じインスタンス
     /// 出力を観測し得るため、target はインスタンス同一性に含めない)。
-    pub out_lanes: Vec<usize>,
+    pub out_ports: Vec<Vec<usize>>,
 }
 
 struct Elaborator<'c, 'p> {
@@ -914,14 +916,14 @@ impl<'p> Elaborator<'_, 'p> {
             match st {
                 LogicStmt::Instance {
                     line,
-                    output,
+                    outputs,
                     callee,
                     args,
                     params,
                 } => {
                     instances.push((
                         *line,
-                        output.clone(),
+                        outputs.clone(),
                         callee.clone(),
                         args.clone(),
                         params.clone(),
@@ -1264,18 +1266,35 @@ impl<'p> Elaborator<'_, 'p> {
 
         // 階層インスタンスの結線(親ノード <-> サブ logic のポート)。
         // スカラ/バスは PortShape として解決し、レーン対応で結線する(幅整合は厳格)。
-        for (line, output, callee, args, call_params) in &instances {
+        for (line, outputs, callee, args, call_params) in &instances {
             let sub = match self.logics.get(callee) {
                 Some(s) => s,
                 None => return fail(*line, format!("unknown logic: {}", callee)),
             };
-            if wire_names.contains(output) {
-                return fail(
-                    *line,
-                    format!("logic instance output '{}' must be a reg/port, not a wire", output),
-                );
+            // 親側 outputs の重複検査(同じ var/reg に複数の出力をぶつけるのは意図と違う)。
+            for i in 0..outputs.len() {
+                for j in (i + 1)..outputs.len() {
+                    if outputs[i] == outputs[j] {
+                        return fail(
+                            *line,
+                            format!(
+                                "duplicate target '{}' in logic-instance binding tuple",
+                                outputs[i]
+                            ),
+                        );
+                    }
+                }
             }
-            let out_ref = resolve_parent_ref(output, &scope, &buses, &wire_names, *line)?;
+            let mut out_refs: Vec<PortShape> = Vec::with_capacity(outputs.len());
+            for output in outputs {
+                if wire_names.contains(output) {
+                    return fail(
+                        *line,
+                        format!("logic instance output '{}' must be a reg/port, not a wire", output),
+                    );
+                }
+                out_refs.push(resolve_parent_ref(output, &scope, &buses, &wire_names, *line)?);
+            }
             let mut arg_refs: Vec<PortShape> = Vec::new();
             for a in args {
                 if wire_names.contains(a) {
@@ -1303,12 +1322,15 @@ impl<'p> Elaborator<'_, 'p> {
             if sub_out.is_empty() {
                 return fail(*line, format!("{} has no output port to bind", callee));
             }
-            if sub_out.len() > 1 {
+            // 出力ポート数と target 数の一致を厳格チェック(過不足ともエラー)。
+            if outputs.len() != sub_out.len() {
                 return fail(
                     *line,
                     format!(
-                        "{} has multiple output ports; the binding form 'out = logic(...)' supports exactly one",
-                        callee
+                        "{} has {} output port(s) but the binding tuple has {} target(s)",
+                        callee,
+                        sub_out.len(),
+                        outputs.len()
                     ),
                 );
             }
@@ -1317,9 +1339,16 @@ impl<'p> Elaborator<'_, 'p> {
                 let ctx = format!("{} input port '{}'", callee, pname);
                 connect_ports(self.c, arg_ref, pshape, &ctx, *line)?;
             }
-            // サブ出力ポート -> 親の出力先(レーン対応)
-            let ctx = format!("output of {} bound to '{}'", callee, output);
-            connect_ports(self.c, &sub_out[0].1, &out_ref, &ctx, *line)?;
+            // 各サブ出力ポート -> 対応する親の出力先(レーン対応)
+            for (i, ((out_name, sub_shape), out_ref)) in
+                sub_out.iter().zip(out_refs.iter()).enumerate()
+            {
+                let ctx = format!(
+                    "output '{}' of {} bound to '{}'",
+                    out_name, callee, outputs[i]
+                );
+                connect_ports(self.c, sub_shape, out_ref, &ctx, *line)?;
+            }
         }
 
         // 未接続 output ポート検査(仕様: エラー)。バスポートは全レーンを検査する。
@@ -1970,7 +1999,7 @@ impl<'a> ModuleExec<'a> {
     fn do_call_bind(
         &mut self,
         line: i32,
-        target: &str,
+        targets: &[String],
         callee: &str,
         bind_args: &[String],
         call_params: &[(String, Expr)],
@@ -1992,7 +2021,8 @@ impl<'a> ModuleExec<'a> {
             line,
         )?;
         // インスタンスキャッシュキーには `#(...)` 部分も含める。`#(W=4)` と `#(W=8)` は
-        // 別インスタンス(別ノード群)としてエラボレートする。
+        // 別インスタンス(別ノード群)としてエラボレートする。targets はキーに含めない
+        // (同じ呼び出しを別の var 組で受けても回路は同一インスタンスを共有する)。
         let param_part = param_env_key(&lit.params, &env);
         let key = format!("{}{}({})", callee, param_part, bind_args.join(","));
         if !self.insts.contains_key(&key) {
@@ -2014,15 +2044,6 @@ impl<'a> ModuleExec<'a> {
             };
             if outputs.is_empty() {
                 return fail(line, format!("{} has no output port to bind", callee));
-            }
-            if outputs.len() > 1 {
-                return fail(
-                    line,
-                    format!(
-                        "{} has multiple output ports; the binding form 'v = logic(...)' supports exactly one",
-                        callee
-                    ),
-                );
             }
             // 各引数 var(スカラ/バス)を入力ポートにレーン対応で束縛する。
             let mut in_vars: Vec<String> = Vec::new();
@@ -2060,52 +2081,68 @@ impl<'a> ModuleExec<'a> {
                     }
                 }
             }
-            let out_lanes = outputs[0].1.lanes();
+            // 出力ポートごとのレーン列を保持(順序は callee の宣言順)。
+            let out_ports: Vec<Vec<usize>> =
+                outputs.iter().map(|(_, sh)| sh.lanes()).collect();
             self.insts.insert(
                 key.clone(),
                 Instance {
                     in_vars,
                     in_nodes,
-                    out_lanes,
+                    out_ports,
                 },
             );
         }
-        // 出力ポートを target(スカラ/バス var)へレーン対応で束縛(呼び出しごと)。
-        let out_lanes = self.insts.get(&key).unwrap().out_lanes.clone();
-        match self.bus_width(target) {
-            Some(w) => {
-                if out_lanes.len() != w as usize {
-                    return fail(
-                        line,
-                        format!(
-                            "output of {} (width {}) does not match bus var '{}' (width {})",
-                            callee, out_lanes.len(), target, w
-                        ),
-                    );
+        // 出力ポート数と target 数の一致を厳格チェック(過不足ともエラー)。
+        let out_ports = self.insts.get(&key).unwrap().out_ports.clone();
+        if targets.len() != out_ports.len() {
+            return fail(
+                line,
+                format!(
+                    "{} has {} output port(s) but the binding tuple has {} target(s)",
+                    callee,
+                    out_ports.len(),
+                    targets.len()
+                ),
+            );
+        }
+        // 各出力ポートを対応する target(スカラ/バス var)へレーン対応で束縛(呼び出しごと)。
+        for (target, out_lanes) in targets.iter().zip(out_ports.iter()) {
+            match self.bus_width(target) {
+                Some(w) => {
+                    if out_lanes.len() != w as usize {
+                        return fail(
+                            line,
+                            format!(
+                                "output of {} (width {}) does not match bus var '{}' (width {})",
+                                callee, out_lanes.len(), target, w
+                            ),
+                        );
+                    }
+                    for (j, node) in out_lanes.iter().enumerate() {
+                        let lk = Self::lane_key(target, j as i64);
+                        self.out_bind.insert(lk.clone(), *node);
+                        let val = self.c.read(*node) as i64;
+                        self.vars.insert(lk, val);
+                    }
                 }
-                for (j, node) in out_lanes.iter().enumerate() {
-                    let lk = Self::lane_key(target, j as i64);
-                    self.out_bind.insert(lk.clone(), *node);
-                    let val = self.c.read(*node) as i64;
-                    self.vars.insert(lk, val);
+                None => {
+                    if !self.vars.contains_key(target) {
+                        return fail(line, format!("undeclared variable: {}", target));
+                    }
+                    if out_lanes.len() != 1 {
+                        return fail(
+                            line,
+                            format!(
+                                "{} has a bus output (width {}); bind it to a bus var (e.g. 'var[{}] {};')",
+                                callee, out_lanes.len(), out_lanes.len(), target
+                            ),
+                        );
+                    }
+                    self.out_bind.insert(target.to_string(), out_lanes[0]);
+                    let val = self.c.read(out_lanes[0]) as i64;
+                    self.vars.insert(target.to_string(), val);
                 }
-            }
-            None => {
-                if !self.vars.contains_key(target) {
-                    return fail(line, format!("undeclared variable: {}", target));
-                }
-                if out_lanes.len() != 1 {
-                    return fail(
-                        line,
-                        format!(
-                            "{} has a bus output (width {}); bind it to a bus var (e.g. 'var[{}] {};')",
-                            callee, out_lanes.len(), out_lanes.len(), target
-                        ),
-                    );
-                }
-                self.out_bind.insert(target.to_string(), out_lanes[0]);
-                let val = self.c.read(out_lanes[0]) as i64;
-                self.vars.insert(target.to_string(), val);
             }
         }
         Ok(())
@@ -2229,22 +2266,42 @@ impl<'a> ModuleExec<'a> {
             }
             SimStmt::CallBind {
                 line,
-                target,
+                targets,
                 callee,
                 bind_args,
                 params,
                 fmt,
             } => {
+                // 同一 target を 2 度以上書くのはエラー(out_bind の暗黙上書きを禁止)。
+                for i in 0..targets.len() {
+                    for j in (i + 1)..targets.len() {
+                        if targets[i] == targets[j] {
+                            return fail(
+                                *line,
+                                format!(
+                                    "duplicate target '{}' in logic-instance binding tuple",
+                                    targets[i]
+                                ),
+                            );
+                        }
+                    }
+                }
                 if callee == "scan" {
                     if !params.is_empty() {
                         return fail(*line, "scan() does not take generic '#(...)' parameters");
                     }
-                    self.do_scan(*line, target, bind_args, fmt.as_deref())?;
+                    if targets.len() != 1 {
+                        return fail(
+                            *line,
+                            "scan() returns a single value; use 'v = scan(...)' not a tuple binding",
+                        );
+                    }
+                    self.do_scan(*line, &targets[0], bind_args, fmt.as_deref())?;
                 } else {
                     if fmt.is_some() {
                         return fail(*line, "format string is only allowed for scan()");
                     }
-                    self.do_call_bind(*line, target, callee, bind_args, params)?;
+                    self.do_call_bind(*line, targets, callee, bind_args, params)?;
                 }
             }
             SimStmt::WaitTicks { ticks, .. } => {

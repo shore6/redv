@@ -1,0 +1,5 @@
+x1= 0 x2= 0 -> sum= 0 carry= 0   ok
+x1= 0 x2=15 -> sum=15 carry= 0   ok
+x1=15 x2= 0 -> sum=15 carry= 0   ok
+x1=15 x2=15 -> sum= 0 carry=15   ok
+half adder: all passed

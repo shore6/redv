@@ -126,12 +126,13 @@ pub enum LogicStmt {
         strength: i32,
         rhs: String,
     },
-    /// `output = callee#(P=v, ...)(args...)` — 別 logic の階層インスタンス化。
-    /// `output` は親の reg / ポート、`args` は親の reg / ポート名。`params` はジェネリック幅
-    /// の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
+    /// `(o1, o2, ...) = callee#(P=v, ...)(args...)` — 別 logic の階層インスタンス化。
+    /// `outputs` は親の reg / ポート列(出力ポートと位置対応)、`args` は親の reg / ポート名。
+    /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
+    /// 出力 1 個の `out = callee(...)` は `outputs = vec![out]` として正規化する(`(out) = ...` も同義)。
     Instance {
         line: i32,
-        output: String,
+        outputs: Vec<String>,
         callee: String,
         args: Vec<String>,
         params: Vec<(String, Expr)>,
@@ -224,12 +225,15 @@ pub enum SimStmt {
         value: Expr,
         pulse: Option<Expr>,
     },
-    /// `target = callee#(P=v, ...)(args)` — sim から logic をインスタンス化する束縛。
+    /// `(t1, t2, ...) = callee#(P=v, ...)(args)` — sim から logic をインスタンス化する束縛。
+    /// `targets` は出力ポートと位置対応の束縛先 var 列(スカラ var / バス var)。出力 1 個の
+    /// `t = callee(...)` は `targets = vec![t]` として正規化する(`(t) = ...` も同義)。
     /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
-    /// `fmt` は `scan("%x")` のような書式付き入力で使う(scan のみ。それ以外は常に `None`)。
+    /// `fmt` は `scan("%x")` のような書式付き入力で使う(scan のみ。それ以外は常に `None`。
+    /// scan は常に `targets.len() == 1`)。
     CallBind {
         line: i32,
-        target: String,
+        targets: Vec<String>,
         callee: String,
         bind_args: Vec<String>,
         params: Vec<(String, Expr)>,

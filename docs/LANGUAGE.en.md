@@ -408,14 +408,51 @@ The connection rules are:
 - Each node of `args` drives the callee's input port
 - The child instance is independent of `sim` variables; it is purely a circuit expansion
 
-A binding consumes exactly one output port.
-However, that one port may itself be a bus (`output[N]`), in which case it is a homogeneous multi-output (N lanes; §6).
-Tuple binding of heterogeneous multi-outputs is not supported.
+With one output port, use this form (`out = callee(...)`).
+For a logic with multiple output ports, use the tuple binding in §5.5.
+The single port may itself be a scalar or a bus (`output[N]`); a bus port is bound lane-by-lane as a homogeneous multi-output (§6).
 
 The number of arguments must match the callee's input port count.
 Each argument is a reg, a port, or a whole bus.
 
 Recursive instantiation (self or mutual cycles) is an error.
+
+### 5.5 Multi-Output Logic and Tuple Binding
+
+A `logic` can declare **multiple output ports**.
+When the same inputs produce two distinct results — like `sum` and `carry` of a half adder — list them as separate ports.
+
+```rv
+logic half_adder(input x1, input x2, output sum, output carry) {
+    sum   = xor_gate(x1, x2);
+    carry = and_gate(x1, x2);
+}
+```
+
+To instantiate a multi-output logic, receive the outputs as a tuple of bind targets.
+Each target is wired (no attenuation) to the corresponding output port in declaration order.
+
+```rv
+module m() {
+    var x1, x2, sum, carry;
+    sim {
+        x1 = 0; x2 = 0;
+        (sum, carry) = half_adder(x1, x2);    // tuple binding
+        #init
+    }
+}
+```
+
+Tuple binding works both inside a logic body and inside a sim block.
+Rules and constraints:
+
+- Each target is a plain reg / port / bus reg / bus port / var / bus var. Lane indices (`a[0]`), slices, concatenations, and `.side` are not allowed
+- The number of targets must match the callee's output port count exactly (both shortage and excess are errors)
+- The same target cannot appear twice (`(p, p) = g(x);` is an error)
+- Each target and its corresponding output port must agree in shape (scalar vs. bus) and width
+- A 1-output logic may also be received as a **1-target tuple** `(t) = callee(args...)` — equivalent to the conventional `t = callee(args...)`
+
+The argument list, recursion ban, and binding semantics are identical to §5.4.
 
 ---
 
@@ -584,7 +621,7 @@ y = not_gate(x);               // x becomes the input, y the output
 
 The binding rules are:
 
-- The same `(logic-name, argument list)` pair shares a single instance
+- The same `(logic-name, argument list)` pair shares a single instance (the target list is not part of the cache key)
 - Input variables stay bound; output variables are updated every tick
 - Bus ports (§6.2) take a whole bus var of matching shape and width
 
@@ -596,6 +633,16 @@ y = and4(x, x);                // Bind a whole bus var to bus ports
 ```
 
 Scalar ports require scalar vars, bus ports require bus vars; shape or width mismatches are errors.
+
+A multi-output logic is received with a `(t1, t2, ...)` tuple binding (§5.5).
+
+```rv
+var x1, x2, sum, carry;
+(sum, carry) = half_adder(x1, x2);   // bind the two outputs
+```
+
+The number of targets must equal the number of output ports (both shortage and excess are errors), and the same target cannot appear twice (`(p, p) = ...`).
+A 1-output logic may also use the 1-target tuple form `(v) = callee(...)`, equivalent to the conventional `v = callee(...)`.
 
 Variables that are bound to the circuit are clamped to 0–15 on input application.
 Out-of-range values raise a single warning per variable (§10).
@@ -1006,6 +1053,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/or_gate.rv` | An OR from 2 repeaters + dust merge |
 | `examples/and_gate.rv` | An AND from 3 torches (NOR of NOTs) |
 | `examples/hier_and.rv` | A hierarchical AND nesting `not_gate` and `or_gate` (De Morgan) |
+| `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = half_adder(x1, x2);` (§5.5) |
 | `examples/chain_mixed.rv` | Merging two chain paths into the same point (max) |
 
 ### 12.2 Component Behaviors
