@@ -99,6 +99,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 
 - **Language specification** (.rv grammar, components, simulation semantics): [docs/LANGUAGE.en.md](docs/LANGUAGE.en.md) / [docs/LANGUAGE.md](docs/LANGUAGE.md) (Japanese)
 - **Internal design** (compile pipeline, elaboration, simulation engine): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (Japanese)
+- **Style guide** (naming, choosing a circuit style, hierarchical design): [docs/STYLE.md](docs/STYLE.md) (Japanese)
 
 Minimal example:
 
@@ -133,6 +134,7 @@ docs/
   LANGUAGE.md       Language spec and simulation semantics (Japanese)
   LANGUAGE.en.md    Language spec and simulation semantics (English)
   ARCHITECTURE.md   Internals (pipeline, modules, simulation engine; Japanese)
+  STYLE.md          Style guide (naming, circuit style, hierarchical design; Japanese)
 ```
 
 ## License
