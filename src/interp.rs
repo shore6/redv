@@ -8,7 +8,7 @@
 
 use crate::ast::*;
 use crate::circuit::{Circuit, Config, NodeKind, SeqKind, Vcd};
-use crate::diag::{fail, is_json_mode, json_escape_into, warn, RvResult};
+use crate::diag::{fail, is_json_mode, json_escape_into, lint, warn, RvResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 /// 各トークンは「素子チャンク(`d4ccd4` 等)」または「wire 名(再利用素子列)」。
 /// wire 名は `wire_seq` を引いて再帰展開する(`visited` で循環を検出)。
 /// reg / ポート名は中間に置けない(端点専用)ためエラー。
+/// `used` には展開中に参照した wire 名を積む(`visited` は push/pop で消えるため
+/// 別持ち)。未使用 wire の lint(issue #48)に使う。
 #[allow(clippy::too_many_arguments)]
 fn expand_chain_tokens(
     tokens: &[String],
@@ -28,6 +30,7 @@ fn expand_chain_tokens(
     bus_names: &HashSet<String>,
     line: i32,
     visited: &mut Vec<String>,
+    used: &mut HashSet<String>,
     out: &mut Vec<Elem>,
 ) -> RvResult<()> {
     for tok in tokens {
@@ -56,8 +59,11 @@ fn expand_chain_tokens(
                     )
                 }
             };
+            used.insert(tok.clone());
             visited.push(tok.clone());
-            expand_chain_tokens(seq, wire_seq, scope, wire_names, bus_names, line, visited, out)?;
+            expand_chain_tokens(
+                seq, wire_seq, scope, wire_names, bus_names, line, visited, used, out,
+            )?;
             visited.pop();
         } else {
             out.extend(parse_chunk(tok, line)?);
@@ -625,6 +631,10 @@ struct Elaborator<'c, 'p> {
     stack: Vec<String>,
     /// サブインスタンスのノード名を一意化する連番
     counter: usize,
+    /// 静的 lint(floating-reg 等)を出し終えた logic 名。同じ logic を複数回
+    /// インスタンス化しても宣言由来の警告は 1 回で済ませる(issue #48)。
+    /// ModuleExec が module 単位で保持し、エラボレーションごとに借用する。
+    linted: &'c mut HashSet<String>,
 }
 
 impl<'p> Elaborator<'_, 'p> {
@@ -715,6 +725,7 @@ impl<'p> Elaborator<'_, 'p> {
     /// 1 本のスカラチェーン `fi -chunks- ti` を回路に構築する。
     /// `label` は内部ノード名の識別子(`#chN` / `#chN_i` で trace 非表示)。
     /// バスチェーンはレーンごとに本関数を呼び、各レーンで独立した素子列を展開する。
+    /// `used_wires` には展開で参照した wire 名が積まれる(未使用 wire lint 用)。
     #[allow(clippy::too_many_arguments)]
     fn build_chain_body(
         &mut self,
@@ -727,12 +738,14 @@ impl<'p> Elaborator<'_, 'p> {
         scope: &HashMap<String, usize>,
         wire_names: &HashSet<String>,
         bus_names: &HashSet<String>,
+        used_wires: &mut HashSet<String>,
         line: i32,
     ) -> RvResult<()> {
         let mut es: Vec<Elem> = Vec::new();
         let mut visited: Vec<String> = Vec::new();
         expand_chain_tokens(
-            chunks, wire_seq, scope, wire_names, bus_names, line, &mut visited, &mut es,
+            chunks, wire_seq, scope, wire_names, bus_names, line, &mut visited, used_wires,
+            &mut es,
         )?;
         let mut prev = fi;
         let mut decay = 0;
@@ -779,8 +792,14 @@ impl<'p> Elaborator<'_, 'p> {
                         't' => (SeqKind::Torch, 1),
                         _ => (SeqKind::Observer, 2),
                     };
-                    self.c
-                        .add_seq(kind, dly, ni, no, format!("{}.{}[{}]", prefix, label, idx));
+                    self.c.add_seq(
+                        kind,
+                        dly,
+                        ni,
+                        no,
+                        format!("{}.{}[{}]", prefix, label, idx),
+                        e.line,
+                    );
                     prev = no;
                     decay = 0;
                 }
@@ -798,8 +817,14 @@ impl<'p> Elaborator<'_, 'p> {
                     } else {
                         SeqKind::CompCmp
                     };
-                    self.c
-                        .add_comp(kind, ni, None, no, format!("{}.{}[{}]", prefix, label, idx));
+                    self.c.add_comp(
+                        kind,
+                        ni,
+                        None,
+                        no,
+                        format!("{}.{}[{}]", prefix, label, idx),
+                        e.line,
+                    );
                     prev = no;
                     decay = 0;
                 }
@@ -837,6 +862,13 @@ impl<'p> Elaborator<'_, 'p> {
             );
         }
         self.stack.push(l.name.clone());
+
+        // lint(issue #48)用の収集。`seq_lo` はこの elaborate(サブインスタンス込み)で
+        // 新規生成した順序素子の下端。`decl_lines` は reg / バス reg / wire の宣言行、
+        // `used_wires` はチェーン展開で実際に参照された wire 名。
+        let seq_lo = self.c.seqs.len();
+        let mut decl_lines: HashMap<String, i32> = HashMap::new();
+        let mut used_wires: HashSet<String> = HashSet::new();
 
         let mut scope: HashMap<String, usize> = HashMap::new();
         let mut qual_of: HashMap<String, Qual> = HashMap::new();
@@ -935,6 +967,7 @@ impl<'p> Elaborator<'_, 'p> {
                             return fail(*line, format!("duplicate name: {}", n));
                         }
                         wire_names.insert(n.clone());
+                        decl_lines.insert(n.clone(), *line);
                     }
                 }
                 LogicStmt::DeclReg {
@@ -947,6 +980,7 @@ impl<'p> Elaborator<'_, 'p> {
                     if scope.contains_key(name) || wire_names.contains(name) || buses.contains_key(name) {
                         return fail(*line, format!("duplicate name: {}", name));
                     }
+                    decl_lines.insert(name.clone(), *line);
                     // バス reg(`reg[n] a;`): n 本の plain レーン a[0]..a[n-1] を展開する。
                     // バスは純粋な糖衣で、各レーンは独立したスカラ点(circuit 意味論は不変)。
                     if let Some(we) = width {
@@ -1011,6 +1045,7 @@ impl<'p> Elaborator<'_, 'p> {
                             Some(side),
                             out,
                             format!("{}.{}", prefix, name),
+                            *line,
                         );
                         scope.insert(name.clone(), out);
                         side_regs.insert(name.clone(), (back, side));
@@ -1045,8 +1080,14 @@ impl<'p> Elaborator<'_, 'p> {
                             .c
                             .new_node(format!("{}.{}#side", prefix, name), NodeKind::Plain);
                         let out = self.c.new_node(format!("{}.{}", prefix, name), NodeKind::Plain);
-                        self.c
-                            .add_rep_lock(dly, back, side, out, format!("{}.{}", prefix, name));
+                        self.c.add_rep_lock(
+                            dly,
+                            back,
+                            side,
+                            out,
+                            format!("{}.{}", prefix, name),
+                            *line,
+                        );
                         scope.insert(name.clone(), out);
                         side_regs.insert(name.clone(), (back, side));
                         qual_of.insert(name.clone(), Qual::Plain);
@@ -1221,7 +1262,7 @@ impl<'p> Elaborator<'_, 'p> {
                     let label = format!("#ch{}", k + 1);
                     self.build_chain_body(
                         &label, prefix, fi, ti, chunks, &wire_seq, &scope, &wire_names,
-                        &bus_names, line,
+                        &bus_names, &mut used_wires, line,
                     )?;
                 }
                 (s, d) => {
@@ -1257,7 +1298,7 @@ impl<'p> Elaborator<'_, 'p> {
                         let label = format!("#ch{}_{}", k + 1, i);
                         self.build_chain_body(
                             &label, prefix, sl[i], dl[i], chunks, &wire_seq, &scope,
-                            &wire_names, &bus_names, line,
+                            &wire_names, &bus_names, &mut used_wires, line,
                         )?;
                     }
                 }
@@ -1367,6 +1408,183 @@ impl<'p> Elaborator<'_, 'p> {
             }
         }
 
+        // ---- デザインルールチェック(lint、issue #48)---------------------
+        // エラー検査を通った回路にだけ警告を出す。宣言由来の静的ルールは logic 名に
+        // つき 1 回(複数インスタンス化で重複させない)。
+        if self.linted.insert(l.name.clone()) {
+            let port_names: HashSet<&str> = l.ports.iter().map(|p| p.name.as_str()).collect();
+            // 浮き reg: どこからも駆動されず、どこも駆動しない(完全に孤立)。
+            // 入力ポートと併合された点は unused-input 側で拾うので除外し、
+            // 別名併合で同じ点になった reg は代表ノードで 1 回だけ報告する。
+            let mut reported: HashSet<usize> = HashSet::new();
+            let mut names: Vec<&String> = scope.keys().collect();
+            names.sort();
+            for name in names {
+                if port_names.contains(name.as_str()) {
+                    continue;
+                }
+                let line = decl_lines.get(name.as_str()).copied().unwrap_or(0);
+                if let Some(&(back, side)) = side_regs.get(name.as_str()) {
+                    // コンパレータ / ロック付きリピーター reg: back・side とも未駆動で、
+                    // out が何も駆動しない(出力ポートでもない)なら孤立。
+                    let rb = self.c.find(back);
+                    let rs = self.c.find(side);
+                    let ro = self.c.find(scope[name.as_str()]);
+                    if !self.c.nodes[rb].has_incoming
+                        && !self.c.nodes[rs].has_incoming
+                        && !self.c.nodes[ro].has_outgoing
+                        && !self.c.nodes[ro].is_out_port
+                    {
+                        lint(
+                            line,
+                            "floating-reg",
+                            format!(
+                                "reg '{}' in logic '{}' is not connected to anything",
+                                name, l.name
+                            ),
+                        );
+                    }
+                    continue;
+                }
+                let r = self.c.find(scope[name.as_str()]);
+                let nd = &self.c.nodes[r];
+                if nd.kind != NodeKind::Input
+                    && !nd.is_out_port
+                    && !nd.has_incoming
+                    && !nd.has_outgoing
+                    && reported.insert(r)
+                {
+                    lint(
+                        line,
+                        "floating-reg",
+                        format!(
+                            "reg '{}' in logic '{}' is not connected to anything",
+                            name, l.name
+                        ),
+                    );
+                }
+            }
+            // バス reg: 全レーン孤立のときのみ 1 回報告(部分レーン未使用は初版では見ない)。
+            let mut bus_list: Vec<&String> = buses.keys().collect();
+            bus_list.sort();
+            for name in bus_list {
+                if port_names.contains(name.as_str()) {
+                    continue;
+                }
+                let mut all_floating = true;
+                for &lane in &buses[name.as_str()] {
+                    let r = self.c.find(lane);
+                    let nd = &self.c.nodes[r];
+                    if nd.kind == NodeKind::Input
+                        || nd.is_out_port
+                        || nd.has_incoming
+                        || nd.has_outgoing
+                    {
+                        all_floating = false;
+                        break;
+                    }
+                }
+                if all_floating {
+                    lint(
+                        decl_lines.get(name.as_str()).copied().unwrap_or(0),
+                        "floating-reg",
+                        format!(
+                            "bus reg '{}' in logic '{}' is not connected to anything",
+                            name, l.name
+                        ),
+                    );
+                }
+            }
+            // 未使用 wire: 宣言されたがどのチェーンからも展開されなかった素子列。
+            let mut w_list: Vec<&String> = wire_names.iter().collect();
+            w_list.sort();
+            for wn in w_list {
+                if !used_wires.contains(wn.as_str()) {
+                    lint(
+                        decl_lines.get(wn.as_str()).copied().unwrap_or(0),
+                        "unused-wire",
+                        format!("wire '{}' in logic '{}' is never used in a chain", wn, l.name),
+                    );
+                }
+            }
+            // 未使用 input ポート: 全レーンが logic 本体のどこも駆動しない。
+            for (name, shape) in &inputs {
+                let mut used = false;
+                for lane in shape.lanes() {
+                    let r = self.c.find(lane);
+                    if self.c.nodes[r].has_outgoing {
+                        used = true;
+                        break;
+                    }
+                }
+                if !used {
+                    let pline = l
+                        .ports
+                        .iter()
+                        .find(|p| &p.name == name)
+                        .map(|p| p.line)
+                        .unwrap_or(0);
+                    lint(
+                        pline,
+                        "unused-input",
+                        format!("input port '{}' of logic '{}' is never used", name, l.name),
+                    );
+                }
+            }
+        }
+
+        // 到達可能性ルール(上界解析)はトップレベルのインスタンス化ごとに、この
+        // elaborate(サブインスタンス込み)で新規生成した素子・ポートに限って報告する。
+        // 非トップレベルでは入力ポートが親から未結線(上界が全部 0)なので判定しない。
+        if top_level {
+            let pot = self.c.lint_potentials();
+            // 常時 ON トーチ: 後ろ入力の上界 0 = 消灯する条件が絶対に来ない。
+            for si in seq_lo..self.c.seqs.len() {
+                if self.c.seqs[si].kind != SeqKind::Torch {
+                    continue;
+                }
+                let in_ = self.c.seqs[si].in_;
+                let r = self.c.find(in_);
+                if pot[r] == 0 {
+                    let (label, line) = (self.c.seqs[si].label.clone(), self.c.seqs[si].line);
+                    lint(
+                        line,
+                        "always-on-torch",
+                        format!("torch '{}' is always ON (its input can never be powered)", label),
+                    );
+                }
+            }
+            // 到達不能な出力: 出力ポートのレーン上界 0 = どう操作しても点灯しない。
+            for (name, shape) in &outs {
+                let lanes = shape.lanes();
+                let w = lanes.len();
+                for (i, &lane) in lanes.iter().enumerate() {
+                    let r = self.c.find(lane);
+                    if pot[r] == 0 {
+                        let pline = l
+                            .ports
+                            .iter()
+                            .find(|p| &p.name == name)
+                            .map(|p| p.line)
+                            .unwrap_or(0);
+                        let disp = if w == 1 {
+                            name.clone()
+                        } else {
+                            format!("{}[{}]", name, i)
+                        };
+                        lint(
+                            pline,
+                            "unreachable-output",
+                            format!(
+                                "output port '{}' of logic '{}' can never be powered (always 0)",
+                                disp, l.name
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+
         self.stack.pop();
         Ok((inputs, outs))
     }
@@ -1407,6 +1625,9 @@ pub struct ModuleExec<'a> {
     /// `--json` モード + 複数 module のとき、各 JSON イベントに `"module"` フィールドを足す。
     /// 単一 module のときは省略(出力をすっきりさせる)。
     many_modules: bool,
+    /// 静的 lint(floating-reg 等)を出し終えた logic 名(issue #48)。
+    /// module 単位で持ち、同じ logic を何度インスタンス化しても宣言由来の警告は 1 回。
+    linted_logics: HashSet<String>,
 }
 
 impl<'a> ModuleExec<'a> {
@@ -1435,6 +1656,7 @@ impl<'a> ModuleExec<'a> {
             assert_total: 0,
             assert_failed: 0,
             many_modules,
+            linted_logics: HashSet::new(),
         }
     }
 
@@ -2039,6 +2261,7 @@ impl<'a> ModuleExec<'a> {
                     defines: &prog.defines,
                     stack: Vec::new(),
                     counter: 0,
+                    linted: &mut self.linted_logics,
                 };
                 el.elaborate(lit, &key, true, line, bind_args.len(), env)?
             };

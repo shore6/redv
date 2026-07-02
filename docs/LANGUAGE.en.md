@@ -1024,6 +1024,39 @@ The form is `--> file:line:col`, followed by the source line and a `^` underline
 
 See [ARCHITECTURE.md §3.6](ARCHITECTURE.md) (Japanese) for implementation details.
 
+### 10.4 Design Rule Check (lint)
+
+A **lint pass** runs after elaboration and warns about structures that run but look suspicious (issue #48).
+To keep it separate from runtime warnings (§10.1), lint uses its own `[lint]` category with a rule name prefix on stderr.
+Lint warnings do not stop execution.
+
+```
+[lint] floating-reg: reg 'orphan' in logic 'sloppy' is not connected to anything
+  --> examples/lint_demo.rv:18:5
+```
+
+| Rule | Condition |
+|---|---|
+| `floating-reg` | A reg is driven by nothing and drives nothing (fully isolated) |
+| `unused-wire` | A wire is declared but never used in any chain |
+| `unused-input` | An input port is never used in the logic body |
+| `always-on-torch` | A torch's back input stays 0 no matter what (output is always ON) |
+| `unreachable-output` | An output port stays 0 no matter what (e.g. killed by 15 dusts of decay) |
+
+The first three rules are static: they only look at declarations and connectivity.
+The last two use an **upper-bound analysis**: it computes an upper bound of the strength each point can ever reach, and reports only points whose bound is 0.
+The bound may overestimate but never underestimates, so a reported point can never light up during execution (no false positives).
+See [ARCHITECTURE.md](ARCHITECTURE.md) (Japanese) for how the analysis works.
+
+Instantiating the same logic multiple times emits each declaration-based static warning only once per logic name.
+The upper-bound rules fire per top-level instantiation, scoped to that instance's components and ports.
+
+With the CLI flag `-W error`, the run completes as usual, and the exit code becomes 1 if any warning (runtime warnings of §10.1 and lint alike) was emitted.
+This is intended for enforcing zero warnings in CI.
+In `--json` mode (§7.4.1), lint becomes JSONL of the form `{"kind":"lint","rule":"...","line":N,"msg":"..."}`.
+
+`examples/lint_demo.rv` fires all 5 rules.
+
 ---
 
 ## 11. Differences from the Game
@@ -1102,6 +1135,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/scan_and.rv` | Reads two values from stdin with `scan()` and feeds them into an AND |
 | `examples/until_wait.rv` | `#until(cond)`: event-driven wait that advances ticks until the condition holds |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets a var to 0 after `w` ticks |
+| `examples/lint_demo.rv` | Fires all 5 design-rule-check (lint) warnings; `-W error` turns them into a non-zero exit (§10.4) |
 
 ### 12.4 Buses and `param`
 

@@ -8,6 +8,7 @@
 //! ソース行を引くため、`set_source()` で字句解析前にファイル名と全行を登録しておく(issue #47)。
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
@@ -64,6 +65,14 @@ struct Source {
 
 static SOURCE: OnceLock<Source> = OnceLock::new();
 static JSON_MODE: OnceLock<bool> = OnceLock::new();
+/// これまでに出した警告(`warn` / `lint`)の総数。`-W error`(警告のエラー化)の判定に使う。
+static WARNING_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// これまでに出した警告(`warn` / `lint`)の総数を返す。
+/// `-W error` 指定時、main が完走後にこれを見て終了コードを決める。
+pub fn warning_count() -> u64 {
+    WARNING_COUNT.load(Ordering::Relaxed)
+}
 
 /// 診断のキャレット表示で引くソースを登録する(字句解析前に 1 回)。
 pub fn set_source(file: &str, src: &str) {
@@ -117,10 +126,35 @@ pub fn report_error(e: &RvError) {
 
 /// stderr へ警告を出力する(キャレット表示。JSON モードでは JSONL)。
 pub fn warn(line: i32, msg: impl AsRef<str>) {
+    WARNING_COUNT.fetch_add(1, Ordering::Relaxed);
     if is_json_mode() {
         emit_json_diag("warning", line, msg.as_ref());
     } else {
         render("warning", line, 0, 0, msg.as_ref());
+    }
+}
+
+/// デザインルールチェック(lint)の警告を stderr へ出力する(issue #48)。
+/// 既存の `[warning]` と混ざらないよう専用種別 `[lint]` で出し、ルール名
+/// (`floating-reg` 等)をメッセージ先頭に付ける。JSON モードでは
+/// `{"kind":"lint","rule":"...","line":N,"msg":"..."}` の JSONL。
+/// `-W error` の対象としては通常の警告と同じく数える。
+pub fn lint(line: i32, rule: &str, msg: impl AsRef<str>) {
+    WARNING_COUNT.fetch_add(1, Ordering::Relaxed);
+    if is_json_mode() {
+        let mut s = String::new();
+        s.push_str("{\"kind\":\"lint\",\"rule\":");
+        json_escape_into(rule, &mut s);
+        if line > 0 {
+            use std::fmt::Write;
+            let _ = write!(s, ",\"line\":{}", line);
+        }
+        s.push_str(",\"msg\":");
+        json_escape_into(msg.as_ref(), &mut s);
+        s.push('}');
+        eprintln!("{}", s);
+    } else {
+        render("lint", line, 0, 0, &format!("{}: {}", rule, msg.as_ref()));
     }
 }
 

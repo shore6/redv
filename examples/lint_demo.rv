@@ -1,0 +1,41 @@
+/* デザインルールチェック(lint)デモ(issue #48)。
+ *
+ * わざと雑に書いた logic で、エラボレーション後の lint パスが出す 5 種類の警告を
+ * すべて発火させる。警告は stderr の `[lint]` 種別で出て、sim 自体は完走する。
+ *
+ *   redv examples/lint_demo.rv              # 警告を出しつつ実行(終了コード 0)
+ *   redv -W error examples/lint_demo.rv     # 警告をエラー化(終了コード 1)
+ *
+ * 発火するルール:
+ *   floating-reg       … reg 'orphan' がどこにも結線されていない
+ *   unused-wire        … wire 'seg' が定義だけでどのチェーンにも使われない
+ *   unused-input       … input 'unused_in' が本体で一度も使われない
+ *   always-on-torch    … reg 'z' が無駆動のためトーチが絶対に消灯しない
+ *   unreachable-output … ダスト 15 個の減衰で 'dead' がどう操作しても 0 のまま
+ */
+logic sloppy(input x, input unused_in, output y, output dead)
+{
+    reg orphan;     // どこにも繋がない(floating-reg)
+    wire seg;
+    seg = r2d;      // 素子列を定義するがチェーンで使わない(unused-wire)
+
+    reg z;
+    z - t - y;      // z は誰も駆動しない → トーチ入力が常に 0(always-on-torch)
+
+    x - d15 - dead; // 強度 15 でもダスト 15 個で減衰しきる(unreachable-output)
+}
+
+module test_lint_demo()
+{
+    var x, u, y, dead;
+    sim {
+        x = 0;
+        u = 0;
+        (y, dead) = sloppy(x, u);
+        #init
+        ?monitor("t=% | x=%2 -> y=%2 dead=%2\n", $time, x, y, dead);
+
+        x = 15; #2      // x を上げても y(常時 ON トーチ)も dead(減衰死)も不変
+        x = 0;  #2
+    }
+}
