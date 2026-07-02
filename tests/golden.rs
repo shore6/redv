@@ -1163,6 +1163,127 @@ fn multi_output_single_target_tuple_is_accepted() {
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
+/// 与えたソースを一時ファイルに書き、追加 CLI 引数付きで redv に渡して
+/// (終了コード, stderr) を返す(`-W error` 等のフラグ検証用)。
+fn run_source_args(tag: &str, src: &str, args: &[&str]) -> (Option<i32>, String) {
+    let path = std::env::temp_dir().join(format!("redv_test_{tag}.rv"));
+    std::fs::write(&path, src).expect("write temp rv");
+    let out = Command::new(bin())
+        .args(args)
+        .arg(&path)
+        .output()
+        .expect("spawn redv");
+    let _ = std::fs::remove_file(&path);
+    (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+/// lint デモ(issue #48): 警告は stderr へ出るので stdout のゴールデンは不変。
+/// sim 自体は完走して exit 0 になる。
+#[test]
+fn lint_demo() {
+    run_golden("lint_demo");
+}
+
+/// lint パス(issue #48): デモの 5 ルールがすべて `[lint]` 種別で stderr に出る。
+#[test]
+fn lint_demo_emits_all_rules() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let rv = format!("{manifest}/examples/lint_demo.rv");
+    let out = Command::new(bin()).arg(&rv).output().expect("spawn redv");
+    assert_eq!(out.status.code(), Some(0), "lint warnings must not fail the run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    for rule in [
+        "floating-reg",
+        "unused-wire",
+        "unused-input",
+        "always-on-torch",
+        "unreachable-output",
+    ] {
+        assert!(
+            stderr.contains(&format!("[lint] {rule}:")),
+            "missing rule {rule}, stderr:\n{stderr}"
+        );
+    }
+}
+
+/// lint パス(issue #48): すべて結線済みのソースには `[lint]` を 1 件も出さない
+/// (誤検出ゼロの検証)。
+#[test]
+fn lint_clean_source_emits_no_lint() {
+    let src = "logic g(input x, output y){ reg z; x - t - z; z - r - y; }\n\
+               module m(){ var a,y; sim{ a=0; y=g(a); #init } }";
+    let (code, stderr) = run_source("lint_clean", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+    assert!(!stderr.contains("[lint]"), "unexpected lint, stderr:\n{stderr}");
+}
+
+/// 静的 lint ルール(floating-reg 等)は logic 名につき 1 回。同じ logic を
+/// 複数回インスタンス化しても宣言由来の警告は重複しない(issue #48)。
+#[test]
+fn lint_static_rules_fire_once_per_logic() {
+    let src = "logic g(input x, output y){ reg orphan; x - r - y; }\n\
+               module m(){ var a1,a2,y1,y2; sim{ a1=0; a2=0;\n\
+               \x20\x20\x20\x20y1=g(a1); y2=g(a2); #init } }";
+    let (code, stderr) = run_source("lint_dedup", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+    assert_eq!(
+        stderr.matches("floating-reg").count(),
+        1,
+        "static lint must fire once per logic, stderr:\n{stderr}"
+    );
+}
+
+/// `-W error`(issue #48): 完走後に警告(lint 含む)が 1 件でもあれば exit 1、
+/// 警告ゼロなら exit 0。
+#[test]
+fn werror_flag_promotes_warnings() {
+    let dirty = "logic g(input x, output y){ reg orphan; x - r - y; }\n\
+                 module m(){ var a,y; sim{ a=0; y=g(a); #init } }";
+    let (code, stderr) = run_source_args("werror_dirty", dirty, &["-W", "error"]);
+    assert_eq!(code, Some(1), "expected exit 1, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("treated as errors"),
+        "missing -W error message, stderr:\n{stderr}"
+    );
+
+    let clean = "logic g(input x, output y){ x - r - y; }\n\
+                 module m(){ var a,y; sim{ a=0; y=g(a); #init } }";
+    let (code, stderr) = run_source_args("werror_clean", clean, &["-W", "error"]);
+    assert_eq!(code, Some(0), "expected exit 0, stderr:\n{stderr}");
+}
+
+/// `-W` の不正モード / モード欠落は CLI エラー(exit 2)(issue #48)。
+#[test]
+fn werror_flag_misuse_exits_2() {
+    let src = "module m(){ var a; sim{ a=0; } }";
+    let (code, _) = run_source_args("werror_bad", src, &["-W", "bogus"]);
+    assert_eq!(code, Some(2), "unknown -W mode must exit 2");
+
+    // `-W` が最後の引数(モード欠落)。ファイルは先に渡す。
+    let path = std::env::temp_dir().join("redv_test_werror_noarg.rv");
+    std::fs::write(&path, src).expect("write temp rv");
+    let out = Command::new(bin())
+        .arg(&path)
+        .arg("-W")
+        .output()
+        .expect("spawn redv");
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(out.status.code(), Some(2), "-W without a mode must exit 2");
+}
+
+/// `--json` モードで lint は `{"kind":"lint","rule":...}` の JSONL になる(issue #48)。
+#[test]
+fn json_mode_emits_lint_jsonl() {
+    let src = "logic g(input x, output y){ reg orphan; x - r - y; }\n\
+               module m(){ var a,y; sim{ a=0; y=g(a); #init } }";
+    let (code, stderr) = run_source_args("json_lint", src, &["--json"]);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("\"kind\":\"lint\"") && stderr.contains("\"rule\":\"floating-reg\""),
+        "missing lint JSON, stderr:\n{stderr}"
+    );
+}
+
 /// 旧 `dx`(十字ダスト)は廃止(issue #66)。`d` と挙動が同一で `reg` の繋ぎ方で
 /// 表現できるため不要。素子列中では `d` のあとの `x` が未知素子として弾かれる。
 #[test]
