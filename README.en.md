@@ -67,6 +67,7 @@ cargo test                                             # Golden tests for all ex
 | `-t`, `--trace` | Traces all node values every tick to stderr |
 | `--vcd <file>` | Dumps the waveform in VCD (Value Change Dump) format to `<file>` (view in GTKWave, etc.). Records public nodes (regs / ports whose name has no `#`) as 4-bit vectors of strength 0–15. Time is the raw tick (includes `#init` settling, same as `-t`). With multiple modules the output is split into `<file>.<module>.vcd` |
 | `--json` | Emit monitor / assert / warning as one JSON object per line (JSONL). monitor events go to stdout; assert / expect / warning and the final summary go to stderr. Useful for CI regression diffs and for piping into other tools |
+| `-W error` | Treat warnings as errors: after the run completes, exit with code 1 if any warning (including lint) was emitted. Useful for enforcing zero warnings in CI ([docs/LANGUAGE.md §10.4](docs/LANGUAGE.md)) |
 | `-T`, `--time` | Prints compile and simulation timings to stderr |
 | `-h`, `--help` | Prints usage (exit code 0) |
 | `-v`, `--version` | Prints version |
@@ -92,6 +93,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane is packed as a 4-bit nibble (lane[0] is the lowest) |
 | `examples/stdlogic_demo.rv` | `#include "stdlogic"` pulls in the basic gate library (NOT / AND / OR / XOR / NAND / NOR / XNOR) |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
+| `examples/lint_demo.rv` | Demo that fires all 5 design-rule-check (lint) warnings |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |
 | `examples/json_output.rv` | Demo of emitting monitor output as JSONL via `--json` |
 
