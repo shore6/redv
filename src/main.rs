@@ -26,6 +26,7 @@ options:\n\
 \x20 -T, --time     print compile/sim timings to stderr\n\
 \x20     --vcd FILE write a VCD waveform dump to FILE\n\
 \x20     --json     emit monitor / assert / warning as JSONL\n\
+\x20 -W error       treat warnings (incl. lint) as errors: exit 1 if any\n\
 \x20 -h, --help     show this help\n\
 \x20 -v, --version  show version\n"
     );
@@ -55,13 +56,25 @@ fn main() -> ExitCode {
     let mut time = false;
     let mut vcd: Option<String> = None;
     let mut json = false;
+    // `-W error`(警告のエラー化)。完走後に警告が 1 件でもあれば終了コード 1 にする。
+    let mut werror = false;
     // `--vcd FILE` の FILE を次トークンとして待っている状態。
     let mut expect_vcd = false;
+    // `-W MODE` の MODE を次トークンとして待っている状態。
+    let mut expect_w = false;
 
     for a in &argv[1..] {
         if expect_vcd {
             vcd = Some(a.clone());
             expect_vcd = false;
+        } else if expect_w {
+            if a == "error" {
+                werror = true;
+            } else {
+                eprintln!("[error] unknown -W mode: {} (expected 'error')", a);
+                return ExitCode::from(2);
+            }
+            expect_w = false;
         } else if a == "-t" || a == "--trace" {
             trace = true;
         } else if a == "-T" || a == "--time" {
@@ -72,6 +85,8 @@ fn main() -> ExitCode {
             vcd = Some(p.to_string());
         } else if a == "--json" {
             json = true;
+        } else if a == "-W" {
+            expect_w = true;
         } else if a == "-h" || a == "--help" {
             usage();
             return ExitCode::SUCCESS;
@@ -91,6 +106,10 @@ fn main() -> ExitCode {
 
     if expect_vcd {
         eprintln!("[error] --vcd requires a file path");
+        return ExitCode::from(2);
+    }
+    if expect_w {
+        eprintln!("[error] -W requires a mode (e.g. '-W error')");
         return ExitCode::from(2);
     }
 
@@ -136,6 +155,21 @@ fn main() -> ExitCode {
                 // compile に合算する。sim は tick 実行のみ。
                 let elaborate = run_dur.saturating_sub(timings.sim);
                 report_time(parse_dur + elaborate, timings.sim, timings.modules);
+            }
+            // `-W error`: 完走はさせた上で、警告(warn / lint)が 1 件でもあれば
+            // 終了コードを非ゼロにする(エラボレーションは sim 実行中に遅延発生
+            // するため、警告即 abort ではなく完走後判定)。
+            if werror && diag::warning_count() > 0 {
+                diag::report_error(&diag::RvError {
+                    line: 0,
+                    col: 0,
+                    len: 0,
+                    msg: format!(
+                        "-W error: {} warning(s) emitted (treated as errors)",
+                        diag::warning_count()
+                    ),
+                });
+                return ExitCode::FAILURE;
             }
             ExitCode::SUCCESS
         }
