@@ -14,7 +14,7 @@ logic make_hi(output y)
     hi - y;
 }
 
-logic notN(input[W] a, output[W] y)
+logic NOT(input[W] a, output[W] y)
 {
     a - t - y;
 }
@@ -25,7 +25,7 @@ module test_literals()
     var z;
     sim {
         a = 0;
-        y = notN(a);
+        y = NOT(a);
         z = make_hi();
         #init
         a[0] = HI;  a[2] = 0xf;   // a = 0101(レーン 0 と 2 を HIGH)

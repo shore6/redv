@@ -44,7 +44,7 @@ Statements end with `;`, blocks use `{}`, and comments are `//` (line) and `/* *
 The smallest possible round trip: build a NOT from a single torch, drive its input, and observe.
 
 ```rv
-logic not_gate(input x, output y) {
+logic NOT(input x, output y) {
     x-t-y;                       // Connect x and y with a torch
 }
 
@@ -52,7 +52,7 @@ module test() {
     var x, y;
     sim {
         x = 0;
-        y = not_gate(x);         // Instantiate and bind variables to I/O
+        y = NOT(x);         // Instantiate and bind variables to I/O
         #init                    // Wait until steady state ($time = 0)
         x = 10;  #1
         ?monitor("t=% x=% y=%\n", $time, x, y);
@@ -390,12 +390,12 @@ Side inputs of comparator and repeater regs share the following constraints.
 A `logic` body can call another `logic` to nest circuits.
 
 ```rv
-logic and2(input x1, input x2, output y) {
+logic AND2(input x1, input x2, output y) {
     reg na, nb, s;
-    na = not_gate(x1);         // out = callee(args...)
-    nb = not_gate(x2);
-    s  = or_gate(na, nb);
-    y  = not_gate(s);          // x1 & x2 = !( !x1 | !x2 )
+    na = NOT(x1);         // out = callee(args...)
+    nb = NOT(x2);
+    s  = OR2(na, nb);
+    y  = NOT(s);          // x1 & x2 = !( !x1 | !x2 )
 }
 ```
 
@@ -423,9 +423,9 @@ A `logic` can declare **multiple output ports**.
 When the same inputs produce two distinct results — like `sum` and `carry` of a half adder — list them as separate ports.
 
 ```rv
-logic half_adder(input x1, input x2, output sum, output carry) {
-    sum   = xor_gate(x1, x2);
-    carry = and_gate(x1, x2);
+logic HALF_ADDER(input x1, input x2, output sum, output carry) {
+    sum   = XOR2(x1, x2);
+    carry = AND2(x1, x2);
 }
 ```
 
@@ -437,7 +437,7 @@ module m() {
     var x1, x2, sum, carry;
     sim {
         x1 = 0; x2 = 0;
-        (sum, carry) = half_adder(x1, x2);    // tuple binding
+        (sum, carry) = HALF_ADDER(x1, x2);    // tuple binding
         #init
     }
 }
@@ -496,7 +496,7 @@ Ports too can be buses.
 `input[N] x` and `output[N] y` are N-lane parallel ports; inside the body you can use them with indexing `x[k]` or as a whole bus `x`, just like internal bus regs.
 
 ```rv
-logic and4(input[4] x1, input[4] x2, output[4] y) {
+logic AND2(input[4] x1, input[4] x2, output[4] y) {
     reg[4] nx1;  reg[4] nx2;  reg[4] s;
     x1 - t - nx1;              // nx1 = NOT x1 (4 lanes at once)
     x2 - t - nx2;
@@ -583,7 +583,7 @@ module test() {
     var x, y;
     sim {
         x = 0;
-        y = not_gate(x);       // Instantiation and I/O binding
+        y = NOT(x);       // Instantiation and I/O binding
         #init                  // Wait until steady state
         x = 10;
         #1                     // Advance 1 tick
@@ -616,7 +616,7 @@ Exceeding `INIT_TIMEOUT` is an error, which catches both oscillation and a condi
 `v = logic-name(variables...)` instantiates a circuit and binds variables to its I/O.
 
 ```rv
-y = not_gate(x);               // x becomes the input, y the output
+y = NOT(x);               // x becomes the input, y the output
 ```
 
 The binding rules are:
@@ -629,7 +629,7 @@ Example with bus vars:
 
 ```rv
 var[4] x, y;
-y = and4(x, x);                // Bind a whole bus var to bus ports
+y = AND2(x, x);                // Bind a whole bus var to bus ports
 ```
 
 Scalar ports require scalar vars, bus ports require bus vars; shape or width mismatches are errors.
@@ -638,7 +638,7 @@ A multi-output logic is received with a `(t1, t2, ...)` tuple binding (§5.5).
 
 ```rv
 var x1, x2, sum, carry;
-(sum, carry) = half_adder(x1, x2);   // bind the two outputs
+(sum, carry) = HALF_ADDER(x1, x2);   // bind the two outputs
 ```
 
 The number of targets must equal the number of output ports (both shortage and excess are errors), and the same target cannot appear twice (`(p, p) = ...`).
@@ -812,7 +812,32 @@ Referencing an undefined name or dividing by zero is an error.
 #include "other.rv"            // Pull in a file
 ```
 
-A `stdlogic` include is not yet implemented and produces a warning.
+#### 8.2.1 Bundled standard library
+
+Passing a **bundled name** like `#include "stdlogic"` pulls in a standard library that is embedded inside the `redv` binary.
+You do not need to ship the file separately or write a relative path; the same source is read no matter where `redv` runs from.
+
+| Name | Contents |
+|---|---|
+| `stdlogic` | Basic logic gates (`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`). All are scalar 1–2 input / 1 output |
+
+Repeating `#include` of the same bundled name within one source is a no-op after the first occurrence (no duplicate-definition error).
+The check applies even across nested includes.
+File-based includes do not have this dedup; the caller must avoid circular or double inclusion.
+
+A name not in the bundled list falls back to the normal file include path.
+For example `#include "stdfoo"` is not a bundled name, so `stdfoo` / `stdfoo.rv` is searched as a relative / absolute path, and is an error if not found.
+
+```rv
+#include "stdlogic"
+
+logic EQUAL(input x1, input x2, output y) {
+    y = s_xnor(x1, x2);        // 1-bit equality detector = XNOR
+}
+```
+
+`s_xor` / `s_xnor` are layered on top of `s_not` / `s_and` / `s_or`, so they take 4–5 ticks total.
+Per-gate propagation delays are listed in the header comment of `examples/stdlogic_demo.rv`.
 
 ### 8.3 `param` (parameter constants)
 
@@ -823,7 +848,7 @@ It can be referenced by name in bus widths and sim expressions, so widths are no
 param W  = 4;                  // A constant
 param W2 = W + 1;              // Earlier params may be used in a const-expr (no forward references)
 
-logic notN(input[W] x, output[W] y) { x - t - y; }   // Parameterize width by param
+logic NOT(input[W] x, output[W] y) { x - t - y; }   // Parameterize width by param
 
 module m() {
     var[W] x;                  // Bus width by param
@@ -850,7 +875,7 @@ The form `logic name #(P=default, ...)(...)` declares **generic width parameters
 Each call can pick its own values, so a single definition can be instantiated at multiple widths.
 
 ```rv
-logic notN #(W=4)(input[W] x, output[W] y)
+logic NOT #(W=4)(input[W] x, output[W] y)
 {
     reg[W] s;
     x - s;
@@ -863,8 +888,8 @@ module m()
     var[8] x8, y8;
     sim {
         x4 = 0;  x8 = 0;
-        y4 = notN(x4);            // Expanded with the default W=4
-        y8 = notN#(W=8)(x8);      // Expanded as a separate instance with W=8
+        y4 = NOT(x4);            // Expanded with the default W=4
+        y8 = NOT#(W=8)(x8);      // Expanded as a separate instance with W=8
         #init
     }
 }
@@ -972,7 +997,6 @@ Unrecoverable conditions raise errors and halt; recoverable conditions print war
 | An out-of-range var was passed as a circuit input | Rounded to 0 or 15; warned once per variable |
 | Reassignment of a wire or reg element | Last assignment is taken; a warning is emitted |
 | Torch burnout | Toggle count in the window exceeded; forced OFF for the cooldown |
-| `#include` of `stdlogic` | Not implemented; warning |
 
 ### 10.2 Errors (execution halts)
 
@@ -1052,8 +1076,8 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/not_gate.rv` | A NOT from a single torch |
 | `examples/or_gate.rv` | An OR from 2 repeaters + dust merge |
 | `examples/and_gate.rv` | An AND from 3 torches (NOR of NOTs) |
-| `examples/hier_and.rv` | A hierarchical AND nesting `not_gate` and `or_gate` (De Morgan) |
-| `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = half_adder(x1, x2);` (§5.5) |
+| `examples/hier_and.rv` | A hierarchical AND nesting `NOT` and `OR2` (De Morgan) |
+| `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = HALF_ADDER(x1, x2);` (§5.5) |
 | `examples/chain_mixed.rv` | Merging two chain paths into the same point (max) |
 
 ### 12.2 Component Behaviors
@@ -1092,6 +1116,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`): usable in strengths, bus widths, `param`, `#define`, sim assignments, and tick counts (§1.3) |
 | `examples/define_expr.rv` | Constant expressions in `#define` values (e.g. `(W*2)`) (§8.1) |
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane packs into a 4-bit nibble for display (§7.4.1) |
+| `examples/stdlogic_demo.rv` | The bundled standard library: `#include "stdlogic"` pulls in 7 basic gates (NOT / AND / OR / XOR / NAND / NOR / XNOR) and the demo sweeps them (§8.2.1) |
 
 ### 12.5 Waveform / Structured Output
 

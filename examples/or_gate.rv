@@ -1,5 +1,5 @@
 /* OR回路: リピータ2本でダストに合流 (合流点は最大値をとる) */
-logic or_gate(input x1, input x2, output y)
+logic OR2(input x1, input x2, output y)
 {
     reg s;
     x1-r-s;        // リピータで x1 と s を接続
@@ -14,7 +14,7 @@ module test_or_gate()
     var y;
     sim {
         x1 = 0; x2 = 0;
-        y = or_gate(x1, x2);
+        y = OR2(x1, x2);
         #init              // (時刻0)
 
         x1 = 1; x2 = 0;

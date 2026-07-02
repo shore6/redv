@@ -5,7 +5,7 @@
  * W を 8 などに変えると、そのまま 8 ビット回路として動く。 */
 param W = 4;
 
-logic notN(input[W] a, output[W] y)
+logic NOT(input[W] a, output[W] y)
 {
     a - t - y;          // W レーンへトーチ一括(各レーンが NOT)
 }
@@ -17,7 +17,7 @@ module test_notN()
     var i, ng;
     sim {
         a = 0; ng = 0;
-        y = notN(a);
+        y = NOT(a);
         #init
         for (i = 0; i < W; i = i + 1) { a[i] = (i % 2) * 15; }   // a = ...0101
         #2

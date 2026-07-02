@@ -1,14 +1,14 @@
 /* 半加算器: 1 ビット入力 2 本から sum と carry の 2 出力を同時に取り出す回路。
-   多出力 logic を `(sum, carry) = half_adder(x1, x2);` の **タプル束縛** で受ける(§5.5)。
+   多出力 logic を `(sum, carry) = HALF_ADDER(x1, x2);` の **タプル束縛** で受ける(§5.5)。
 
    構成は下位ゲートの階層化:
        sum   = x1 XOR x2
        carry = x1 AND x2
    XOR は OR + AND + NOT の合成で作る(`AND(OR(x1,x2), NOT(AND(x1,x2)))`)。 */
 
-logic not_gate(input x, output y) { x - t - y; }
+logic NOT(input x, output y) { x - t - y; }
 
-logic and_gate(input x1, input x2, output y)
+logic AND2(input x1, input x2, output y)
 {
     reg s;                  // NOR 合流点(`NOT(x1) AND NOT(x2)` のダスト合流)
     s = d;
@@ -17,7 +17,7 @@ logic and_gate(input x1, input x2, output y)
     s - t - y;              // AND = NOR(NOT x1, NOT x2) を更にトーチで反転
 }
 
-logic or_gate(input x1, input x2, output y)
+logic OR2(input x1, input x2, output y)
 {
     reg s;
     s = d;
@@ -26,20 +26,20 @@ logic or_gate(input x1, input x2, output y)
     y = s;
 }
 
-logic xor_gate(input x1, input x2, output y)
+logic XOR2(input x1, input x2, output y)
 {
     reg sor, sand, nsand;
-    sor   = or_gate(x1, x2);    // sor   = x1 OR x2
-    sand  = and_gate(x1, x2);   // sand  = x1 AND x2
-    nsand = not_gate(sand);     // nsand = NOT(x1 AND x2)
-    y     = and_gate(sor, nsand); // y = (x1 OR x2) AND NOT(x1 AND x2) = XOR
+    sor   = OR2(x1, x2);    // sor   = x1 OR x2
+    sand  = AND2(x1, x2);   // sand  = x1 AND x2
+    nsand = NOT(sand);     // nsand = NOT(x1 AND x2)
+    y     = AND2(sor, nsand); // y = (x1 OR x2) AND NOT(x1 AND x2) = XOR
 }
 
 /* 多出力 logic: 同じ入力 (x1, x2) から sum / carry を別々に駆動する。 */
-logic half_adder(input x1, input x2, output sum, output carry)
+logic HALF_ADDER(input x1, input x2, output sum, output carry)
 {
-    sum   = xor_gate(x1, x2);
-    carry = and_gate(x1, x2);
+    sum   = XOR2(x1, x2);
+    carry = AND2(x1, x2);
 }
 
 module test_half_adder()
@@ -48,7 +48,7 @@ module test_half_adder()
     var i, ng;
     sim {
         x1 = 0; x2 = 0; ng = 0;
-        (sum, carry) = half_adder(x1, x2);  // 多出力タプル束縛
+        (sum, carry) = HALF_ADDER(x1, x2);  // 多出力タプル束縛
         #init                                // 0,0 の定常まで待つ
         for (i = 0; i < 4; i = i + 1) {
             x1 = (i / 2) * 15;

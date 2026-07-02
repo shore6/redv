@@ -1,5 +1,5 @@
 /* for/while/if を使ったスイープテスト: 全入力組み合わせでANDを検証 */
-logic and_gate(input x1, input x2, output y)
+logic AND2(input x1, input x2, output y)
 {
     reg s;
     s = d;
@@ -14,7 +14,7 @@ module sweep_and()
     var i, ng;
     sim {
         x1 = 0; x2 = 0; ng = 0;
-        y = and_gate(x1, x2);
+        y = AND2(x1, x2);
         #init
         for (i = 0; i < 4; i = i + 1) {
             x1 = (i / 2) * 15;

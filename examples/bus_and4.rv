@@ -3,7 +3,7 @@
  *   x1 AND x2 = NOT( NOT x1 OR NOT x2 )   (ド・モルガン)
  * バスポート input[4]/output[4]・内部バス reg・バス全体チェーンで密に書ける
  * (スカラ 4 本ぶんの配線が 1 行になる)。 */
-logic and4(input[4] x1, input[4] x2, output[4] y)
+logic AND2(input[4] x1, input[4] x2, output[4] y)
 {
     reg[4] nx1;
     reg[4] nx2;
@@ -23,7 +23,7 @@ module test_and4()
     var i, k, ng, bit;
     sim {
         x1 = 0; x2 = 0; ng = 0;      // バス全体へブロードキャスト代入
-        y = and4(x1, x2);            // バス出力をバス var へ束縛(レーン対応)
+        y = AND2(x1, x2);            // バス出力をバス var へ束縛(レーン対応)
         #init
         x2[1] = 15; x2[2] = 15;      // x2 = 0110 固定
         for (i = 0; i < 16; i = i + 1) {

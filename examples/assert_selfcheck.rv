@@ -3,7 +3,7 @@
  *  - expect(actual, expected): 不一致なら「実際の値 / 期待値」を stderr に記録
  *  - 1 つでも失敗すると末尾で「N assertions, M failed」を報告し非ゼロ終了する。
  * monitor 出力(ゴールデン文字列)ではなく終了コードで合否が分かるのが要点。 */
-logic and_gate(input x1, input x2, output y)
+logic AND2(input x1, input x2, output y)
 {
     reg s;
     s = d;
@@ -17,7 +17,7 @@ module test_and_selfcheck()
     var x1, x2, y, i;
     sim {
         x1 = 0; x2 = 0;
-        y = and_gate(x1, x2);
+        y = AND2(x1, x2);
         #init
 
         // 真理値表を一括検証(失敗行があれば stderr に全部出る)

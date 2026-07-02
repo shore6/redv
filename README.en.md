@@ -11,7 +11,7 @@ You describe circuits at the *component level* (below the gate level) by connect
 You can design and verify circuits with nothing but a text editor and a terminal.
 
 ```rv
-logic not_gate(input x, output y) {
+logic NOT(input x, output y) {
     x-t-y;                       // Connect x and y with a single torch
 }
 
@@ -19,7 +19,7 @@ module test() {
     var x, y;
     sim {
         x = 0;
-        y = not_gate(x);
+        y = NOT(x);
         #init                    // Wait until steady state
         x = 10;  #1
         ?monitor("t=% x=% y=%\n", $time, x, y);
@@ -83,13 +83,14 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/and_gate.rv` | An AND from 3 torches (NOR of NOTs) |
 | `examples/comparator_side.rv` | Comparator side input (subtract and compare) |
 | `examples/repeater_lock.rv` | Repeater lock (`.side` freezes the output) |
-| `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = half_adder(x1, x2);` |
+| `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = HALF_ADDER(x1, x2);` |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`) for strengths, widths, `#define`, sim assignments, and more |
 | `examples/define_expr.rv` | Constant expressions in `#define` (e.g. `#define N (W*2)`) |
 | `examples/monitor_format.rv` | monitor base formats `%b` / `%x` / `%o` with zero-padding, plus `scan("%x")` for matching input |
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane is packed as a 4-bit nibble (lane[0] is the lowest) |
+| `examples/stdlogic_demo.rv` | `#include "stdlogic"` pulls in the basic gate library (NOT / AND / OR / XOR / NAND / NOR / XNOR) |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |
 | `examples/json_output.rv` | Demo of emitting monitor output as JSONL via `--json` |
@@ -98,11 +99,12 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 
 - **Language specification** (.rv grammar, components, simulation semantics): [docs/LANGUAGE.en.md](docs/LANGUAGE.en.md) / [docs/LANGUAGE.md](docs/LANGUAGE.md) (Japanese)
 - **Internal design** (compile pipeline, elaboration, simulation engine): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (Japanese)
+- **Style guide** (naming, choosing a circuit style, hierarchical design): [docs/STYLE.md](docs/STYLE.md) (Japanese)
 
 Minimal example:
 
 ```rv
-logic or_gate(input x1, input x2, output y) {
+logic OR2(input x1, input x2, output y) {
     x1-r-y;          // x1 to y via a repeater
     x2-r-y;          // x2 to y via a repeater (merges at y = max value)
 }
@@ -123,6 +125,7 @@ src/
   circuit.rs    Circuit graph + tick simulation engine
   interp.rs     Elaboration (logic→circuit) + sim runtime + monitor
   diag.rs       Errors and warnings
+  stdlib/       Bundled standard library (pulled in by `#include "stdlogic"`, etc.)
 examples/       Sample circuits
 tests/
   golden.rs     Golden tests (cargo test)
@@ -131,6 +134,7 @@ docs/
   LANGUAGE.md       Language spec and simulation semantics (Japanese)
   LANGUAGE.en.md    Language spec and simulation semantics (English)
   ARCHITECTURE.md   Internals (pipeline, modules, simulation engine; Japanese)
+  STYLE.md          Style guide (naming, circuit style, hierarchical design; Japanese)
 ```
 
 ## License
