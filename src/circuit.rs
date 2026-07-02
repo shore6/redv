@@ -63,6 +63,9 @@ pub struct CNode {
     pub value: i32,
     pub prev: i32,
     pub has_incoming: bool,
+    /// このノードがどこかを駆動しているか(エッジの源・順序素子の後ろ/横入力・
+    /// 0tick リピータの入力のいずれか)。lint の浮きノード検出に使う(issue #48)。
+    pub has_outgoing: bool,
     pub is_out_port: bool,
     pub elem_assigned: bool,
     pub is_const_qual: bool,
@@ -77,6 +80,7 @@ impl CNode {
             value: 0,
             prev: 0,
             has_incoming: false,
+            has_outgoing: false,
             is_out_port: false,
             elem_assigned: false,
             is_const_qual: false,
@@ -125,6 +129,8 @@ pub struct CSeq {
     /// 焼き切れクールダウン残
     pub cooldown: i32,
     pub label: String,
+    /// この素子を生成したソース行。lint(常時 ON トーチ等)の報告位置に使う(issue #48)。
+    pub line: i32,
 }
 
 /// 0tick リピータ(`r0`)。遅延ゼロの組合せ増幅器: `out = in > 0 ? 15 : 0` を
@@ -260,12 +266,13 @@ impl Circuit {
                 ),
             );
         }
-        let (b_kind, b_base, b_inc, b_out, b_elem, b_cq) = {
+        let (b_kind, b_base, b_inc, b_outg, b_out, b_elem, b_cq) = {
             let nb = &self.nodes[b];
             (
                 nb.kind,
                 nb.base,
                 nb.has_incoming,
+                nb.has_outgoing,
                 nb.is_out_port,
                 nb.elem_assigned,
                 nb.is_const_qual,
@@ -277,6 +284,7 @@ impl Circuit {
             na.base = b_base;
         }
         na.has_incoming = na.has_incoming || b_inc;
+        na.has_outgoing = na.has_outgoing || b_outg;
         na.is_out_port = na.is_out_port || b_out;
         na.elem_assigned = na.elem_assigned || b_elem;
         na.is_const_qual = na.is_const_qual || b_cq;
@@ -288,9 +296,19 @@ impl Circuit {
         self.edges.push(CEdge { s, d, decay });
         let r = self.find(d);
         self.nodes[r].has_incoming = true;
+        let rs = self.find(s);
+        self.nodes[rs].has_outgoing = true;
     }
 
-    pub fn add_seq(&mut self, kind: SeqKind, delay: i32, in_: usize, out: usize, label: String) {
+    pub fn add_seq(
+        &mut self,
+        kind: SeqKind,
+        delay: i32,
+        in_: usize,
+        out: usize,
+        label: String,
+        line: i32,
+    ) {
         let mut hist = VecDeque::new();
         for _ in 0..delay {
             hist.push_back(0);
@@ -308,9 +326,12 @@ impl Circuit {
             togg: VecDeque::new(),
             cooldown: 0,
             label,
+            line,
         });
         let r = self.find(out);
         self.nodes[r].has_incoming = true;
+        let ri = self.find(in_);
+        self.nodes[ri].has_outgoing = true;
     }
 
     /// 0tick リピータ(遅延ゼロの組合せ増幅器)を登録する。`out` は組合せ網内で
@@ -319,6 +340,8 @@ impl Circuit {
         self.zero_reps.push(ZeroRep { in_, out });
         let r = self.find(out);
         self.nodes[r].has_incoming = true;
+        let ri = self.find(in_);
+        self.nodes[ri].has_outgoing = true;
     }
 
     /// コンパレータ素子(遅延 1 tick)。`side_in` が None なら横入力 0(= パススルー)。
@@ -329,6 +352,7 @@ impl Circuit {
         side_in: Option<usize>,
         out: usize,
         label: String,
+        line: i32,
     ) {
         let mut hist = VecDeque::new();
         hist.push_back(0);
@@ -349,15 +373,30 @@ impl Circuit {
             togg: VecDeque::new(),
             cooldown: 0,
             label,
+            line,
         });
         let r = self.find(out);
         self.nodes[r].has_incoming = true;
+        let ri = self.find(in_);
+        self.nodes[ri].has_outgoing = true;
+        if let Some(sn) = side_in {
+            let rs = self.find(sn);
+            self.nodes[rs].has_outgoing = true;
+        }
     }
 
     /// ロック可能リピーター(遅延 n tick)。`side_in` は横(ロック)入力ノード。
     /// 横入力 > 0 の間は出力を直前の値で凍結し、0 に戻ると通常動作へ復帰する。
     /// ロックは 1 tick 反応(横入力の履歴は 1 段)。
-    pub fn add_rep_lock(&mut self, delay: i32, in_: usize, side_in: usize, out: usize, label: String) {
+    pub fn add_rep_lock(
+        &mut self,
+        delay: i32,
+        in_: usize,
+        side_in: usize,
+        out: usize,
+        label: String,
+        line: i32,
+    ) {
         let mut hist = VecDeque::new();
         for _ in 0..delay {
             hist.push_back(0);
@@ -377,9 +416,14 @@ impl Circuit {
             togg: VecDeque::new(),
             cooldown: 0,
             label,
+            line,
         });
         let r = self.find(out);
         self.nodes[r].has_incoming = true;
+        let ri = self.find(in_);
+        self.nodes[ri].has_outgoing = true;
+        let rs = self.find(side_in);
+        self.nodes[rs].has_outgoing = true;
     }
 
     /// リピーターがロック中か(ロック付きリピーターで横入力 > 0)。
@@ -463,6 +507,91 @@ impl Circuit {
     pub fn read(&mut self, n: usize) -> i32 {
         let r = self.find(n);
         self.nodes[r].value
+    }
+
+    /// lint 用の **上界解析**(issue #48)。各ノードが今後の実行で到達しうる値の
+    /// 上界を、`step()` と同じ MAX 合流の不動点で求めて返す(添字は全ノード分、
+    /// 代表ノードのみ有効)。入力は最大値 15、const は宣言値を源とし、素子は
+    ///
+    /// - リピータ / オブザーバ: 後ろ入力の上界 > 0 なら 15、さもなくば 0
+    /// - トーチ: 常に 15(履歴が 0 始まりなので必ず一度は点灯する)
+    /// - コンパレータ(比較 / 減算): 後ろ入力の上界(横入力は減らす方向にしか効かない)
+    ///
+    /// で上へ伝える。過大評価はあっても過小評価はないので、**上界 0 = そのノードは
+    /// 絶対に >0 にならない** が保証され、誤検出なしの到達不能判定に使える。
+    pub fn lint_potentials(&mut self) -> Vec<i32> {
+        let mut pot = vec![0i32; self.nodes.len()];
+        // 代表ノード(根)だけ初期化する。`par[n] == n` は `find(n) == n` と等価。
+        for (n, p) in pot.iter_mut().enumerate() {
+            if self.par[n] != n {
+                continue;
+            }
+            *p = match self.nodes[n].kind {
+                NodeKind::Input => 15,
+                NodeKind::Const => self.nodes[n].base,
+                _ => 0,
+            };
+        }
+        // contribute() と同じ合流規則(Block は >0 で 15 ラッチ、Plain は MAX、
+        // Const/Input は固定)。単調なので step() と同じ発散ガードで必ず収束する。
+        let join = |nodes: &Vec<CNode>, pot: &mut Vec<i32>, n: usize, v: i32, ch: &mut bool| {
+            match nodes[n].kind {
+                NodeKind::Const | NodeKind::Input => {}
+                NodeKind::Block => {
+                    if v > 0 && pot[n] < 15 {
+                        pot[n] = 15;
+                        *ch = true;
+                    }
+                }
+                NodeKind::Plain => {
+                    if v > pot[n] {
+                        pot[n] = v;
+                        *ch = true;
+                    }
+                }
+            }
+        };
+        let mut ch = true;
+        let mut guard: i64 =
+            16 * (self.edges.len() as i64 + self.seqs.len() as i64 + self.zero_reps.len() as i64)
+                + 64;
+        while ch {
+            ch = false;
+            for ei in 0..self.edges.len() {
+                let e = self.edges[ei];
+                let s = self.find(e.s);
+                let d = self.find(e.d);
+                let v = (pot[s] - e.decay).max(0);
+                join(&self.nodes, &mut pot, d, v, &mut ch);
+            }
+            for zi in 0..self.zero_reps.len() {
+                let s = self.find(self.zero_reps[zi].in_);
+                let d = self.find(self.zero_reps[zi].out);
+                let v = if pot[s] > 0 { 15 } else { 0 };
+                join(&self.nodes, &mut pot, d, v, &mut ch);
+            }
+            for si in 0..self.seqs.len() {
+                let s = self.find(self.seqs[si].in_);
+                let d = self.find(self.seqs[si].out);
+                let v = match self.seqs[si].kind {
+                    SeqKind::Rep | SeqKind::Observer => {
+                        if pot[s] > 0 {
+                            15
+                        } else {
+                            0
+                        }
+                    }
+                    SeqKind::Torch => 15,
+                    SeqKind::CompCmp | SeqKind::CompSub => pot[s],
+                };
+                join(&self.nodes, &mut pot, d, v, &mut ch);
+            }
+            guard -= 1;
+            if guard <= 0 {
+                break;
+            }
+        }
+        pot
     }
 
     /// 1 レッドストーンティック進める。何か変化した(またはする)なら true。
