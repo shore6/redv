@@ -1,5 +1,5 @@
 /* AND回路: NOT(NOT x1 OR NOT x2) をトーチ3本で構成 */
-logic and_gate(input x1, input x2, output y)
+logic AND2(input x1, input x2, output y)
 {
     reg s;
     s = d;          // NOR合流点
@@ -14,7 +14,7 @@ module test_and_gate()
     var y;
     sim {
         x1 = 0; x2 = 0;
-        y = and_gate(x1, x2);
+        y = AND2(x1, x2);
         #init
         ?monitor("t=% | x1=%2 x2=%2 | y=%2\n", $time, x1, x2, y);
 

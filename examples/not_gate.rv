@@ -1,5 +1,5 @@
 /* NOT回路: トーチ1本で反転 */
-logic not_gate(input x, output y)
+logic NOT(input x, output y)
 {
     x-t-y;         // トーチを通じて x と y を接続 (wire 変数なしで直結)
 }
@@ -10,7 +10,7 @@ module test_not_gate()
     var y;
     sim {
         a = 0;
-        y = not_gate(a);   // 接続(初回のみインスタンス化、以降は束縛のみ)
+        y = NOT(a);   // 接続(初回のみインスタンス化、以降は束縛のみ)
         #init              // 定常状態まで待つ (時刻0)
 
         a = 10;

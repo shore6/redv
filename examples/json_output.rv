@@ -10,13 +10,13 @@
  * `{"time":N,"values":[...],"fmt":"..."}` の JSONL に置き換える。
  */
 
-logic not_gate(input x, output y) { x-t-y; }
+logic NOT(input x, output y) { x-t-y; }
 
 module test() {
     var x, y;
     sim {
         x = 0;
-        y = not_gate(x);
+        y = NOT(x);
         #init
         ?monitor("t=% x=% y=%\n", $time, x, y);
         x = 15; #2

@@ -11,7 +11,7 @@ You describe circuits at the *component level* (below the gate level) by connect
 You can design and verify circuits with nothing but a text editor and a terminal.
 
 ```rv
-logic not_gate(input x, output y) {
+logic NOT(input x, output y) {
     x-t-y;                       // Connect x and y with a single torch
 }
 
@@ -19,7 +19,7 @@ module test() {
     var x, y;
     sim {
         x = 0;
-        y = not_gate(x);
+        y = NOT(x);
         #init                    // Wait until steady state
         x = 10;  #1
         ?monitor("t=% x=% y=%\n", $time, x, y);
@@ -83,7 +83,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/and_gate.rv` | An AND from 3 torches (NOR of NOTs) |
 | `examples/comparator_side.rv` | Comparator side input (subtract and compare) |
 | `examples/repeater_lock.rv` | Repeater lock (`.side` freezes the output) |
-| `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = half_adder(x1, x2);` |
+| `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = HALF_ADDER(x1, x2);` |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`) for strengths, widths, `#define`, sim assignments, and more |
@@ -104,7 +104,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 Minimal example:
 
 ```rv
-logic or_gate(input x1, input x2, output y) {
+logic OR2(input x1, input x2, output y) {
     x1-r-y;          // x1 to y via a repeater
     x2-r-y;          // x2 to y via a repeater (merges at y = max value)
 }

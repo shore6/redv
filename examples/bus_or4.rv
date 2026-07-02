@@ -2,7 +2,7 @@
  * `in - r - buf;` の 1 行が 4 レーンぶん(各レーンに独立したリピータ)へ展開される。
  * バスは「N 本の並列スカラ点」への純粋な糖衣で、シミュレーション意味論は不変。
  * Phase 1a ではポートはスカラのみ。ここでは 4 入力を 1 出力へ OR 集約する。 */
-logic or4(input a0, input a1, input a2, input a3, output y)
+logic OR4(input a0, input a1, input a2, input a3, output y)
 {
     reg[4] in;             // バス宣言: in[0]..in[3]
     reg[4] buf;            // バス宣言: buf[0]..buf[3]
@@ -23,7 +23,7 @@ module test_or4()
     var i, ng, exp;
     sim {
         a0 = 0; a1 = 0; a2 = 0; a3 = 0; ng = 0;
-        y = or4(a0, a1, a2, a3);
+        y = OR4(a0, a1, a2, a3);
         #init
         for (i = 0; i < 16; i = i + 1) {
             a0 = (i % 2) * 15;
