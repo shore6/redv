@@ -624,7 +624,7 @@ type Ports = Vec<(String, PortShape)>;
 /// 順序: (line, outputs, callee, args, call_params)。`outputs` は出力ポートと位置対応の親側
 /// 端点名(reg/ポート/バス reg/バスポート)で、長さは callee の出力ポート数と一致する必要がある。
 /// call_params は `#(...)` 実引数で、callee の `param_env` ビルド時に親 logic の環境下で評価する(Phase 2)。
-type PendingInstance = (i32, Vec<String>, String, Vec<String>, Vec<(String, Expr)>);
+type PendingInstance = (i32, Vec<String>, String, Vec<InstArg>, Vec<(String, Expr)>);
 
 /// 階層インスタンスの親側端点(reg/ポート = スカラ、内部バス reg/バスポート = バス)を
 /// `PortShape` として解決する。
@@ -909,6 +909,80 @@ impl<'p> Elaborator<'_, 'p> {
         }
         self.c.add_edge(prev, ti, decay);
         Ok(())
+    }
+
+    /// 階層インスタンスの引数 1 個を `PortShape` へ解決する(issue #97)。
+    ///
+    /// - 裸の名前 … 親の reg / ポート / バス(従来どおり `resolve_parent_ref`)。
+    /// - ネスト呼び出し `h(x)` … サブ logic を新規インスタンスとして展開し、引数を
+    ///   再帰解決してサブ入力ポートへ減衰なし直結したうえで、**単一出力ポート** の形を
+    ///   返す(外側の入力ポートへの直結は呼び出し側が行う)。出力ポートが 1 個で
+    ///   なければエラー(多出力はタプル束縛で中間 reg に受けてから渡す)。
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_inst_arg(
+        &mut self,
+        arg: &InstArg,
+        scope: &HashMap<String, usize>,
+        buses: &HashMap<String, Vec<usize>>,
+        wire_names: &HashSet<String>,
+        param_env: &HashMap<String, i64>,
+        prefix: &str,
+        line: i32,
+    ) -> RvResult<PortShape> {
+        match arg {
+            InstArg::Name(a) => {
+                if wire_names.contains(a.as_str()) {
+                    return fail(
+                        line,
+                        format!("logic instance argument '{}' must be a reg/port, not a wire", a),
+                    );
+                }
+                resolve_parent_ref(a, scope, buses, wire_names, line)
+            }
+            InstArg::Call {
+                line: cl,
+                callee,
+                params,
+                args,
+            } => {
+                let sub = match self.logics.get(callee) {
+                    Some(s) => s,
+                    None => return fail(*cl, format!("unknown logic: {}", callee)),
+                };
+                let sub_env = build_callee_param_env(
+                    callee,
+                    &sub.params,
+                    params,
+                    param_env,
+                    self.defines,
+                    *cl,
+                )?;
+                self.counter += 1;
+                let sub_prefix = format!("{}/{}#{}", prefix, callee, self.counter);
+                let (sub_in, sub_out) =
+                    self.elaborate(sub, &sub_prefix, false, *cl, args.len(), sub_env)?;
+                if sub_out.len() != 1 {
+                    return fail(
+                        *cl,
+                        format!(
+                            "nested call to {} must have exactly 1 output port (it has {}); \
+                             bind it with a tuple first, then pass the target",
+                            callee,
+                            sub_out.len()
+                        ),
+                    );
+                }
+                // 引数を再帰解決し、サブ logic の入力ポートへ減衰なし直結する。
+                for (a, (pname, pshape)) in args.iter().zip(sub_in.iter()) {
+                    let ar = self.resolve_inst_arg(
+                        a, scope, buses, wire_names, param_env, prefix, *cl,
+                    )?;
+                    let ctx = format!("{} input port '{}'", callee, pname);
+                    connect_ports(self.c, &ar, pshape, &ctx, *cl)?;
+                }
+                Ok(sub_out.into_iter().next().unwrap().1)
+            }
+        }
     }
 
     /// logic 定義 1 つを回路ノード群へ展開する。
@@ -1421,13 +1495,9 @@ impl<'p> Elaborator<'_, 'p> {
             }
             let mut arg_refs: Vec<PortShape> = Vec::new();
             for a in args {
-                if wire_names.contains(a) {
-                    return fail(
-                        *line,
-                        format!("logic instance argument '{}' must be a reg/port, not a wire", a),
-                    );
-                }
-                arg_refs.push(resolve_parent_ref(a, &scope, &buses, &wire_names, *line)?);
+                arg_refs.push(self.resolve_inst_arg(
+                    a, &scope, &buses, &wire_names, &param_env, prefix, *line,
+                )?);
             }
             // 親 logic の param_env(`param_env` 引数)を caller env として、callee 側 env を作る。
             let sub_env = build_callee_param_env(
@@ -2280,7 +2350,7 @@ impl<'a> ModuleExec<'a> {
         &mut self,
         line: i32,
         target: &str,
-        bind_args: &[String],
+        bind_args: &[InstArg],
         fmt: Option<&str>,
     ) -> RvResult<()> {
         if !bind_args.is_empty() {
@@ -2301,14 +2371,17 @@ impl<'a> ModuleExec<'a> {
         Ok(())
     }
 
-    fn do_call_bind(
+    /// インスタンスを(未生成なら)生成して正規化キーを返す。
+    /// ネスト呼び出し引数(issue #97)は先に部分インスタンスを再帰的に確定し、その
+    /// 正規化キーを引数キーに使う。同じ部分式は standalone 呼び出しとも同一インスタンス
+    /// を共有する(「同じ logic 名と引数列は同一インスタンス」の自然な拡張)。
+    fn ensure_instance(
         &mut self,
         line: i32,
-        targets: &[String],
         callee: &str,
-        bind_args: &[String],
+        bind_args: &[InstArg],
         call_params: &[(String, Expr)],
-    ) -> RvResult<()> {
+    ) -> RvResult<String> {
         let prog: &'a Program = self.prog;
         let lit = match prog.logics.get(callee) {
             Some(l) => l,
@@ -2329,46 +2402,72 @@ impl<'a> ModuleExec<'a> {
         // 別インスタンス(別ノード群)としてエラボレートする。targets はキーに含めない
         // (同じ呼び出しを別の var 組で受けても回路は同一インスタンスを共有する)。
         let param_part = param_env_key(&lit.params, &env);
-        let key = format!("{}{}({})", callee, param_part, bind_args.join(","));
-        if !self.insts.contains_key(&key) {
-            for a in bind_args {
-                if !self.vars.contains_key(a) && !self.var_buses.contains_key(a) {
-                    return fail(line, format!("undeclared variable passed to logic: {}", a));
+        // 引数キー: 裸の名前はそのまま、ネスト呼び出しは部分インスタンスを先に確定して
+        // その正規化キーを使う(外側がキャッシュ済みならネスト側もキャッシュ済みで no-op)。
+        let mut arg_keys: Vec<String> = Vec::with_capacity(bind_args.len());
+        for a in bind_args {
+            match a {
+                InstArg::Name(n) => arg_keys.push(n.clone()),
+                InstArg::Call {
+                    line: cl,
+                    callee: sub,
+                    params,
+                    args,
+                } => {
+                    if sub == "scan" {
+                        return fail(*cl, "scan() cannot be nested in a logic call argument");
+                    }
+                    arg_keys.push(self.ensure_instance(*cl, sub, args, params)?);
                 }
             }
-            // logic を展開してポート形(スカラ/バス)を得る。
-            let (inputs, outputs) = {
-                let mut el = Elaborator {
-                    c: &mut self.c,
-                    logics: &prog.logics,
-                    defines: &prog.defines,
-                    stack: Vec::new(),
-                    counter: 0,
-                    linted: &mut self.linted_logics,
-                };
-                el.elaborate(lit, &key, true, line, bind_args.len(), env)?
-            };
-            if outputs.is_empty() {
-                return fail(line, format!("{} has no output port to bind", callee));
+        }
+        let key = format!("{}{}({})", callee, param_part, arg_keys.join(","));
+        if self.insts.contains_key(&key) {
+            return Ok(key);
+        }
+        for a in bind_args {
+            if let InstArg::Name(n) = a {
+                if !self.vars.contains_key(n) && !self.var_buses.contains_key(n) {
+                    return fail(line, format!("undeclared variable passed to logic: {}", n));
+                }
             }
-            // 各引数 var(スカラ/バス)を入力ポートにレーン対応で束縛する。
-            let mut in_vars: Vec<String> = Vec::new();
-            let mut in_nodes: Vec<usize> = Vec::new();
-            for (arg, (pname, pshape)) in bind_args.iter().zip(inputs.iter()) {
-                let lanes = pshape.lanes();
-                match self.bus_width(arg) {
+        }
+        // logic を展開してポート形(スカラ/バス)を得る。
+        let (inputs, outputs) = {
+            let mut el = Elaborator {
+                c: &mut self.c,
+                logics: &prog.logics,
+                defines: &prog.defines,
+                stack: Vec::new(),
+                counter: 0,
+                linted: &mut self.linted_logics,
+            };
+            el.elaborate(lit, &key, true, line, bind_args.len(), env)?
+        };
+        if outputs.is_empty() {
+            return fail(line, format!("{} has no output port to bind", callee));
+        }
+        // 各引数を入力ポートにレーン対応で束縛する。var(スカラ/バス)は毎 tick の入力反映
+        // (apply_inputs)対象として in_vars に載せ、ネスト呼び出しは部分インスタンスの
+        // 単一出力ポートから減衰なしで直結する(回路内配線なので in_vars には載らない)。
+        let mut in_vars: Vec<String> = Vec::new();
+        let mut in_nodes: Vec<usize> = Vec::new();
+        for (i, (arg, (pname, pshape))) in bind_args.iter().zip(inputs.iter()).enumerate() {
+            let lanes = pshape.lanes();
+            match arg {
+                InstArg::Name(n) => match self.bus_width(n) {
                     Some(w) => {
                         if lanes.len() != w as usize {
                             return fail(
                                 line,
                                 format!(
                                     "argument '{}' (bus var width {}) does not match {} input port '{}' (width {})",
-                                    arg, w, callee, pname, lanes.len()
+                                    n, w, callee, pname, lanes.len()
                                 ),
                             );
                         }
                         for (j, node) in lanes.iter().enumerate() {
-                            in_vars.push(Self::lane_key(arg, j as i64));
+                            in_vars.push(Self::lane_key(n, j as i64));
                             in_nodes.push(*node);
                         }
                     }
@@ -2378,27 +2477,75 @@ impl<'a> ModuleExec<'a> {
                                 line,
                                 format!(
                                     "argument '{}' is a scalar var but {} input port '{}' is a bus (width {})",
-                                    arg, callee, pname, lanes.len()
+                                    n, callee, pname, lanes.len()
                                 ),
                             );
                         }
-                        in_vars.push(arg.clone());
+                        in_vars.push(n.clone());
                         in_nodes.push(lanes[0]);
+                    }
+                },
+                InstArg::Call {
+                    line: cl,
+                    callee: sub,
+                    ..
+                } => {
+                    let sub_out = self.insts.get(&arg_keys[i]).unwrap().out_ports.clone();
+                    if sub_out.len() != 1 {
+                        return fail(
+                            *cl,
+                            format!(
+                                "nested call to {} must have exactly 1 output port (it has {}); \
+                                 bind it with a tuple first, then pass the target",
+                                sub,
+                                sub_out.len()
+                            ),
+                        );
+                    }
+                    let src = &sub_out[0];
+                    if src.len() != lanes.len() {
+                        return fail(
+                            *cl,
+                            format!(
+                                "nested call {} (output width {}) does not match {} input port '{}' (width {})",
+                                arg_keys[i], src.len(), callee, pname, lanes.len()
+                            ),
+                        );
+                    }
+                    for (s, d) in src.iter().zip(lanes.iter()) {
+                        // トップレベル入力ポートは var 駆動前提の `Input` ノード
+                        // (= 駆動値固定でエッジの寄与を無視する)として生成される。
+                        // ネスト呼び出しで駆動されるポートは回路内配線なので `Plain` に
+                        // 降格させ、部分インスタンス出力からの寄与を受けられるようにする。
+                        let rd = self.c.find(*d);
+                        self.c.nodes[rd].kind = NodeKind::Plain;
+                        self.c.add_edge(*s, *d, 0);
                     }
                 }
             }
-            // 出力ポートごとのレーン列を保持(順序は callee の宣言順)。
-            let out_ports: Vec<Vec<usize>> =
-                outputs.iter().map(|(_, sh)| sh.lanes()).collect();
-            self.insts.insert(
-                key.clone(),
-                Instance {
-                    in_vars,
-                    in_nodes,
-                    out_ports,
-                },
-            );
         }
+        // 出力ポートごとのレーン列を保持(順序は callee の宣言順)。
+        let out_ports: Vec<Vec<usize>> = outputs.iter().map(|(_, sh)| sh.lanes()).collect();
+        self.insts.insert(
+            key.clone(),
+            Instance {
+                in_vars,
+                in_nodes,
+                out_ports,
+            },
+        );
+        Ok(key)
+    }
+
+    fn do_call_bind(
+        &mut self,
+        line: i32,
+        targets: &[String],
+        callee: &str,
+        bind_args: &[InstArg],
+        call_params: &[(String, Expr)],
+    ) -> RvResult<()> {
+        let key = self.ensure_instance(line, callee, bind_args, call_params)?;
         // 出力ポート数と target 数の一致を厳格チェック(過不足ともエラー)。
         let out_ports = self.insts.get(&key).unwrap().out_ports.clone();
         if targets.len() != out_ports.len() {

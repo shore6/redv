@@ -1,0 +1,35 @@
+/* ネスト呼び出し (issue #97): logic 呼び出しの引数に別の logic 呼び出しを直接書く。
+ *
+ * 内側の logic の出力ポートは外側の入力ポートへ減衰なしで直結され、中間 reg / var を
+ * 手書きした場合と等価な配線になる。logic 本体でも sim でも書ける。
+ * ネストできるのは出力ポートちょうど 1 個の logic に限る。 */
+
+#include "stdlogic"
+
+// 2:1 マルチプレクサ。logic 本体のネスト呼び出しで y = (in0 & !sel) | (in1 & sel) を一行で組む。
+logic MUX2(input in0, input in1, input sel, output y) {
+    y = s_or(s_and(in0, s_not(sel)), s_and(in1, sel));
+}
+
+module test_nested_call() {
+    var x1, x2, x3, x4, y;
+    var in0, in1, sel, m;
+    var i;
+    sim {
+        x1 = 0; x2 = 0; x3 = 0; x4 = 0;
+        // sim 側のネスト呼び出し: y = (x1 & x2) | (x3 ^ x4)
+        y = s_or(s_and(x1, x2), s_xor(x3, x4));
+        in0 = 0; in1 = 15; sel = 0;
+        m = MUX2(in0, in1, sel);
+        #init
+        ?monitor("x=%2 %2 %2 %2 -> y=%2 | sel=%2 -> m=%2\n", x1, x2, x3, x4, y, sel, m);
+        for (i = 0; i < 16; i = i + 1) {
+            x1 = (i / 8) * 15;
+            x2 = (i / 4 % 2) * 15;
+            x3 = (i / 2 % 2) * 15;
+            x4 = (i % 2) * 15;
+            sel = (i % 2) * 15;
+            #init
+        }
+    }
+}

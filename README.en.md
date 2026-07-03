@@ -85,6 +85,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/comparator_side.rv` | Comparator side input (subtract and compare) |
 | `examples/repeater_lock.rv` | Repeater lock (`.side` freezes the output) |
 | `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = HALF_ADDER(x1, x2);` |
+| `examples/nested_call.rv` | Nested calls `y = s_or(s_and(x1,x2), s_xor(x3,x4));` and a one-line MUX |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices: splitting a generic-width bus with `x[W-1:W/2]` |

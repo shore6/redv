@@ -478,6 +478,39 @@ Rules and constraints:
 
 The argument list, recursion ban, and binding semantics are identical to §5.4.
 
+### 5.6 Nested Calls in Arguments
+
+An argument of a logic call may itself be **another logic call** instead of a name.
+
+```rv
+logic MUX2(input in0, input in1, input sel, output y) {
+    y = s_or(s_and(in0, s_not(sel)), s_and(in1, sel));
+}
+```
+
+The nested call's output port is wired (no attenuation) straight into the outer call's input port.
+This is the same circuit as declaring intermediate regs / vars by hand; the example above expands to:
+
+```rv
+reg ns, t0, t1;
+ns = s_not(sel);
+t0 = s_and(in0, ns);
+t1 = s_and(in1, sel);
+y  = s_or(t0, t1);
+```
+
+Rules:
+
+- Works both inside a logic body (§5.4) and inside sim (§7.3)
+- Only a logic with **exactly one output port** can be nested (receive a multi-output logic with a tuple binding first, then pass the target)
+- Nesting depth is unlimited. The recursion ban (§5.4) is enforced through nested calls as well
+- Generic arguments `#(...)` (§8.4) are allowed on nested calls (`g(h#(W=8)(x))`)
+- The output port and the input port must agree in shape (scalar vs. bus) and width
+- `scan()` (§7.8) is not a logic and cannot be nested
+
+The intermediate point has no name, so it cannot be observed with the trace (`-t`) or `monitor`.
+When intermediate values matter, declare intermediate regs / vars as before.
+
 ---
 
 ## 6. Buses
@@ -688,6 +721,15 @@ var x1, x2, sum, carry;
 
 The number of targets must equal the number of output ports (both shortage and excess are errors), and the same target cannot appear twice (`(p, p) = ...`).
 A 1-output logic may also use the 1-target tuple form `(v) = callee(...)`, equivalent to the conventional `v = callee(...)`.
+
+Arguments may nest other logic calls directly (§5.6).
+
+```rv
+y = s_or(s_and(x1, x2), s_xor(x3, x4));   // y = (x1 & x2) | (x3 ^ x4)
+```
+
+Instance sharing extends to nested subexpressions:
+`s_and(x1, x2)` above shares its instance with a standalone call using the same argument list (`t = s_and(x1, x2);`).
 
 Variables that are bound to the circuit are clamped to 0–15 on input application.
 Out-of-range values raise a single warning per variable (§10).
@@ -1159,6 +1201,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/and_gate.rv` | An AND from 3 torches (NOR of NOTs) |
 | `examples/hier_and.rv` | A hierarchical AND nesting `NOT` and `OR2` (De Morgan) |
 | `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = HALF_ADDER(x1, x2);` (§5.5) |
+| `examples/nested_call.rv` | Nested calls `y = s_or(s_and(x1,x2), s_xor(x3,x4));` and a one-line MUX (§5.6) |
 | `examples/chain_mixed.rv` | Merging two chain paths into the same point (max) |
 
 ### 12.2 Component Behaviors
