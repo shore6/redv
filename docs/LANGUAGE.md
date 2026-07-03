@@ -907,6 +907,7 @@ EOF(入力切れ)や非数値はエラーとなる。
 | 名前 | 内容 |
 |---|---|
 | `stdlogic` | 基本論理ゲート(`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`)。すべてスカラ 1〜2 入力・1 出力 |
+| `stdmem` | ラッチ・レジスタ(`s_rslatch` / `s_dlatch` / `s_dff` / `s_register`)。すべてスカラで、内部で `stdlogic` をネストして取り込む |
 
 同じバンドル名を 1 ソース中で複数回 `#include` しても、2 度目以降は no-op になる(重複定義エラーにはならない)。
 ネストした include 経由でも同じ判定が効く。
@@ -925,6 +926,26 @@ logic EQUAL(input x1, input x2, output y) {
 
 `s_xor` / `s_xnor` は内部で `s_not` / `s_and` / `s_or` を呼ぶ階層構造で、合計 4〜5 tick の遅延を持つ。
 ゲートごとの伝搬遅延は `examples/stdlogic_demo.rv` のヘッダコメントを参照。
+
+`stdmem` はラッチ・レジスタの 4 素子を提供する。
+
+| logic | ポート | 動作 |
+|---|---|---|
+| `s_rslatch` | `(set, reset) -> (q, nq)` | RS ラッチ(NOR 2 個のたすき掛け)。`set` で q=15、`reset` で q=0、両方 0 で保持 |
+| `s_dlatch` | `(x, en) -> q` | D ラッチ。`en > 0` で透過、`en = 0` で保持(ロック付きリピーター) |
+| `s_dff` | `(x, clk) -> q` | D フリップフロップ。`clk` の立ち上がりで `x` を取り込む |
+| `s_register` | `(x, ld, clk) -> q` | ロードイネーブル付きレジスタ。立ち上がりでも `ld = 0` なら保持 |
+
+`s_dff` / `s_register` は、クロックの立ち上がり検出(オブザーバ `op`、§4.7.1)で
+ロック付きリピーターを 1 tick だけ解錠する構成である。
+取り込みはエッジの 3 tick 後に行われるため、`x`(`s_register` では `ld` も)は
+エッジの直前 1 tick から 4 tick 後まで安定させる必要がある。
+また `s_rslatch` は `set = reset = 0` のままだと初期状態が定まらず発振するので、
+最初の `#init` の前に `set` か `reset` を一度 15 にして初期状態を確定させる。
+各素子の伝搬遅延は `src/stdlib/stdmem.rv` のヘッダコメントを参照。
+
+`stdmem` は取り込み時に `stdlogic` をネストして取り込む。
+利用側が別途 `#include "stdlogic"` と書いていても、前述の重複判定により 2 度目は no-op になる。
 
 ### 8.3 `param`(パラメータ定数)
 
@@ -1244,6 +1265,7 @@ fan-in や fan-out(§6.4)はこの有向モデル上で「複数点を 1 点へ 
 | `examples/monitor_format.rv` | monitor / scan の基数書式 `%b` / `%x` / `%o`、ゼロ埋め `%04b`、負値の `-` 接頭、`scan("%x")` 等(§7.4.1, §7.8) |
 | `examples/monitor_bus.rv` | バス var を 1 引数で monitor に渡し、各レーン強度を 4 bit ニブルとしてパッキングして 1 行で表示(§7.4.1) |
 | `examples/stdlogic_demo.rv` | バンドル済み標準ライブラリ `#include "stdlogic"` で基本ゲート 7 種(NOT / AND / OR / XOR / NAND / NOR / XNOR)を取り込んで sweep する(§8.2.1) |
+| `examples/stdmem_demo.rv` | バンドル済み標準ライブラリ `#include "stdmem"` でラッチ・レジスタ 4 種(RS ラッチ / D ラッチ / D-FF / レジスタ)を取り込んで駆動する(§8.2.1) |
 
 ### 12.5 波形出力 / 構造化出力
 

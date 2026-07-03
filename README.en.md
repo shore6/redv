@@ -93,6 +93,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/monitor_format.rv` | monitor base formats `%b` / `%x` / `%o` with zero-padding, plus `scan("%x")` for matching input |
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane is packed as a 4-bit nibble (lane[0] is the lowest) |
 | `examples/stdlogic_demo.rv` | `#include "stdlogic"` pulls in the basic gate library (NOT / AND / OR / XOR / NAND / NOR / XNOR) |
+| `examples/stdmem_demo.rv` | `#include "stdmem"` pulls in the latch/register library (RS latch / D latch / D-FF / register) |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
 | `examples/lint_demo.rv` | Demo that fires all 5 design-rule-check (lint) warnings |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |

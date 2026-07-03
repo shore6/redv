@@ -16,6 +16,7 @@ type CalleeInvocation = (String, Vec<(String, Expr)>, Vec<String>);
 /// ファイルシステムやインストール場所に依存せず、redv バイナリ単体でライブラリを利用できる。
 const BUNDLED_STDLIBS: &[(&str, &str)] = &[
     ("stdlogic", include_str!("stdlib/stdlogic.rv")),
+    ("stdmem", include_str!("stdlib/stdmem.rv")),
 ];
 
 fn bundled_stdlib(name: &str) -> Option<&'static str> {
