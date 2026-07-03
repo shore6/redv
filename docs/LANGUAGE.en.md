@@ -502,7 +502,7 @@ buf[0] - y;                    // Pick a lane and wire it to the output port
 | Notation | Meaning |
 |---|---|
 | `reg[N] a;` | A bus declaration of width N. `[N]` sits between `reg` and the name. `N` is a literal or a constant expression (§8.3) |
-| `a[k]` (k is an integer literal) | Lane k. Usable like a scalar point (0 ≤ k < N) |
+| `a[k]` (k is a constant expression, §6.3.1) | Lane k. Usable like a scalar point (0 ≤ k < N) |
 | `a` (chain endpoint, no index) | The whole bus. Element-wise wiring with a same-width counterpart |
 
 Bus names (the base name) also obey the name constraints in §2.2.
@@ -548,7 +548,7 @@ hi - {carry, sum};             // Concatenation as bulk wiring (width is the sum
 
 | Notation | Meaning |
 |---|---|
-| `x[hi:lo]` | Slice (inclusive). When `hi >= lo`, descending `[hi, hi-1, .., lo]`; when `hi < lo`, ascending `[hi, .., lo]`. `x[k:k]` is equivalent to `x[k]` (width 1). `hi` / `lo` are literals within range |
+| `x[hi:lo]` | Slice (inclusive). When `hi >= lo`, descending `[hi, hi-1, .., lo]`; when `hi < lo`, ascending `[hi, .., lo]`. `x[k:k]` is equivalent to `x[k]` (width 1). `hi` / `lo` are in-range constant expressions (§6.3.1) |
 | `{e1, e2, ...}` | Concatenation. Each `ei` is a scalar point, a lane `x[k]`, a slice `x[hi:lo]`, or a whole bus. Lanes are joined from left to right; the width is the sum of each part |
 
 The whole-bus name supplies lanes in ascending index order `[0..N)` (same as a regular whole-bus chain).
@@ -557,6 +557,28 @@ Use a slice `x[hi:lo]` to control the bit order explicitly.
 Slices and concatenations are endpoint-only; they cannot appear in intermediate chunks or on the right-hand side of `=`.
 Concatenation elements may not carry `.side` or nest as `{{..}}`.
 Out-of-range indices and slices on non-bus names are errors.
+
+### 6.3.1 Constant Expressions in Indices
+
+Lane indices `a[k]` and slice indices `x[hi:lo]` accept **constant expressions** in addition to literals.
+The allowed elements are the same as bus widths `[expr]` (§8.3): literals, `param`, numeric `#define`, `+ - * / %`, unary `-`, and parentheses.
+
+```rv
+param N = 2;
+
+logic SPLIT #(W=8)(input[W] x, output[W/2] hi_o, output[W/2] lo_o) {
+    x[W-1:W/2] - hi_o[W/2-1:0];    // Upper half
+    x[W/2-1:0] - lo_o[W/2-1:0];    // Lower half
+}
+
+logic TAP(input[4] a, output y) {
+    a[N+1] - y;                    // param references resolve to a[3] at parse time
+}
+```
+
+Expressions that reference a generic param (§8.4) are evaluated at instantiation time, just like width expressions; all other expressions resolve at parse time.
+The descending / ascending and width-1 rules (§6.3) apply to the evaluated values as-is.
+An out-of-range result is an error (for expressions with generic params, it is detected only once the logic is instantiated).
 
 ### 6.4 Bus-Scalar Wiring (Broadcast)
 
@@ -591,7 +613,6 @@ The following are kept for future extension and are errors or unsupported at pre
 - Buses in wire sequences, the `wire[N]` syntax
 - Tuple binding of heterogeneous multi-outputs
 - Passing a single bus lane directly as a logic argument (`g(x[0])`; pass the whole bus, or copy into a scalar var first)
-- Slice indices as expressions (literals only for now; `param`-based expressions are future work)
 
 ---
 
@@ -927,7 +948,7 @@ Declaration and call rules:
 - Actual arguments are evaluated in the caller scope and may reference top-level `param` / numeric `#define`, **plus** the caller logic's own generic params (so values pass through hierarchies)
 - It is an error to instantiate a param that has neither a default nor an actual argument
 
-Inside the logic body, declared params can be used in width expressions such as `input[W]` or `reg[W+1]`.
+Inside the logic body, declared params can be used in width expressions such as `input[W]` or `reg[W+1]`, and in lane / slice indices such as `x[W-1]` or `x[W-1:W/2]` (§6.3.1).
 Expressions that reference a generic param are deferred to instantiation time and resolved per instance.
 Width expressions that do not reference any generic param (`input[4]`, `reg[5]`) are still resolved at parse time and behave exactly as before.
 
@@ -1172,6 +1193,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/bus_or4.rv` | Bus `reg[N]`: wire all 4 lanes in one line with `in - r - buf;` |
 | `examples/bus_and4.rv` | Bus ports and bus vars: bitwise AND of two 4-bit buses |
 | `examples/bus_slice_concat.rv` | Slice `a[hi:lo]` (bit reversal) and concatenation `{a, b}` (left rotate) |
+| `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices (§6.3.1): splitting a bus with `x[W-1:W/2]`, plus `a[N+1]` |
 | `examples/bus_scalar.rv` | Bus-to-scalar wiring: fan-in (MAX merge) and fan-out (broadcast) |
 | `examples/param_notN.rv` | N-bit NOT with width parameterized by a `param` constant |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at 4 and 8 bits as separate instances |
