@@ -7,7 +7,7 @@
 //! 必要な値を一旦ローカルへ集めてから適用する。
 
 use crate::ast::*;
-use crate::circuit::{Circuit, Config, NodeKind, SeqKind, Vcd};
+use crate::circuit::{Circuit, Config, NodeKind, ObsMode, SeqKind, Vcd};
 use crate::diag::{fail, is_json_mode, json_escape_into, lint, warn, RvResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
@@ -114,8 +114,28 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
             i += 1;
         } else if c == b'o' {
             // オブザーバ(変化検出で 1tick パルス)。インラインチェーン専用。
-            out.push(Elem { k: 'o', n: 1, line });
+            // 接尾字でエッジ判定モードを選ぶ(issue #58): `o` = 変化全部 /
+            // `op` = 立ち上がり / `on` = 立ち下がり / `oe` = 2値エッジ。
+            // `n` にモード(0=変化全部, 1=立ち上がり, 2=立ち下がり, 3=2値エッジ)を
+            // 載せる(消費は build_chain_body。既存素子文字 b/c/d/o/r/t は
+            // 「オブザーバ+素子」の既存解釈があるため接尾字に使えない)。
             i += 1;
+            let n = match b.get(i) {
+                Some(b'p') => {
+                    i += 1;
+                    1
+                }
+                Some(b'n') => {
+                    i += 1;
+                    2
+                }
+                Some(b'e') => {
+                    i += 1;
+                    3
+                }
+                _ => 0,
+            };
+            out.push(Elem { k: 'o', n, line });
         } else if c == b'b' {
             out.push(Elem { k: 'b', n: 1, line });
             i += 1;
@@ -790,7 +810,16 @@ impl<'p> Elaborator<'_, 'p> {
                     let (kind, dly) = match e.k {
                         'r' => (SeqKind::Rep, e.n),
                         't' => (SeqKind::Torch, 1),
-                        _ => (SeqKind::Observer, 2),
+                        // オブザーバ: e.n はモード(parse_chunk のエンコードを参照)
+                        _ => {
+                            let mode = match e.n {
+                                1 => ObsMode::Rise,
+                                2 => ObsMode::Fall,
+                                3 => ObsMode::Edge,
+                                _ => ObsMode::Any,
+                            };
+                            (SeqKind::Observer(mode), 2)
+                        }
                     };
                     self.c.add_seq(
                         kind,

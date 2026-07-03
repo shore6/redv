@@ -95,6 +95,20 @@ pub struct CEdge {
     pub decay: i32,
 }
 
+/// オブザーバのエッジ判定モード(issue #58)。判定式以外(1tick パルス・強度 15・
+/// 履歴 2 段・インラインチェーン専用)は全モード共通。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObsMode {
+    /// `o`: 変化全部。立ち上がり・立ち下がり・強度内変化(5→10 等)を拾う。
+    Any,
+    /// `op`: 立ち上がりのみ(posedge)。`prev == 0 && cur > 0`。
+    Rise,
+    /// `on`: 立ち下がりのみ(negedge)。`prev > 0 && cur == 0`。
+    Fall,
+    /// `oe`: 2値エッジ。0↔正 のトグルだけ拾い、強度内変化は無視。`(prev>0) != (cur>0)`。
+    Edge,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeqKind {
     Rep,
@@ -103,11 +117,12 @@ pub enum SeqKind {
     CompCmp,
     /// コンパレータ(減算モード): out = max(0, back - side)
     CompSub,
-    /// オブザーバ(変化検出): 隣接 2 サンプルが異なれば 1tick・強度 15 のパルス。
-    /// 履歴 2 段(delay=2)に乗り、`out(T) = in(T-2) != in(T-1) ? 15 : 0`。
+    /// オブザーバ(変化検出): 隣接 2 サンプルがモードの判定式を満たせば
+    /// 1tick・強度 15 のパルス。履歴 2 段(delay=2)に乗り、既定 `Any` は
+    /// `out(T) = in(T-2) != in(T-1) ? 15 : 0`(エッジ亜種は `ObsMode`)。
     /// 出力は `(back,side)` の純関数ではない(前後 2 サンプルの比較)ので、
     /// `seq_out_of` ではなく `observer_out` で step() から直接計算する。
-    Observer,
+    Observer(ObsMode),
 }
 
 #[derive(Debug, Clone)]
@@ -432,10 +447,15 @@ impl Circuit {
     }
 
     /// オブザーバ出力。隣接 2 サンプル(`prev = in(T-2)` / `cur = in(T-1)`)が
-    /// 異なれば 1tick・強度 15 のパルス、同じなら 0。立ち上がり・立ち下がり・
-    /// 強度変化のすべてを変化として拾う(エッジ亜種は issue #58)。
-    fn observer_out(prev: i32, cur: i32) -> i32 {
-        if prev != cur {
+    /// モードの判定式を満たせば 1tick・強度 15 のパルス、満たさなければ 0。
+    fn observer_out(mode: ObsMode, prev: i32, cur: i32) -> i32 {
+        let fire = match mode {
+            ObsMode::Any => prev != cur,
+            ObsMode::Rise => prev == 0 && cur > 0,
+            ObsMode::Fall => prev > 0 && cur == 0,
+            ObsMode::Edge => (prev > 0) != (cur > 0),
+        };
+        if fire {
             15
         } else {
             0
@@ -470,7 +490,7 @@ impl Circuit {
             // オブザーバは隣接 2 サンプルの比較なので (back,side) だけでは決まらない。
             // step() の phase1 / phase4 が hist の前後から `observer_out` で直接計算する
             // ため、ここには到達しない(網羅性のためのアーム)。
-            SeqKind::Observer => 0,
+            SeqKind::Observer(_) => 0,
         }
     }
 
@@ -574,7 +594,7 @@ impl Circuit {
                 let s = self.find(self.seqs[si].in_);
                 let d = self.find(self.seqs[si].out);
                 let v = match self.seqs[si].kind {
-                    SeqKind::Rep | SeqKind::Observer => {
+                    SeqKind::Rep | SeqKind::Observer(_) => {
                         if pot[s] > 0 {
                             15
                         } else {
@@ -609,10 +629,10 @@ impl Circuit {
             let side_front = *self.seqs[i].side_hist.front().unwrap_or(&0);
             // オブザーバは履歴の前後 2 サンプル(in(T-2) / in(T-1))の変化検出。
             // ロック付きリピーターは横入力 > 0 の間、出力を直前値で凍結する。
-            let mut o = if kind == SeqKind::Observer {
+            let mut o = if let SeqKind::Observer(mode) = kind {
                 let prev = front; // hist.front() = in(T-2)
                 let cur = *self.seqs[i].hist.back().unwrap_or(&0); // hist.back() = in(T-1)
-                Self::observer_out(prev, cur)
+                Self::observer_out(mode, prev, cur)
             } else if Self::rep_locked(&self.seqs[i], side_front) {
                 self.seqs[i].prev_out
             } else {
@@ -742,10 +762,10 @@ impl Circuit {
             // オブザーバはサンプル後の履歴前後(in(T-1) / in(T))にエッジが残って
             // いれば次 tick でパルスする = 未整定。ロック中は出力が凍結されるので、
             // 期待出力は現在の出力(= 据え置き)。
-            let expected = if self.seqs[i].kind == SeqKind::Observer {
+            let expected = if let SeqKind::Observer(mode) = self.seqs[i].kind {
                 let prev = *self.seqs[i].hist.front().unwrap_or(&0);
                 let cur = *self.seqs[i].hist.back().unwrap_or(&0);
-                Self::observer_out(prev, cur)
+                Self::observer_out(mode, prev, cur)
             } else if Self::rep_locked(&self.seqs[i], side) {
                 self.seqs[i].outv
             } else {

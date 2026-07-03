@@ -7,10 +7,11 @@ use std::collections::{HashMap, HashSet};
 
 // ---- logic (circuit) side ----------------------------------------------
 
-/// 素子。`k` は素子種別、`n` はリピータ遅延。
+/// 素子。`k` は素子種別、`n` はリピータ遅延またはオブザーバのエッジ判定モード
+/// (0=変化全部, 1=立ち上がり, 2=立ち下がり, 3=2値エッジ。`parse_chunk` 参照)。
 #[derive(Debug, Clone, Copy)]
 pub struct Elem {
-    /// 'd' dust, 'b' block, 'r' repeater, 't' torch,
+    /// 'd' dust, 'b' block, 'r' repeater, 't' torch, 'o' observer,
     /// 'C' comparator(compare), 'S' comparator(subtract)
     pub k: char,
     pub n: i32,

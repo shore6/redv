@@ -100,6 +100,13 @@ fn observer() {
     run_golden("observer");
 }
 
+/// オブザーバのエッジ亜種(`op` 立ち上がり / `on` 立ち下がり / `oe` 2値エッジ):
+/// 判定式だけが異なり、強度変化(15→7)は `o` だけが拾う(issue #58)。
+#[test]
+fn observer_edge() {
+    run_golden("observer_edge");
+}
+
 /// イベント駆動待機(`#until(cond)`): 条件成立まで tick を進める($time は #n 同様に進む, issue #42)。
 #[test]
 fn until_wait() {
@@ -522,6 +529,33 @@ fn observer_inline_is_accepted() {
                module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("obs_inline_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// エッジ亜種(`op`/`on`/`oe`)も本体 `o` と同じく reg には置けない(issue #58)。
+#[test]
+fn observer_variant_as_reg_is_error() {
+    let src = "logic g(input a, output y){ reg p = oe; a-p; p-y; }\n\
+               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("obs_variant_reg_err", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("observer belongs inline"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
+/// エッジ亜種の綴りは素子名の名前衝突ルール(§2.2)に自動で乗る:
+/// `on` を reg 名にしようとするとエラーになる(issue #58)。
+#[test]
+fn observer_variant_name_collides() {
+    let src = "logic g(input a, output y){ reg on; a-on; on-y; }\n\
+               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("obs_variant_name_err", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("collides with an element name"),
+        "unexpected stderr:\n{stderr}"
+    );
 }
 
 /// 全 assert / expect が真なら exit 0 で「all passed」サマリを出す(issue #40)。

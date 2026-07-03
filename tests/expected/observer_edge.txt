@@ -1,0 +1,10 @@
+t= 0 | x= 0 | any= 0 up= 0 down= 0 both= 0
+t= 1 | x=15 | any= 0 up= 0 down= 0 both= 0
+t= 2 | x=15 | any=15 up=15 down= 0 both=15
+t= 3 | x=15 | any= 0 up= 0 down= 0 both= 0
+t= 4 | x= 7 | any= 0 up= 0 down= 0 both= 0
+t= 5 | x= 7 | any=15 up= 0 down= 0 both= 0
+t= 6 | x= 7 | any= 0 up= 0 down= 0 both= 0
+t= 7 | x= 0 | any= 0 up= 0 down= 0 both= 0
+t= 8 | x= 0 | any=15 up= 0 down=15 both=15
+t= 9 | x= 0 | any= 0 up= 0 down= 0 both= 0

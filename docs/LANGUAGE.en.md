@@ -114,6 +114,7 @@ Examples of colliding names:
 
 - Single components: `b` / `d` / `o` / `r` / `t`
 - Comparators: `cc` / `cd`
+- Observer edge variants: `op` / `on` / `oe`
 - Notations with a count: `r2` / `d3`
 - Concatenations of the above: `tb` (= torch + block), and similar
 
@@ -191,6 +192,7 @@ Behavioral differences from the actual game are collected in §11.
 | `cc` / `cd` | Comparator (compare / subtract) | 1-tick delay; behavior depends on the side input | §4.5 |
 | `b` | Block | Immediate; strength is only 0 or 15 | §4.6 |
 | `o` | Observer | Detects input changes and emits a 1-tick pulse | §4.7 |
+| `op` / `on` / `oe` | Observer (edge variants) | Detects only rising / falling / binary edges | §4.7.1 |
 
 `r` is the same as `r1` (delay 1).
 `r5` and higher are errors, and `c` alone (no mode given) is also an error.
@@ -276,7 +278,29 @@ The observer is inline-only.
 Like the torch, it cannot be put on a reg (`reg p = o;` is rejected).
 If the input is steady (no change), the output settles to 0, so `#init` (§7.2) terminates (no oscillation).
 
-An edge variant that picks only rising or falling edges is tracked in a separate issue (§11.5).
+#### 4.7.1 Edge Variants (`op`, `on`, `oe`)
+
+Three variants replace only the edge condition via a suffix letter.
+Everything else — the 1-tick pulse, strength 15, inline-only placement, no reg form — is shared with the base `o`.
+
+| Notation | Detects | Rule |
+|---|---|---|
+| `op` | Rising edges only | `out(T) = (in(T-2) == 0 && in(T-1) > 0) ? 15 : 0` |
+| `on` | Falling edges only | `out(T) = (in(T-2) > 0 && in(T-1) == 0) ? 15 : 0` |
+| `oe` | Binary edges | `out(T) = ((in(T-2) > 0) != (in(T-1) > 0)) ? 15 : 0` |
+
+The suffixes correspond to Verilog's posedge / negedge / edge.
+`oe` differs from the base `o` in that it picks up only 0↔positive toggles and ignores strength changes (e.g. 5 → 10).
+`op` suits one-shot startup (one pulse on power-on); `on` suits power-off detection.
+
+```rv
+x - op - y;                    // The tick after x rises, y gets a 1-tick pulse
+```
+
+The suffixes are chosen from letters outside the existing component set `b`/`c`/`d`/`o`/`r`/`t`.
+For example `od` already means "observer + dust" as a component sequence, so it cannot be the falling-edge suffix.
+The variant spellings are component sequences themselves, so the name-collision rule (§2.2) forbids `on` and the like as reg / wire / port names.
+The edge variants are an extension not present in the game's observer (§11.5).
 
 ---
 
@@ -953,6 +977,7 @@ The output rules for each component:
 - Comparator: `out(T) = f(back(T−1), side(T−1))`
 - Comparator (side unconnected): `out(T) = back(T−1)` (pass-through)
 - Observer: `out(T) = in(T−2) != in(T−1) ? 15 : 0` (neighbor-sample change detection)
+- Observer (edge variants): `op` / `on` / `oe` replace only the rule with rising / falling / binary edge detection (§4.7.1)
 
 ### 9.5 Reflecting Input Changes
 
@@ -1093,7 +1118,9 @@ redv provides `r0` as an extension for "building higher-performance circuits in 
 
 The game's observer fires on block-state updates and has spatial properties (orientation, QC quasi-wiring, output face).
 redv works at the component level and watches only input-signal changes (no orientation, no QC).
-An edge variant that picks only rising or falling edges is tracked in issue #58.
+
+Also, the game's observer comes in a single kind that detects every change; it has no edge-condition variants.
+`op` / `on` / `oe` (§4.7.1) are redv extensions for writing pulse-shaping circuits concisely in text (issue #58).
 
 ---
 
@@ -1122,6 +1149,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/repeater_lock.rv` | Repeater lock (`.side` on `reg m = r;` freezes the output) |
 | `examples/repeater_0tick.rv` | 0-tick repeater (`r0`) vs. normal repeater (`r1`): timing comparison |
 | `examples/observer.rv` | Observer (`o`): detects input changes and emits a 1-tick pulse |
+| `examples/observer_edge.rv` | Observer edge variants (`op` / `on` / `oe`) compared with the base `o` across all 4 modes |
 | `examples/wire_reuse.rv` | Define a wire as a reusable component sequence and use it in several places |
 
 ### 12.3 sim and Verification

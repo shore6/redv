@@ -1,0 +1,34 @@
+/* オブザーバのエッジ亜種: 判定式だけが異なる 4 モードを同じ入力で比較する。
+ *   o  … 変化全部(立ち上がり・立ち下がり・強度変化。§4.7)
+ *   op … 立ち上がりのみ(in(T-2)==0 && in(T-1)>0)
+ *   on … 立ち下がりのみ(in(T-2)>0 && in(T-1)==0)
+ *   oe … 2値エッジ(0↔正 のトグルのみ。強度変化 15→7 は無視)
+ * いずれも 1tick 遅れて 1tick 幅・強度15 のパルス。インラインチェーン専用。 */
+logic edges(input x, output any, output up, output down, output both)
+{
+    x - o  - any;       // 変化全部
+    x - op - up;        // 立ち上がりのみ
+    x - on - down;      // 立ち下がりのみ
+    x - oe - both;      // 2値エッジ(立ち上がり+立ち下がり)
+}
+
+module test_observer_edge()
+{
+    var x, any, up, down, both;
+    sim {
+        x = 0;
+        (any, up, down, both) = edges(x);
+        #init                                   // 定常: 変化なし -> 全出力 0
+        ?monitor("t=%2 | x=%2 | any=%2 up=%2 down=%2 both=%2\n",
+                 $time, x, any, up, down, both);
+
+        x = 15;                                 // 立ち上がり: o / op / oe が発火
+        #1 #1 #1                                // (時刻1-3) t=2 でパルス
+
+        x = 7;                                  // 強度変化(15->7): o だけが発火
+        #1 #1 #1                                // (時刻4-6) t=5 でパルス
+
+        x = 0;                                  // 立ち下がり: o / on / oe が発火
+        #1 #1 #1                                // (時刻7-9) t=8 でパルス
+    }
+}
