@@ -1,0 +1,3 @@
+x8=10010100 hi=1001 lo=0100 msb=1
+x4=1010 hi=10 lo=10 tap=1
+slice const-expr: all passed
