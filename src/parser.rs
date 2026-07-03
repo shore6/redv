@@ -9,8 +9,8 @@ use crate::lexer::{Lexer, Tk, Token};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
-/// `parse_callee_invocation` の返り値: (callee 名, `#(...)` ジェネリック実引数, 引数 ident 列)。
-type CalleeInvocation = (String, Vec<(String, Expr)>, Vec<String>);
+/// `parse_callee_invocation` の返り値: (callee 名, `#(...)` ジェネリック実引数, 引数列)。
+type CalleeInvocation = (String, Vec<(String, Expr)>, Vec<InstArg>);
 
 /// バンドル済み標準ライブラリ。`#include "stdlogic"` でビルド時に埋め込まれたソースから読む。
 /// ファイルシステムやインストール場所に依存せず、redv バイナリ単体でライブラリを利用できる。
@@ -438,15 +438,25 @@ impl Parser {
     }
 
     /// `callee #(P=v, ...) (args...)` を 1 つ消費する。`;` は呼び出し側で消費する。
-    /// 引数は素朴な ident で、`name[..]` のレーン渡しはエラー(現仕様)。
-    /// 返り値は (callee 名, `#(...)` 実引数, 引数 ident 列)。
+    /// 引数は素朴な ident またはネスト呼び出しで、`name[..]` のレーン渡しはエラー(現仕様)。
+    /// 返り値は (callee 名, `#(...)` 実引数, 引数列)。
     fn parse_callee_invocation(&mut self) -> RvResult<CalleeInvocation> {
         let callee = self.expect_ident("logic name")?;
         let call_params = self.parse_logic_call_params()?;
         self.expect_punct("(")?;
+        let args = self.parse_inst_args()?;
+        self.expect_punct(")")?;
+        Ok((callee, call_params, args))
+    }
+
+    /// logic 呼び出しの引数列(`(` の直後から `)` の手前まで)を消費する。
+    /// 各引数は素朴な ident か、`h(x)` / `h#(W=4)(x)` 形の **ネスト呼び出し**(issue #97。
+    /// 引数位置の `ident (` / `ident #` は従来エラーだったトークン列への純加算)。
+    fn parse_inst_args(&mut self) -> RvResult<Vec<InstArg>> {
         let mut args = Vec::new();
         if !self.is_punct(")") {
             loop {
+                let ln = self.cur().line;
                 let an = self.expect_ident("logic input (reg/port/var name)")?;
                 if self.is_punct("[") {
                     return fail(
@@ -458,7 +468,20 @@ impl Parser {
                         ),
                     );
                 }
-                args.push(an);
+                if self.is_punct("(") || self.is_punct("#") {
+                    let params = self.parse_logic_call_params()?;
+                    self.expect_punct("(")?;
+                    let sub = self.parse_inst_args()?;
+                    self.expect_punct(")")?;
+                    args.push(InstArg::Call {
+                        line: ln,
+                        callee: an,
+                        params,
+                        args: sub,
+                    });
+                } else {
+                    args.push(InstArg::Name(an));
+                }
                 if self.is_punct(",") {
                     self.i += 1;
                     continue;
@@ -466,8 +489,7 @@ impl Parser {
                 break;
             }
         }
-        self.expect_punct(")")?;
-        Ok((callee, call_params, args))
+        Ok(args)
     }
 
     /// `#( P=v, Q=w, ... )` — ジェネリック幅 param の **実引数列** を解析。
@@ -1219,32 +1241,13 @@ impl Parser {
                     self.expect_punct("(")?;
                     let mut bind_args = Vec::new();
                     // `scan("%x")` のような書式文字列を受理する(scan のみ。
-                    // 他の callee は従来どおり ident のみ受け付け、エラーは下流で出す)。
+                    // 他の callee は ident / ネスト呼び出しの引数列として読む)。
                     let mut scan_fmt: Option<String> = None;
                     if callee == "scan" && self.cur().k == Tk::Str {
                         scan_fmt = Some(self.cur().s.clone());
                         self.i += 1;
-                    } else if !self.is_punct(")") {
-                        loop {
-                            let an =
-                                self.expect_ident("variable name (logic inputs must be vars)")?;
-                            if self.is_punct("[") {
-                                return fail(
-                                    self.cur().line,
-                                    format!(
-                                        "cannot pass a bus lane '{}[..]' as a logic argument; \
-                                         pass the whole bus var (or copy the lane to a scalar var first)",
-                                        an
-                                    ),
-                                );
-                            }
-                            bind_args.push(an);
-                            if self.is_punct(",") {
-                                self.i += 1;
-                                continue;
-                            }
-                            break;
-                        }
+                    } else {
+                        bind_args = self.parse_inst_args()?;
                     }
                     self.expect_punct(")")?;
                     self.expect_punct(";")?;

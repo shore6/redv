@@ -199,6 +199,13 @@ fn half_adder() {
     run_golden("half_adder");
 }
 
+/// ネスト呼び出し `y = s_or(s_and(x1,x2), s_xor(x3,x4));`(issue #97)。
+/// sim 側と logic 本体(MUX2)の両方で、中間 reg / var なしに呼び出しを直接ネストする。
+#[test]
+fn nested_call() {
+    run_golden("nested_call");
+}
+
 /// `#include "stdlogic"` でバンドル済みの基本ゲート群(NOT/AND/OR/XOR/NAND/NOR/XNOR)を取り込む
 /// (issue #55)。7 ゲートを 4 通りの入力で sweep して真理値表が一致するか検証する。
 #[test]
@@ -1243,6 +1250,125 @@ fn multi_output_binding_is_error() {
         assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
         assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }
+}
+
+/// ネスト呼び出し(issue #97)の正常系: sim・logic 本体・3 段の深いネスト・
+/// ジェネリック幅 `#(...)` 付き・バス出力のネストがすべて受理される。
+#[test]
+fn nested_call_is_accepted() {
+    for (tag, src) in [
+        // sim 側の基本形(issue の例)
+        (
+            "sim_basic",
+            "#include \"stdlogic\"\n\
+             module m(){ var x1,x2,x3,x4,y; sim{ x1=0;x2=0;x3=0;x4=0;\n\
+             \x20\x20\x20\x20y = s_or(s_and(x1,x2), s_xor(x3,x4)); #init } }"
+                .to_string(),
+        ),
+        // logic 本体
+        (
+            "logic_body",
+            "#include \"stdlogic\"\n\
+             logic G(input a, output y) { y = s_or(s_and(a, a), a); }\n\
+             module m(){ var a,y; sim{ a=0; y=G(a); #init } }"
+                .to_string(),
+        ),
+        // 3 段の深いネスト
+        (
+            "deep",
+            "#include \"stdlogic\"\n\
+             module m(){ var a,y; sim{ a=0; y = s_not(s_not(s_not(a))); #init } }"
+                .to_string(),
+        ),
+        // ジェネリック幅付き + バス出力のネスト
+        (
+            "generic_bus",
+            "logic inv #(W=4)(input[W] x, output[W] y){ x - t - y; }\n\
+             module m(){ var[8] a,y; sim{ a=0; y = inv#(W=8)(inv#(W=8)(a)); #init } }"
+                .to_string(),
+        ),
+    ] {
+        let (code, stderr) = run_source(&format!("nested_{tag}"), &src);
+        assert_eq!(code, Some(0), "{tag}: expected success, stderr:\n{stderr}");
+    }
+}
+
+/// ネスト呼び出し(issue #97)の誤用はエラー: 多出力 logic のネスト(sim / logic 本体)、
+/// 未知 logic のネスト、scan のネスト、ネスト経由の再帰、出力幅の不一致。
+#[test]
+fn nested_call_is_error() {
+    let header = "logic HA(input x1, input x2, output s2, output c2) { x1-t-s2; x2-t-c2; }\n\
+                  logic OR2(input x1, input x2, output y) { x1-d-y; x2-d-y; }\n";
+    for (tag, body, want) in [
+        // 多出力 logic はネストできない(sim)
+        (
+            "multi_output_sim",
+            "module m(){ var a,b,q,y; sim{ a=0;b=0;q=0; y = OR2(HA(a,b), q); #init } }",
+            "nested call to HA must have exactly 1 output port (it has 2)",
+        ),
+        // 多出力 logic はネストできない(logic 本体)
+        (
+            "multi_output_logic",
+            "logic G(input x1, input x2, output y) { y = OR2(HA(x1, x2), x1); }\n\
+             module m(){ var a,b,y; sim{ a=0;b=0; y = G(a,b); #init } }",
+            "nested call to HA must have exactly 1 output port (it has 2)",
+        ),
+        // 未知 logic のネスト
+        (
+            "unknown_nested",
+            "module m(){ var a,b,y; sim{ a=0;b=0; y = OR2(NOPE(a), b); #init } }",
+            "unknown logic: NOPE",
+        ),
+        // scan はネストできない
+        (
+            "nested_scan",
+            "module m(){ var a,y; sim{ a=0; y = OR2(scan(), a); #init } }",
+            "scan() cannot be nested in a logic call argument",
+        ),
+        // ネスト経由の相互再帰
+        (
+            "nested_recursion",
+            "logic RA(input x, output y) { y = RB(x); }\n\
+             logic RB(input x, output y) { y = OR2(RA(x), x); }\n\
+             module m(){ var a,y; sim{ a=0; y = RA(a); #init } }",
+            "recursive logic instantiation",
+        ),
+        // ネスト出力の幅不一致(バス出力 -> スカラ入力)
+        (
+            "width_mismatch",
+            "logic inv #(W=4)(input[W] x, output[W] y){ x - t - y; }\n\
+             module m(){ var[4] a; var y; sim{ a=0; y = OR2(inv(a), a); #init } }",
+            "does not match OR2 input port 'x1' (width 1)",
+        ),
+    ] {
+        let src = format!("{header}{body}");
+        let (code, stderr) = run_source(&format!("nestedbad_{tag}"), &src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
+    }
+}
+
+/// ネスト呼び出しの部分式は standalone 呼び出しと同一インスタンスを共有する(issue #97)。
+/// トレース(-t)のノード名に `s_and(x1,x2)` のインスタンスが 1 組だけ現れることで確認する。
+#[test]
+fn nested_call_shares_subexpression_instance() {
+    let src = "#include \"stdlogic\"\n\
+               module m(){ var x1,x2,x3,t,y; sim{ x1=15;x2=15;x3=0;\n\
+               \x20\x20\x20\x20t = s_and(x1, x2);\n\
+               \x20\x20\x20\x20y = s_or(s_and(x1, x2), x3);\n\
+               \x20\x20\x20\x20#init ?monitor(\"t=%2 y=%2\\n\", t, y); #1 } }";
+    let (code, stderr) = run_source_args("nested_share", src, &["-t"]);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+    // 共有されていれば、ネスト側の s_and は standalone と同じキー `s_and(x1,x2)` の
+    // インスタンスを使うので、別インスタンス(例: `s_or(...)` 内部の s_and)は現れない。
+    assert!(
+        stderr.contains("s_and(x1,x2).y"),
+        "missing shared instance node, stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("/s_and#"),
+        "nested s_and must reuse the standalone instance, stderr:\n{stderr}"
+    );
 }
 
 /// 1 出力 logic を `(v) = callee(...)` のタプル形でも受けられる(統一性。issue #79)。

@@ -75,6 +75,21 @@ pub enum Sel {
     Slice(IdxExpr, IdxExpr),
 }
 
+/// logic 呼び出しの引数。裸の名前(reg / ポート / var / バス)か、ネストした
+/// logic 呼び出し(issue #97)。ネスト呼び出しは **出力ポートちょうど 1 個** の logic に
+/// 限り、その出力ポートが外側の入力ポートへ減衰なしで直結される(中間 reg / var を
+/// 手書きした場合と等価な配線)。logic 本体(`Instance`)と sim(`CallBind`)で共用する。
+#[derive(Debug, Clone)]
+pub enum InstArg {
+    Name(String),
+    Call {
+        line: i32,
+        callee: String,
+        params: Vec<(String, Expr)>,
+        args: Vec<InstArg>,
+    },
+}
+
 /// チェーン端点。スカラ点 / バス全体 / レーン / スライス / 連結のいずれか。
 /// レーン列(`Vec<usize>`)に解決され、両端の幅が一致すれば element-wise 接続される。
 #[derive(Debug, Clone)]
@@ -138,14 +153,15 @@ pub enum LogicStmt {
         rhs: String,
     },
     /// `(o1, o2, ...) = callee#(P=v, ...)(args...)` — 別 logic の階層インスタンス化。
-    /// `outputs` は親の reg / ポート列(出力ポートと位置対応)、`args` は親の reg / ポート名。
+    /// `outputs` は親の reg / ポート列(出力ポートと位置対応)、`args` は親の reg / ポート名
+    /// またはネストした logic 呼び出し(`InstArg`、issue #97)。
     /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
     /// 出力 1 個の `out = callee(...)` は `outputs = vec![out]` として正規化する(`(out) = ...` も同義)。
     Instance {
         line: i32,
         outputs: Vec<String>,
         callee: String,
-        args: Vec<String>,
+        args: Vec<InstArg>,
         params: Vec<(String, Expr)>,
     },
 }
@@ -239,6 +255,7 @@ pub enum SimStmt {
     /// `(t1, t2, ...) = callee#(P=v, ...)(args)` — sim から logic をインスタンス化する束縛。
     /// `targets` は出力ポートと位置対応の束縛先 var 列(スカラ var / バス var)。出力 1 個の
     /// `t = callee(...)` は `targets = vec![t]` として正規化する(`(t) = ...` も同義)。
+    /// `bind_args` は var 名またはネストした logic 呼び出し(`InstArg`、issue #97)。
     /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
     /// `fmt` は `scan("%x")` のような書式付き入力で使う(scan のみ。それ以外は常に `None`。
     /// scan は常に `targets.len() == 1`)。
@@ -246,7 +263,7 @@ pub enum SimStmt {
         line: i32,
         targets: Vec<String>,
         callee: String,
-        bind_args: Vec<String>,
+        bind_args: Vec<InstArg>,
         params: Vec<(String, Expr)>,
         fmt: Option<String>,
     },
