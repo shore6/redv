@@ -216,6 +216,24 @@ fn stdlogic_double_include_is_noop() {
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
+/// `#include "stdmem"` でバンドル済みのラッチ・レジスタ 4 種
+/// (s_rslatch / s_dlatch / s_dff / s_register)を取り込む(issue #87)。
+#[test]
+fn stdmem_demo() {
+    run_golden("stdmem_demo");
+}
+
+/// stdmem は内部で stdlogic をネスト include する(issue #87)。利用側が先に
+/// `#include "stdlogic"` を書いていても、stdmem 側のネスト include は no-op になり
+/// 重複定義エラーにならない。両バンドルの logic が同時に使える。
+#[test]
+fn stdmem_nested_stdlogic_include_is_noop() {
+    let src = "#include \"stdlogic\"\n#include \"stdmem\"\n\
+               module m(){ var a,en,y,z; sim{ a=0; en=15; y=s_not(a); z=s_dlatch(a,en); #init } }";
+    let (code, stderr) = run_source("stdmem_dup", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
 /// 未知の stdlib 名はバンドル一覧にマッチしないため file include へフォールスルーし、
 /// 存在しないファイルとして通常の include エラーになる(issue #55)。
 #[test]

@@ -1,0 +1,62 @@
+/* stdmem デモ: #include "stdmem" でバンドル済みのラッチ・レジスタ 4 種を取り込む (issue #87)。
+ *
+ *   s_rslatch  RS ラッチ(NOR たすき掛け)   … set/reset で状態を作り、0/0 で保持
+ *   s_dlatch   D ラッチ(透過ラッチ)        … en>0 で透過、en=0 で保持
+ *   s_dff      D フリップフロップ            … clk 立ち上がりで x を取り込む
+ *   s_register ロードイネーブル付きレジスタ  … 立ち上がりでも ld=0 なら保持
+ *
+ * 各素子の伝搬遅延は src/stdlib/stdmem.rv のヘッダコメントを参照。
+ * s_rslatch は set=reset=0 のままだと発振するため、reset を立ててから #init する。 */
+
+#include "stdmem"
+
+module test_stdmem() {
+    var set, reset, q, nq;           // RS ラッチ
+    var dx, en, dq;                  // D ラッチ
+    var fx, fclk, fq;                // D-FF
+    var rx, ld, rclk, rq;            // レジスタ
+    sim {
+        set = 0; reset = 15;         // reset で初期状態(q=0)を確定
+        (q, nq) = s_rslatch(set, reset);
+        dx = 0; en = 15;
+        dq = s_dlatch(dx, en);
+        fx = 0; fclk = 0;
+        fq = s_dff(fx, fclk);
+        rx = 0; ld = 0; rclk = 0;
+        rq = s_register(rx, ld, rclk);
+        #init
+        ?monitor("t=%2 | RS q=%2 nq=%2 | DL q=%2 | FF q=%2 | REG q=%2\n",
+                 $time, q, nq, dq, fq, rq);
+
+        // --- s_rslatch: セット -> 保持 ---
+        reset = 0; #3                // 0/0 で保持(q=0 のまま)
+        set = 15;  #3                // セット -> q=15, nq=0
+        set = 0;   #3                // 保持(q=15 のまま)
+
+        // --- s_dlatch: 透過 -> 保持 -> 再透過 ---
+        dx = 15; #3                  // en=15: 透過 -> dq=15
+        en = 0;  #3                  // 保持開始
+        dx = 0;  #3                  // 保持中は dq=15 のまま
+        en = 15; #3                  // 再透過 -> dq=0
+
+        // --- s_dff: 立ち上がりで取り込み ---
+        fx = 15;   #2
+        fclk = 15; #6                // エッジ -> fq=15
+        fclk = 0;  #2
+        fx = 0;    #2                // clk が動かなければ保持
+        fclk = 15; #6                // 次のエッジ -> fq=0
+        fclk = 0;  #2
+
+        // --- s_register: ld=0 は保持、ld=15 で取り込み ---
+        rx = 15;   #2
+        rclk = 15; #6                // ld=0: エッジでも rq=0 のまま
+        rclk = 0;  #2
+        ld = 15;   #2
+        rclk = 15; #6                // ld=15: エッジで取り込み -> rq=15
+        rclk = 0;  #2
+        ld = 0;    #2
+        rx = 0;    #2
+        rclk = 15; #6                // ld=0 に戻すと rx=0 でも rq=15 を保持
+        rclk = 0;  #2
+    }
+}

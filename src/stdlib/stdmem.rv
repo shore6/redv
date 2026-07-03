@@ -1,0 +1,70 @@
+/* redv 標準ライブラリ: ラッチ・レジスタ (issue #87)
+ *
+ * `#include "stdmem"` で取り込む。バイナリに埋め込まれているため、
+ * ファイルを置く必要も相対パスを書く必要もない。
+ * 内部で stdlogic を使う(ネストして取り込まれるが、利用側が別途
+ * `#include "stdlogic"` していても重複エラーにはならない)。
+ *
+ * 提供する logic(delay は伝搬遅延 = 入力変化から出力確定までの tick 数):
+ *   s_rslatch (RS ラッチ)          input set, reset -> output q, nq
+ *       delay: set/reset -> nq: 1 / q: 2
+ *   s_dlatch  (D ラッチ)           input x, en      -> output q
+ *       delay: x -> q: 1(en>0 の透過時)/ en の効き: 2
+ *   s_dff     (D フリップフロップ) input x, clk     -> output q
+ *       delay: clk 立ち上がり -> q: 4(取り込みはエッジの 3 tick 後)
+ *   s_register(ロード付きレジスタ) input x, ld, clk -> output q
+ *       delay: clk 立ち上がり -> q: 4(ld>0 のとき。ld=0 なら保持)
+ *
+ * 入力は 0/15 の論理レベルを想定する(中間強度は素子の特性に従い 0/15 に量子化される)。
+ *
+ * 使用上の注意:
+ *   - s_rslatch は set=reset=0 のままだと初期状態が定まらず発振する。
+ *     最初の #init の前に set か reset のどちらかを 15 にして初期状態を確定させること。
+ *   - s_dff / s_register の取り込みは clk エッジの 3 tick 後に行われる。
+ *     x(s_register では ld も)は、エッジの直前 1 tick からエッジの 4 tick 後まで
+ *     安定させること。
+ */
+
+#include "stdlogic"
+
+logic s_rslatch(input set, input reset, output q, output nq) {
+    reg iq, inq;               // 内部状態(q / nq と併合)
+    reg ms, mr;                // NOR の合流点(ダスト OR)
+    set - ms;                  // nq = NOR(set, q)
+    iq  - ms;
+    ms - t - inq;
+    reset - mr;                // q = NOR(reset, nq)
+    inq   - mr;
+    mr - t - iq;
+    q  = iq;
+    nq = inq;
+}
+
+logic s_dlatch(input x, input en, output q) {
+    reg m = r;                 // ロック可能リピーター
+    reg nen;
+    nen = s_not(en);           // en=0 → side=15 → ロック(保持)。en>0 → 透過
+    x - m;                     // 後ろ入力
+    nen - m.side;              // 横(ロック)入力
+    m - q;                     // 前(出力)
+}
+
+logic s_dff(input x, input clk, output q) {
+    reg m = r;                 // 平常時はロックして保持
+    reg pulse, npulse;
+    clk - op - pulse;          // 立ち上がりで 1 tick 幅のパルス
+    npulse = s_not(pulse);     // パルスの間だけ side=0 → 1 tick 解錠して x を取り込む
+    x - m;
+    npulse - m.side;
+    m - q;
+}
+
+logic s_register(input x, input ld, input clk, output q) {
+    reg m = r;                 // 平常時はロックして保持
+    reg pulse, lk;
+    clk - op - pulse;          // 立ち上がりで 1 tick 幅のパルス
+    lk = s_nand(ld, pulse);    // ld>0 かつパルス中だけ side=0 → 解錠して x を取り込む
+    x - m;
+    lk - m.side;
+    m - q;
+}
