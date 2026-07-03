@@ -1,0 +1,68 @@
+/* スライス / レーン添字の定数式化(issue #89)。
+ * x[hi:lo] / x[k] の添字にリテラルに加えて定数式(param・数値 #define・
+ * + - * / %・単項 -・括弧)を書ける。ジェネリック param を含む式は幅式と
+ * 同じくインスタンス化時に評価され、それ以外はパース時に即時解決される。
+ *
+ *  - SPLIT: 幅 W のバスを上位/下位 W/2 ずつへ分割(既定 W=4 と #(W=8) の別インスタンス)
+ *  - MSB  : レーン添字の式 x[W-1](最上位レーンの取り出し)
+ *  - TAP  : 非ジェネリック logic の param 参照添字 a[N+1](パース時に a[3] へ即時解決)
+ */
+param N = 2;
+
+logic SPLIT #(W=4)(input[W] x, output[W/2] hi_o, output[W/2] lo_o)
+{
+    // バス全体名は昇順 [0..N) 供給なので、両端とも降順スライスでビット順を揃える(§6.3)
+    x[W-1:W/2] - hi_o[W/2-1:0];      // 上位半分
+    x[W/2-1:0] - lo_o[W/2-1:0];      // 下位半分
+}
+
+logic MSB #(W=4)(input[W] x, output y)
+{
+    x[W-1] - y;              // レーン添字も定数式で書ける
+}
+
+logic TAP(input[4] a, output y)
+{
+    a[N+1] - y;              // param 参照はパース時に a[3] へ解決
+}
+
+module test_slice_const_expr()
+{
+    var[8] x8;
+    var[4] h8, l8;
+    var[4] x4;
+    var[2] h4, l4;
+    var m8, tp, i, ng;
+    sim {
+        x8 = 0; x4 = 0; ng = 0;
+        (h8, l8) = SPLIT#(W=8)(x8);
+        (h4, l4) = SPLIT(x4);        // 既定 W=4
+        m8 = MSB#(W=8)(x8);
+        tp = TAP(x4);
+        #init
+        // x8 = 10010100(bit 7/4/2)、x4 = 1010(bit 3/1)
+        x8[7] = 15; x8[4] = 15; x8[2] = 15;
+        x4[3] = 15; x4[1] = 15;
+        #2
+        for (i = 0; i < 4; i = i + 1) {
+            if (h8[i] != x8[4 + i]) { ng = ng + 1; }
+            if (l8[i] != x8[i])     { ng = ng + 1; }
+        }
+        for (i = 0; i < 2; i = i + 1) {
+            if (h4[i] != x4[2 + i]) { ng = ng + 1; }
+            if (l4[i] != x4[i])     { ng = ng + 1; }
+        }
+        if (m8 != x8[7]) { ng = ng + 1; }
+        if (tp != x4[3]) { ng = ng + 1; }
+        monitor("x8=%1%1%1%1%1%1%1%1 hi=%1%1%1%1 lo=%1%1%1%1 msb=%1\n",
+                x8[7]/15, x8[6]/15, x8[5]/15, x8[4]/15,
+                x8[3]/15, x8[2]/15, x8[1]/15, x8[0]/15,
+                h8[3]/15, h8[2]/15, h8[1]/15, h8[0]/15,
+                l8[3]/15, l8[2]/15, l8[1]/15, l8[0]/15, m8/15);
+        monitor("x4=%1%1%1%1 hi=%1%1 lo=%1%1 tap=%1\n",
+                x4[3]/15, x4[2]/15, x4[1]/15, x4[0]/15,
+                h4[1]/15, h4[0]/15, l4[1]/15, l4[0]/15, tp/15);
+        if (ng == 0) { monitor("slice const-expr: all passed\n"); }
+        else         { monitor("slice const-expr: % failure(s)\n", ng); }
+    }
+}

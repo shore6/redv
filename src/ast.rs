@@ -54,15 +54,25 @@ pub enum Qual {
     Mutable,
 }
 
+/// レーン / スライスの添字。`Lit(k)` は parse 時に解決済みのリテラル(既存挙動)。
+/// `Expr(e)` は logic ローカルのジェネリック param を含むため elaborate 時に
+/// `param_env` 下で解決する **遅延式**(issue #89。`WidthExpr` と同じ二相解決)。
+#[derive(Debug, Clone)]
+pub enum IdxExpr {
+    Lit(i32),
+    Expr(Expr),
+}
+
 /// チェーン端点のレーン選択。バス名や reg 名に付く。
+/// 添字は定数式(リテラル・`param`・数値 `#define`・`+ - * / %`・単項 `-`・括弧)。
 #[derive(Debug, Clone)]
 pub enum Sel {
     /// 添字なし。スカラ点 / バス全体。
     All,
     /// `name[k]` — 単一レーン。
-    Lane(i32),
+    Lane(IdxExpr),
     /// `name[hi:lo]` — スライス(包含)。`hi >= lo` で降順、`hi < lo` で昇順。
-    Slice(i32, i32),
+    Slice(IdxExpr, IdxExpr),
 }
 
 /// チェーン端点。スカラ点 / バス全体 / レーン / スライス / 連結のいずれか。

@@ -363,6 +363,25 @@ fn repeater_delay(tok: &str, line: i32) -> RvResult<Option<i32>> {
     }
 }
 
+/// レーン / スライス添字 `IdxExpr` を実 i32 へ解決する(issue #89)。ジェネリック param を
+/// 含む遅延式はここ(インスタンス化時)で初めて評価される。バス幅との範囲照合は
+/// 呼び出し側(`bus_lane` / `bus_slice`)が行う。
+fn resolve_idx(
+    ie: &IdxExpr,
+    param_env: &HashMap<String, i64>,
+    defines: &HashMap<String, i64>,
+    line: i32,
+) -> RvResult<i32> {
+    let v = match ie {
+        IdxExpr::Lit(n) => return Ok(*n),
+        IdxExpr::Expr(e) => eval_const_expr(e, param_env, defines, line)?,
+    };
+    if v < i32::MIN as i64 || v > i32::MAX as i64 {
+        return fail(line, format!("lane/slice index out of range: {}", v));
+    }
+    Ok(v as i32)
+}
+
 // ---- chain endpoint resolution -----------------------------------------
 
 /// チェーン端点の解決結果。スカラ点(1 ノード)かバス(レーン列)。
@@ -424,6 +443,7 @@ fn bus_slice(v: &[usize], name: &str, hi: i32, lo: i32, line: i32) -> RvResult<V
 /// 単一の名前参照(`name` / `name[k]` / `name[hi:lo]` / `name.side`)を解決する。
 /// `dst` が true なら終端(信号先)としての規則: `.side` はコンパレータ/リピーター reg の
 /// 横入力、無印の同 reg は後ろ入力。`dst` が false なら始端(信号源)で `.side` は不可。
+/// 添字はここで `param_env` / `defines` 下の定数式として評価する(issue #89)。
 #[allow(clippy::too_many_arguments)]
 fn resolve_ref(
     name: &str,
@@ -434,6 +454,8 @@ fn resolve_ref(
     side_regs: &HashMap<String, (usize, usize)>,
     buses: &HashMap<String, Vec<usize>>,
     wire_names: &HashSet<String>,
+    param_env: &HashMap<String, i64>,
+    defines: &HashMap<String, i64>,
     line: i32,
 ) -> RvResult<Ep> {
     if side {
@@ -455,17 +477,26 @@ fn resolve_ref(
         };
     }
     match sel {
-        Sel::Lane(k) => match buses.get(name) {
-            Some(v) => bus_lane(v, name, *k, line),
-            None => fail(line, format!("'{}' is indexed with '[{}]' but is not a bus", name, k)),
-        },
-        Sel::Slice(hi, lo) => match buses.get(name) {
-            Some(v) => Ok(Ep::Bus(bus_slice(v, name, *hi, *lo, line)?)),
-            None => fail(
-                line,
-                format!("'{}' is sliced with '[{}:{}]' but is not a bus", name, hi, lo),
-            ),
-        },
+        Sel::Lane(ie) => {
+            let k = resolve_idx(ie, param_env, defines, line)?;
+            match buses.get(name) {
+                Some(v) => bus_lane(v, name, k, line),
+                None => {
+                    fail(line, format!("'{}' is indexed with '[{}]' but is not a bus", name, k))
+                }
+            }
+        }
+        Sel::Slice(hie, loe) => {
+            let hi = resolve_idx(hie, param_env, defines, line)?;
+            let lo = resolve_idx(loe, param_env, defines, line)?;
+            match buses.get(name) {
+                Some(v) => Ok(Ep::Bus(bus_slice(v, name, hi, lo, line)?)),
+                None => fail(
+                    line,
+                    format!("'{}' is sliced with '[{}:{}]' but is not a bus", name, hi, lo),
+                ),
+            }
+        }
         Sel::All => {
             // 終端では無印のコンパレータ/リピーター reg は後ろ入力(back)。
             if dst {
@@ -504,17 +535,22 @@ fn resolve_endpoint(
     side_regs: &HashMap<String, (usize, usize)>,
     buses: &HashMap<String, Vec<usize>>,
     wire_names: &HashSet<String>,
+    param_env: &HashMap<String, i64>,
+    defines: &HashMap<String, i64>,
     line: i32,
 ) -> RvResult<Ep> {
     match ep {
-        Endpoint::Ref { name, side, sel } => {
-            resolve_ref(name, sel, *side, dst, scope, side_regs, buses, wire_names, line)
-        }
+        Endpoint::Ref { name, side, sel } => resolve_ref(
+            name, sel, *side, dst, scope, side_regs, buses, wire_names, param_env, defines, line,
+        ),
         Endpoint::Concat(elems) => {
             let mut lanes = Vec::new();
             for e in elems {
                 lanes.extend(
-                    resolve_endpoint(e, dst, scope, side_regs, buses, wire_names, line)?.lanes(),
+                    resolve_endpoint(
+                        e, dst, scope, side_regs, buses, wire_names, param_env, defines, line,
+                    )?
+                    .lanes(),
                 );
             }
             Ok(Ep::Bus(lanes))
@@ -529,8 +565,10 @@ fn endpoint_desc(ep: &Endpoint) -> String {
             let mut s = name.clone();
             match sel {
                 Sel::All => {}
-                Sel::Lane(k) => s.push_str(&format!("[{}]", k)),
-                Sel::Slice(hi, lo) => s.push_str(&format!("[{}:{}]", hi, lo)),
+                Sel::Lane(ie) => s.push_str(&format!("[{}]", idx_desc(ie))),
+                Sel::Slice(hi, lo) => {
+                    s.push_str(&format!("[{}:{}]", idx_desc(hi), idx_desc(lo)))
+                }
             }
             if *side {
                 s.push_str(".side");
@@ -541,6 +579,15 @@ fn endpoint_desc(ep: &Endpoint) -> String {
             let inner: Vec<String> = elems.iter().map(endpoint_desc).collect();
             format!("{{{}}}", inner.join(", "))
         }
+    }
+}
+
+/// 添字 `IdxExpr` を診断メッセージ用に整形する(`3` / `(W - 1)` 等)。
+/// 遅延式は評価前でも AST から字面を再構成して示す。
+fn idx_desc(ie: &IdxExpr) -> String {
+    match ie {
+        IdxExpr::Lit(n) => n.to_string(),
+        IdxExpr::Expr(e) => expr_to_string(e),
     }
 }
 
@@ -1284,8 +1331,15 @@ impl<'p> Elaborator<'_, 'p> {
         for (k, (line, from_ep, to_ep, chunks)) in anon_chains.iter().enumerate() {
             let line = *line;
             // 端点をレーン列へ解決(`.side` を源に置く誤りは resolve_endpoint が弾く)。
-            let src = resolve_endpoint(from_ep, false, &scope, &side_regs, &buses, &wire_names, line)?;
-            let dst = resolve_endpoint(to_ep, true, &scope, &side_regs, &buses, &wire_names, line)?;
+            // 添字の遅延式(ジェネリック param 参照)はこの `param_env` 下で評価される。
+            let src = resolve_endpoint(
+                from_ep, false, &scope, &side_regs, &buses, &wire_names, &param_env,
+                self.defines, line,
+            )?;
+            let dst = resolve_endpoint(
+                to_ep, true, &scope, &side_regs, &buses, &wire_names, &param_env, self.defines,
+                line,
+            )?;
             match (src, dst) {
                 (Ep::Single(fi), Ep::Single(ti)) => {
                     let label = format!("#ch{}", k + 1);

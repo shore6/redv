@@ -272,6 +272,14 @@ fn bus_slice_concat() {
     run_golden("bus_slice_concat");
 }
 
+/// スライス / レーン添字の定数式化(issue #89):
+/// `x[W-1:W/2]` のようなジェネリック param 式(インスタンス化時に評価)と、
+/// `a[N+1]` のような param 参照(パース時に即時解決)の両方。
+#[test]
+fn slice_const_expr() {
+    run_golden("slice_const_expr");
+}
+
 /// 2 進 / 16 進整数リテラル `0b1010` / `0xff`(issue #49):
 /// 強度・バス幅・param・#define・sim 代入・tick 数など、従来 10 進が書けた
 /// 場所すべてで使えること。
@@ -733,6 +741,43 @@ fn bus_misuse_is_error() {
             stderr.contains(want),
             "{tag}: unexpected stderr:\n{stderr}"
         );
+    }
+}
+
+/// スライス / レーン添字の定数式の誤用は **エラー**(issue #89)。
+/// ジェネリック param を含む式の範囲外はインスタンス化時、それ以外はパース時に検出する。
+#[test]
+fn slice_const_expr_misuse_is_error() {
+    let call = "module m(){ var[4] u; var y; sim{ u=0; y=g(u); #init } }";
+    for (tag, body, want) in [
+        // ジェネリック式の評価結果が範囲外(インスタンス化時に検出)
+        (
+            "generic_lane_out_of_range",
+            "logic g #(W=4)(input[W] a, output y){ a[W] - y; }",
+            "bus index out of range",
+        ),
+        (
+            "generic_slice_out_of_range",
+            "logic g #(W=4)(input[W] a, output y){ a[W:0] - y; }",
+            "bus slice index out of range",
+        ),
+        // param でも #define でもない識別子(パース時に検出)
+        (
+            "unknown_const_in_index",
+            "logic g(input[4] a, output y){ a[Q] - y; }",
+            "unknown constant 'Q'",
+        ),
+        // $time は定数式に置けない(パース時に検出)
+        (
+            "time_in_index",
+            "logic g(input[4] a, output y){ a[$time] - y; }",
+            "$time is not allowed in a constant expression",
+        ),
+    ] {
+        let src = format!("{body}\n{call}");
+        let (code, stderr) = run_source(&format!("selx_{tag}"), &src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }
 }
 

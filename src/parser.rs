@@ -914,30 +914,41 @@ impl Parser {
     }
 
     /// バスのレーン選択 `[k]`(単一)/ `[hi:lo]`(スライス、包含)を読む。`[` が無ければ `All`。
+    /// 添字は定数式(issue #89)。ジェネリック param を含む式のみ `IdxExpr::Expr` で遅延し、
+    /// それ以外はパース時に `IdxExpr::Lit` へ即時解決する(`parse_width_expr` と同じ二相解決)。
     fn parse_sel(&mut self) -> RvResult<Sel> {
         if !self.is_punct("[") {
             return Ok(Sel::All);
         }
         let ln = self.cur().line;
         self.i += 1;
-        if self.cur().k != Tk::Num {
-            return fail(ln, "expected an integer lane index after '['");
+        if self.is_punct("]") {
+            return fail(ln, "expected a lane index or slice after '['");
         }
-        let a = self.cur().num as i32;
-        self.i += 1;
+        let a = self.parse_idx_expr(ln)?;
         if self.is_punct(":") {
             self.i += 1;
-            if self.cur().k != Tk::Num {
-                return fail(ln, "expected an integer after ':' in a bus slice '[hi:lo]'");
-            }
-            let b = self.cur().num as i32;
-            self.i += 1;
+            let b = self.parse_idx_expr(ln)?;
             self.expect_punct("]")?;
             Ok(Sel::Slice(a, b))
         } else {
             self.expect_punct("]")?;
             Ok(Sel::Lane(a))
         }
+    }
+
+    /// レーン / スライス添字の定数式を 1 つ読む。logic param を含まなければ即時簡約。
+    /// 範囲検査(バス幅との照合)は elaborate 側で行うため、ここでは値域のみ確認する。
+    fn parse_idx_expr(&mut self, ln: i32) -> RvResult<IdxExpr> {
+        let e = self.parse_expr()?;
+        if !self.logic_params.is_empty() && Self::expr_refs_logic_param(&e, &self.logic_params) {
+            return Ok(IdxExpr::Expr(e));
+        }
+        let n = self.eval_const(&e)?;
+        if n < i32::MIN as i64 || n > i32::MAX as i64 {
+            return fail(ln, format!("lane/slice index out of range: {}", n));
+        }
+        Ok(IdxExpr::Lit(n as i32))
     }
 
     // ---- module ------------------------------------------------------------
