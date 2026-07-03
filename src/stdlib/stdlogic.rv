@@ -3,14 +3,14 @@
  * `#include "stdlogic"` で取り込む。バイナリに埋め込まれているため、
  * ファイルを置く必要も相対パスを書く必要もない。
  *
- * 提供する logic:
- *   s_not  (NOT)         input x          -> output y
- *   s_and  (AND)         input x1, x2     -> output y    (2 tick 遅延)
- *   s_or   (OR)          input x1, x2     -> output y    (1 tick 遅延)
- *   s_nand (NAND)        input x1, x2     -> output y    (1 tick 遅延)
- *   s_nor  (NOR)         input x1, x2     -> output y    (2 tick 遅延)
- *   s_xor  (XOR)         input x1, x2     -> output y    (4 tick 遅延)
- *   s_xnor (XNOR)        input x1, x2     -> output y    (5 tick 遅延)
+ * 提供する logic(delay は伝搬遅延 = 入力変化から出力確定までの tick 数):
+ *   s_not  (NOT)   input x      -> output y   delay: 1
+ *   s_and  (AND)   input x1, x2 -> output y   delay: 2
+ *   s_or   (OR)    input x1, x2 -> output y   delay: 1
+ *   s_nand (NAND)  input x1, x2 -> output y   delay: 1
+ *   s_nor  (NOR)   input x1, x2 -> output y   delay: 2
+ *   s_xor  (XOR)   input x1, x2 -> output y   delay: 4
+ *   s_xnor (XNOR)  input x1, x2 -> output y   delay: 5
  *
  * 入力は 0/15 の論理レベルを想定する(中間強度は丸めず素子の特性に従う)。
  */
@@ -52,16 +52,16 @@ logic s_nor(input x1, input x2, output y) {
 }
 
 logic s_xor(input x1, input x2, output y) {
-    reg na, nb, p, q;
-    na = s_not(x1);
-    nb = s_not(x2);
-    p  = s_and(x1, nb);
-    q  = s_and(na, x2);
-    y  = s_or(p, q);
+    reg na, nb, sand_a, sand_b;
+    na     = s_not(x1);
+    nb     = s_not(x2);
+    sand_a = s_and(x1, nb);          // x1 AND NOT x2
+    sand_b = s_and(na, x2);          // NOT x1 AND x2
+    y      = s_or(sand_a, sand_b);   // どちらか一方だけ 1
 }
 
 logic s_xnor(input x1, input x2, output y) {
-    reg s;
-    s = s_xor(x1, x2);
-    y = s_not(s);
+    reg sxor;
+    sxor = s_xor(x1, x2);
+    y    = s_not(sxor);
 }
