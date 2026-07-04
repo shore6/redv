@@ -1,0 +1,41 @@
+/* 入力ポートへの回路内フィードバック(issue #99)
+ *
+ * 入力ポートはただの「点」であり、var(レバー)からも回路内配線からも給電できる。
+ * 複数の駆動は他の点と同じく max 合流する。
+ * 自己保持回路 hold を sim から直接呼んでも別 logic 経由で呼んでも、
+ * 入力ポートのセマンティクスは同じ(階層位置に依存しない)ことを検証する。 */
+logic hold(input x, output y)
+{
+    x - d - y;         // 入力を出力へ(ダスト減衰 -1)
+    y - r - x;         // 出力を入力ポートへフィードバック(自己保持)
+}
+
+logic wrap(input x, output y)
+{
+    y = hold(x);       // 同じ回路を階層経由で使う
+}
+
+module test_input_feedback()
+{
+    var a1, a2, y1, y2;
+    sim {
+        a1 = 0; a2 = 0;
+        y1 = hold(a1);     // トップレベル呼び出し
+        y2 = wrap(a2);     // 階層経由
+        #init
+        expect(y1, 0);
+        expect(y2, 0);
+
+        a1 = 15 ~ 1;       // 1 tick パルスでラッチを立てる
+        a2 = 15 ~ 1;
+        #3
+        expect(y1, 14);    // 自己保持: パルスが切れても y = 15 - 1(ダスト減衰)を維持
+        expect(y2, 14);
+
+        #3                 // さらに待っても保持し続ける
+        expect(y1, 14);
+        expect(y2, 14);
+
+        monitor("input feedback: top-level and nested behave identically\n");
+    }
+}

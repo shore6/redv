@@ -497,20 +497,23 @@ impl Circuit {
     /// ノード `n` に値 `v` を **合流** させ、値が増えたら `ch` を立てる(不動点ループの収束判定用)。
     /// `n` は事前に `find` した代表ノードを渡す。種別ごとの合流規則がそのまま MAX 合流の単調性を担う:
     ///
-    /// - `Const`/`Input` は駆動値固定なので無視、
+    /// - `Const` は駆動値固定なので無視、
     /// - `Block` は給電(`v>0`)で 15 にラッチ(2 値)、
-    /// - `Plain` は max(増加方向のみ更新)。
+    /// - `Plain`/`Input` は max(増加方向のみ更新)。`Input` は毎 tick `base`(var 駆動値)へ
+    ///   リセットされるので、実効値は max(var 駆動, エッジ寄与) になる(issue #99)。
+    ///   var とワイヤーが同じ点へ給電して max 合流する形で、階層インスタンスの
+    ///   入力ポート(`Plain`)と同じセマンティクス。
     fn contribute(&mut self, n: usize, v: i32, ch: &mut bool) {
         let nd = &mut self.nodes[n];
         match nd.kind {
-            NodeKind::Const | NodeKind::Input => {}
+            NodeKind::Const => {}
             NodeKind::Block => {
                 if v > 0 && nd.value < 15 {
                     nd.value = 15;
                     *ch = true;
                 }
             }
-            NodeKind::Plain => {
+            NodeKind::Plain | NodeKind::Input => {
                 if v > nd.value {
                     nd.value = v;
                     *ch = true;
@@ -552,18 +555,19 @@ impl Circuit {
                 _ => 0,
             };
         }
-        // contribute() と同じ合流規則(Block は >0 で 15 ラッチ、Plain は MAX、
-        // Const/Input は固定)。単調なので step() と同じ発散ガードで必ず収束する。
+        // contribute() と同じ合流規則(Block は >0 で 15 ラッチ、Plain/Input は MAX、
+        // Const は固定)。Input は初期値 15(var の最大)なので join は実質増えないが、
+        // step() と規則を揃えておく。単調なので step() と同じ発散ガードで必ず収束する。
         let join = |nodes: &Vec<CNode>, pot: &mut Vec<i32>, n: usize, v: i32, ch: &mut bool| {
             match nodes[n].kind {
-                NodeKind::Const | NodeKind::Input => {}
+                NodeKind::Const => {}
                 NodeKind::Block => {
                     if v > 0 && pot[n] < 15 {
                         pot[n] = 15;
                         *ch = true;
                     }
                 }
-                NodeKind::Plain => {
+                NodeKind::Plain | NodeKind::Input => {
                     if v > pot[n] {
                         pot[n] = v;
                         *ch = true;
