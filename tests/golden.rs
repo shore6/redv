@@ -1366,12 +1366,13 @@ fn nested_call_is_error() {
              module m(){ var a,y; sim{ a=0; y = RA(a); #init } }",
             "recursive logic instantiation",
         ),
-        // ネスト出力の幅不一致(バス出力 -> スカラ入力)
+        // ネスト出力の幅不一致(バス出力 -> スカラ入力)。幅検査は logic 本体側と
+        // 共通の connect_ports に一本化されている(issue #100)。
         (
             "width_mismatch",
             "logic inv #(W=4)(input[W] x, output[W] y){ x - t - y; }\n\
              module m(){ var[4] a; var y; sim{ a=0; y = OR2(inv(a), a); #init } }",
-            "does not match OR2 input port 'x1' (width 1)",
+            "OR2 input port 'x1': port width mismatch (4 vs 1 lane(s)",
         ),
     ] {
         let src = format!("{header}{body}");

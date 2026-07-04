@@ -269,6 +269,13 @@ reg cmp = cd;  →  back ノード ─┐
   `PortShape` をそのまま引数として返す(無名の中間 reg は作らない)。出力ポートが 1 個で
   なければエラー。sim 側のネスト(§5.3)とは異なり、logic 本体では呼び出しごとに別インスタンス
   になる(非ネストの `Instance` 文と同じ規則)。
+- **束縛の検査は sim 側と共通のヘルパーに一本化している**(issue #100)。callee 解決
+  (`lookup_logic`)、出力ポート非空(`require_output_ports`)、ネストの単一出力
+  (`require_single_output`)、target 数の厳格一致(`check_binding_arity`)、target 重複
+  (`check_duplicate_targets`)、引数/出力の幅整合と結線(`connect_ports`)がそれで、
+  片方だけ直して logic 本体と sim で挙動が食い違う事故を防ぐ。これらの検査を経路側に
+  複製しない。サブ logic の「param_env 構築 → 非表示プレフィックスでエラボレート」は
+  logic 本体側 2 経路(この instances ループ / `resolve_inst_arg`)共通の `instantiate_sub`。
 
 ### 4.6 ジェネリック幅 param(`#(...)`)と `param_env`
 
@@ -381,8 +388,12 @@ const = 宣言値を源に、リピータ / オブザーバは `後ろ上界 > 0
 - **ネスト呼び出し引数**(issue #97)は `ensure_instance` が部分インスタンスを先に再帰確定し、
   その正規化キーを引数キーに使う(キー例: `s_or(s_and(x1,x2),x3)`)。部分式は standalone
   呼び出しと同一インスタンスを共有する。ネストで駆動される入力ポートへは、部分インスタンスの
-  出力ポートを decay 0 のエッジで直結するだけでよい(`in_vars` には載せない)。`Input` ノードは
+  出力ポートを `connect_ports` で直結するだけでよい(`in_vars` には載せない)。`Input` ノードは
   エッジ寄与を max 合流する(§6.1、issue #99)ので、かつて必要だった `Plain` への降格は無い。
+- **束縛の検査は logic 本体側(§4.5)と共通のヘルパーに一本化している**(issue #100)。
+  callee 解決・出力ポート非空・ネストの単一出力・target 数・target 重複・ネスト引数の幅整合と
+  結線が対象で、エラー文も両経路で同一になる。sim 固有として残るのはインスタンスキャッシュ
+  (キー生成)、var 引数の `in_vars`/`in_nodes` 登録、`out_bind` の 3 つ。
 - 出力ポートごとに、対応する target(スカラ var / バス var)へレーン対応で `out_bind` を登録する。
   形(スカラ/バス)と幅が一致しないとエラー。出力ポート数と target 数の厳格一致・同一 target の重複も `SimStmt::CallBind` で検査する(LANGUAGE.md §5.5)。
 - 1 出力 logic は `t = callee(...)` でも `(t) = callee(...)` でも書ける(parser で `targets = vec![t]` に正規化)。
