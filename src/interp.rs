@@ -674,6 +674,79 @@ fn connect_ports(
     Ok(())
 }
 
+// ---- 束縛の共通検査(issue #100)------------------------------------------
+// logic 呼び出しの束縛は logic 本体側(§4.5 の instances ループ / resolve_inst_arg)と
+// sim 側(ensure_instance / do_call_bind)の 2 経路にあるが、callee 解決・出力ポート
+// 検査・target 検査は同一セマンティクスなので、以下のヘルパーへ一本化する。
+// 片方だけ直して挙動が食い違う事故を防ぐため、これらの検査を経路側へ複製しない。
+
+/// callee 名から logic 定義を引く。
+fn lookup_logic<'p>(
+    logics: &'p HashMap<String, LogicDef>,
+    callee: &str,
+    line: i32,
+) -> RvResult<&'p LogicDef> {
+    match logics.get(callee) {
+        Some(l) => Ok(l),
+        None => fail(line, format!("unknown logic: {}", callee)),
+    }
+}
+
+/// 出力ポートの無い logic は束縛できない。
+fn require_output_ports(callee: &str, n_out: usize, line: i32) -> RvResult<()> {
+    if n_out == 0 {
+        return fail(line, format!("{} has no output port to bind", callee));
+    }
+    Ok(())
+}
+
+/// ネスト呼び出しにできるのは単一出力 logic だけ(LANGUAGE.md §5.6)。
+fn require_single_output(callee: &str, n_out: usize, line: i32) -> RvResult<()> {
+    if n_out != 1 {
+        return fail(
+            line,
+            format!(
+                "nested call to {} must have exactly 1 output port (it has {}); \
+                 bind it with a tuple first, then pass the target",
+                callee, n_out
+            ),
+        );
+    }
+    Ok(())
+}
+
+/// 出力ポート数と束縛タプルの target 数は厳格一致(過不足ともエラー)。
+fn check_binding_arity(callee: &str, n_out: usize, n_targets: usize, line: i32) -> RvResult<()> {
+    if n_targets != n_out {
+        return fail(
+            line,
+            format!(
+                "{} has {} output port(s) but the binding tuple has {} target(s)",
+                callee, n_out, n_targets
+            ),
+        );
+    }
+    Ok(())
+}
+
+/// 同じ target を束縛タプルに 2 回書くのはエラー(同じ var/reg へ複数出力をぶつけるのは意図と違う)。
+fn check_duplicate_targets(targets: &[String], line: i32) -> RvResult<()> {
+    for i in 0..targets.len() {
+        for j in (i + 1)..targets.len() {
+            if targets[i] == targets[j] {
+                return fail(
+                    line,
+                    format!(
+                        "duplicate target '{}' in logic-instance binding tuple",
+                        targets[i]
+                    ),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct Instance {
     /// 入力レーンごとの (sim var キー, 回路ノード)。スカラ入力は 1 レーン、
@@ -945,33 +1018,10 @@ impl<'p> Elaborator<'_, 'p> {
                 params,
                 args,
             } => {
-                let sub = match self.logics.get(callee) {
-                    Some(s) => s,
-                    None => return fail(*cl, format!("unknown logic: {}", callee)),
-                };
-                let sub_env = build_callee_param_env(
-                    callee,
-                    &sub.params,
-                    params,
-                    param_env,
-                    self.defines,
-                    *cl,
-                )?;
-                self.counter += 1;
-                let sub_prefix = format!("{}/{}#{}", prefix, callee, self.counter);
+                let sub = lookup_logic(self.logics, callee, *cl)?;
                 let (sub_in, sub_out) =
-                    self.elaborate(sub, &sub_prefix, false, *cl, args.len(), sub_env)?;
-                if sub_out.len() != 1 {
-                    return fail(
-                        *cl,
-                        format!(
-                            "nested call to {} must have exactly 1 output port (it has {}); \
-                             bind it with a tuple first, then pass the target",
-                            callee,
-                            sub_out.len()
-                        ),
-                    );
-                }
+                    self.instantiate_sub(sub, params, param_env, prefix, *cl, args.len())?;
+                require_single_output(callee, sub_out.len(), *cl)?;
                 // 引数を再帰解決し、サブ logic の入力ポートへ減衰なし直結する。
                 for (a, (pname, pshape)) in args.iter().zip(sub_in.iter()) {
                     let ar = self.resolve_inst_arg(
@@ -983,6 +1033,31 @@ impl<'p> Elaborator<'_, 'p> {
                 Ok(sub_out.into_iter().next().unwrap().1)
             }
         }
+    }
+
+    /// callee を **非表示のサブプレフィックス** `{prefix}/{callee}#{n}` でエラボレートする、
+    /// logic 本体側 2 経路(§4.5 の instances ループ / ネスト呼び出し引数)の共通部分。
+    /// 親の `param_env` を caller env として callee の `param_env` を構築する。
+    fn instantiate_sub(
+        &mut self,
+        sub: &'p LogicDef,
+        call_params: &[(String, Expr)],
+        caller_env: &HashMap<String, i64>,
+        parent_prefix: &str,
+        line: i32,
+        arg_count: usize,
+    ) -> RvResult<(Ports, Ports)> {
+        let sub_env = build_callee_param_env(
+            &sub.name,
+            &sub.params,
+            call_params,
+            caller_env,
+            self.defines,
+            line,
+        )?;
+        self.counter += 1;
+        let sub_prefix = format!("{}/{}#{}", parent_prefix, sub.name, self.counter);
+        self.elaborate(sub, &sub_prefix, false, line, arg_count, sub_env)
     }
 
     /// logic 定義 1 つを回路ノード群へ展開する。
@@ -1464,25 +1539,10 @@ impl<'p> Elaborator<'_, 'p> {
 
         // 階層インスタンスの結線(親ノード <-> サブ logic のポート)。
         // スカラ/バスは PortShape として解決し、レーン対応で結線する(幅整合は厳格)。
+        // callee 解決・出力ポート検査・target 検査は sim 側と共通のヘルパー(issue #100)。
         for (line, outputs, callee, args, call_params) in &instances {
-            let sub = match self.logics.get(callee) {
-                Some(s) => s,
-                None => return fail(*line, format!("unknown logic: {}", callee)),
-            };
-            // 親側 outputs の重複検査(同じ var/reg に複数の出力をぶつけるのは意図と違う)。
-            for i in 0..outputs.len() {
-                for j in (i + 1)..outputs.len() {
-                    if outputs[i] == outputs[j] {
-                        return fail(
-                            *line,
-                            format!(
-                                "duplicate target '{}' in logic-instance binding tuple",
-                                outputs[i]
-                            ),
-                        );
-                    }
-                }
-            }
+            let sub = lookup_logic(self.logics, callee, *line)?;
+            check_duplicate_targets(outputs, *line)?;
             let mut out_refs: Vec<PortShape> = Vec::with_capacity(outputs.len());
             for output in outputs {
                 if wire_names.contains(output) {
@@ -1499,35 +1559,11 @@ impl<'p> Elaborator<'_, 'p> {
                     a, &scope, &buses, &wire_names, &param_env, prefix, *line,
                 )?);
             }
-            // 親 logic の param_env(`param_env` 引数)を caller env として、callee 側 env を作る。
-            let sub_env = build_callee_param_env(
-                callee,
-                &sub.params,
-                call_params,
-                &param_env,
-                self.defines,
-                *line,
-            )?;
             // サブ logic を展開(入力ポートは Plain ノードになる)
-            self.counter += 1;
-            let sub_prefix = format!("{}/{}#{}", prefix, callee, self.counter);
             let (sub_in, sub_out) =
-                self.elaborate(sub, &sub_prefix, false, *line, args.len(), sub_env)?;
-            if sub_out.is_empty() {
-                return fail(*line, format!("{} has no output port to bind", callee));
-            }
-            // 出力ポート数と target 数の一致を厳格チェック(過不足ともエラー)。
-            if outputs.len() != sub_out.len() {
-                return fail(
-                    *line,
-                    format!(
-                        "{} has {} output port(s) but the binding tuple has {} target(s)",
-                        callee,
-                        sub_out.len(),
-                        outputs.len()
-                    ),
-                );
-            }
+                self.instantiate_sub(sub, call_params, &param_env, prefix, *line, args.len())?;
+            require_output_ports(callee, sub_out.len(), *line)?;
+            check_binding_arity(callee, sub_out.len(), outputs.len(), *line)?;
             // 親引数 -> サブ入力ポート(レーン対応で減衰なし直結)
             for (arg_ref, (pname, pshape)) in arg_refs.iter().zip(sub_in.iter()) {
                 let ctx = format!("{} input port '{}'", callee, pname);
@@ -2383,10 +2419,7 @@ impl<'a> ModuleExec<'a> {
         call_params: &[(String, Expr)],
     ) -> RvResult<String> {
         let prog: &'a Program = self.prog;
-        let lit = match prog.logics.get(callee) {
-            Some(l) => l,
-            None => return fail(line, format!("unknown logic: {}", callee)),
-        };
+        let lit = lookup_logic(&prog.logics, callee, line)?;
         // sim 側からの呼び出しは caller env(logic ローカル param)を持たない。
         // 既定値 + `#(...)` 実引数だけで callee の `param_env` を作る。
         let caller_env: HashMap<String, i64> = HashMap::new();
@@ -2449,9 +2482,7 @@ impl<'a> ModuleExec<'a> {
             };
             el.elaborate(lit, &prefix, true, line, bind_args.len(), env)?
         };
-        if outputs.is_empty() {
-            return fail(line, format!("{} has no output port to bind", callee));
-        }
+        require_output_ports(callee, outputs.len(), line)?;
         // 各引数を入力ポートにレーン対応で束縛する。var(スカラ/バス)は毎 tick の入力反映
         // (apply_inputs)対象として in_vars に載せ、ネスト呼び出しは部分インスタンスの
         // 単一出力ポートから減衰なしで直結する(回路内配線なので in_vars には載らない)。
@@ -2496,32 +2527,13 @@ impl<'a> ModuleExec<'a> {
                     ..
                 } => {
                     let sub_out = self.insts.get(&arg_keys[i]).unwrap().out_ports.clone();
-                    if sub_out.len() != 1 {
-                        return fail(
-                            *cl,
-                            format!(
-                                "nested call to {} must have exactly 1 output port (it has {}); \
-                                 bind it with a tuple first, then pass the target",
-                                sub,
-                                sub_out.len()
-                            ),
-                        );
-                    }
-                    let src = &sub_out[0];
-                    if src.len() != lanes.len() {
-                        return fail(
-                            *cl,
-                            format!(
-                                "nested call {} (output width {}) does not match {} input port '{}' (width {})",
-                                arg_keys[i], src.len(), callee, pname, lanes.len()
-                            ),
-                        );
-                    }
-                    // `Input` ノードはエッジ寄与を max 合流する(issue #99)ので、
-                    // 部分インスタンス出力から直結するだけでよい(var 駆動なし = base 0)。
-                    for (s, d) in src.iter().zip(lanes.iter()) {
-                        self.c.add_edge(*s, *d, 0);
-                    }
+                    require_single_output(sub, sub_out.len(), *cl)?;
+                    // `Input` ノードはエッジ寄与を max 合流する(issue #99)ので、logic 本体側の
+                    // ネストと同じく connect_ports で部分インスタンス出力から直結するだけでよい
+                    // (var 駆動なし = base 0)。幅検査とエラー文も connect_ports に一本化。
+                    let src = PortShape::Bus(sub_out[0].clone());
+                    let ctx = format!("{} input port '{}'", callee, pname);
+                    connect_ports(&mut self.c, &src, pshape, &ctx, *cl)?;
                 }
             }
         }
@@ -2547,19 +2559,8 @@ impl<'a> ModuleExec<'a> {
         call_params: &[(String, Expr)],
     ) -> RvResult<()> {
         let key = self.ensure_instance(line, callee, bind_args, call_params)?;
-        // 出力ポート数と target 数の一致を厳格チェック(過不足ともエラー)。
         let out_ports = self.insts.get(&key).unwrap().out_ports.clone();
-        if targets.len() != out_ports.len() {
-            return fail(
-                line,
-                format!(
-                    "{} has {} output port(s) but the binding tuple has {} target(s)",
-                    callee,
-                    out_ports.len(),
-                    targets.len()
-                ),
-            );
-        }
+        check_binding_arity(callee, out_ports.len(), targets.len(), line)?;
         // 各出力ポートを対応する target(スカラ/バス var)へレーン対応で束縛(呼び出しごと)。
         for (target, out_lanes) in targets.iter().zip(out_ports.iter()) {
             match self.bus_width(target) {
@@ -2727,19 +2728,7 @@ impl<'a> ModuleExec<'a> {
                 fmt,
             } => {
                 // 同一 target を 2 度以上書くのはエラー(out_bind の暗黙上書きを禁止)。
-                for i in 0..targets.len() {
-                    for j in (i + 1)..targets.len() {
-                        if targets[i] == targets[j] {
-                            return fail(
-                                *line,
-                                format!(
-                                    "duplicate target '{}' in logic-instance binding tuple",
-                                    targets[i]
-                                ),
-                            );
-                        }
-                    }
-                }
+                check_duplicate_targets(targets, *line)?;
                 if callee == "scan" {
                     if !params.is_empty() {
                         return fail(*line, "scan() does not take generic '#(...)' parameters");
