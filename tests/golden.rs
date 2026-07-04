@@ -381,16 +381,15 @@ fn time_flag_reports_to_stderr() {
 
 /// `--vcd <file>` で生成した VCD が `tests/expected/<name>.vcd` とバイト一致するか検証する
 /// (issue #46)。VCD はファイルへ出るので stdout でなく生成ファイルを比較する。
-#[test]
-fn vcd_demo() {
+fn run_vcd_golden(name: &str) {
     let manifest = env!("CARGO_MANIFEST_DIR");
-    let rv = format!("{manifest}/examples/vcd_demo.rv");
-    let expected_path = format!("{manifest}/tests/expected/vcd_demo.vcd");
+    let rv = format!("{manifest}/examples/{name}.rv");
+    let expected_path = format!("{manifest}/tests/expected/{name}.vcd");
     let expected = std::fs::read(&expected_path)
         .unwrap_or_else(|e| panic!("read {expected_path}: {e}"));
 
     // 並行実行で衝突しないよう PID 入りの一意な一時パスに書く。
-    let out_path = std::env::temp_dir().join(format!("redv_vcd_{}.vcd", std::process::id()));
+    let out_path = std::env::temp_dir().join(format!("redv_vcd_{name}_{}.vcd", std::process::id()));
     let out = Command::new(bin())
         .arg("--vcd")
         .arg(&out_path)
@@ -399,7 +398,7 @@ fn vcd_demo() {
         .expect("spawn redv");
     assert!(
         out.status.success(),
-        "vcd_demo: exit {:?}\nstderr:\n{}",
+        "{name}: exit {:?}\nstderr:\n{}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -413,11 +412,38 @@ fn vcd_demo() {
     let expected = strip_cr(&expected);
     if got != expected {
         panic!(
-            "vcd_demo: VCD mismatch\n--- expected ---\n{}\n--- got ---\n{}",
+            "{name}: VCD mismatch\n--- expected ---\n{}\n--- got ---\n{}",
             String::from_utf8_lossy(&expected),
             String::from_utf8_lossy(&got)
         );
     }
+}
+
+#[test]
+fn vcd_demo() {
+    run_vcd_golden("vcd_demo");
+}
+
+/// ジェネリック logic のインスタンス(キーに `#(...)` を含む)のポートが、`#` を除いた
+/// ノード名 `inv(W=2)(a).x[0]` でトレース / VCD に現れることを検証する(issue #101)。
+/// dump_trace と dump_vcd は公開判定が別実装なので両方を確認する。
+#[test]
+fn vcd_generic() {
+    run_golden("vcd_generic");
+    run_vcd_golden("vcd_generic");
+
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let rv = format!("{manifest}/examples/vcd_generic.rv");
+    let out = Command::new(bin())
+        .arg("-t")
+        .arg(&rv)
+        .output()
+        .expect("spawn redv");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("inv(W=2)(a).x[0]="),
+        "generic instance nodes missing from -t trace:\n{stderr}"
+    );
 }
 
 /// 与えたソースを一時ファイルに書いて redv に渡し、(終了コード, stderr) を返す。

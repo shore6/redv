@@ -1,0 +1,30 @@
+/* ジェネリック logic インスタンスのトレース / VCD 観測(issue #101)
+ *
+ *   redv -t examples/vcd_generic.rv            … 毎 tick の全ノード値を stderr へ
+ *   redv --vcd out.vcd examples/vcd_generic.rv … VCD 波形を生成
+ *
+ * `#(...)` 付き呼び出しのインスタンスキーは inv#(W=2)(a) の形だが、名前の `#` は
+ * 内部ノード非表示の印と衝突するため、ノード名は `#` を除いた inv(W=2)(a).x[0] の
+ * 形になる。ジェネリックインスタンスのポート / reg もこの名前で観測できる。 */
+logic inv #(W=2)(input[W] x, output[W] y)
+{
+    x - t - y;         // 各レーンを NOT(トーチ 1 tick 遅れ)
+}
+
+module test_vcd_generic()
+{
+    var[2] a, y;
+    sim {
+        a = 0;
+        y = inv(a);        // 既定値 W=2(キーは inv#(W=2)(a))
+        #init              // 定常状態まで待つ(時刻0)
+
+        a = 15;            // 全レーン ON(ブロードキャスト)
+        #1 #1              // トーチ 1 tick 遅れで y が 0 へ
+
+        a = 0;
+        #1 #1
+
+        ?monitor("t=% a=%x y=%x\n", $time, a, y);
+    }
+}

@@ -2432,6 +2432,11 @@ impl<'a> ModuleExec<'a> {
                 }
             }
         }
+        // ノード名プレフィックスはキーと分ける(issue #101)。名前の `#` はトレース /
+        // VCD 非表示の印なので、`#(W=2)` 由来の `#` をキーのまま使うとジェネリック
+        // インスタンスの全ノードが観測不能になる。キー中の `#` は `#(` の形でしか
+        // 現れない(引数キーは識別子かネストインスタンスキー)ため、この置換で足りる。
+        let prefix = key.replace("#(", "(");
         // logic を展開してポート形(スカラ/バス)を得る。
         let (inputs, outputs) = {
             let mut el = Elaborator {
@@ -2442,7 +2447,7 @@ impl<'a> ModuleExec<'a> {
                 counter: 0,
                 linted: &mut self.linted_logics,
             };
-            el.elaborate(lit, &key, true, line, bind_args.len(), env)?
+            el.elaborate(lit, &prefix, true, line, bind_args.len(), env)?
         };
         if outputs.is_empty() {
             return fail(line, format!("{} has no output port to bind", callee));

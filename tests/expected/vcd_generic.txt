@@ -1,0 +1,5 @@
+t=0 a=00 y=ff
+t=1 a=ff y=ff
+t=2 a=ff y=00
+t=3 a=00 y=00
+t=4 a=00 y=ff
