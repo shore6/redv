@@ -997,6 +997,9 @@ Width expressions that do not reference any generic param (`input[4]`, `reg[5]`)
 Instance identity is the full call key: `callee` + `#(...)` + the argument list.
 `g#(W=4)(x)` and `g#(W=8)(x)` are separate instances with their own node groups, while calling `g#(W=4)(x)` twice reuses the same instance.
 
+In the trace (`-t`) and VCD, instance nodes appear under names with `#` removed (the output port `y` of `g#(W=4)(x)` appears as `g(W=4)(x).y`).
+A `#` in a node name marks an unobservable internal node, so the key is not used as a node name as-is.
+
 Module-side `var[N]` is **not** generic; it is still resolved at parse time using `param` / `#define`.
 
 ---
@@ -1250,4 +1253,5 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | File | Contents |
 |---|---|
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` (torch inversion + repeater delay) |
+| `examples/vcd_generic.rv` | Demo of observing generic logic instance ports in the trace / VCD under `#`-free node names (`inv(W=2)(a).x[0]`) (§8.4) |
 | `examples/json_output.rv` | Demo of emitting monitor / assert / warning as JSONL via `--json` |

@@ -98,6 +98,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
 | `examples/lint_demo.rv` | Demo that fires all 5 design-rule-check (lint) warnings |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |
+| `examples/vcd_generic.rv` | Demo of observing generic logic instance ports in the trace / VCD |
 | `examples/json_output.rv` | Demo of emitting monitor output as JSONL via `--json` |
 
 ## Documentation
