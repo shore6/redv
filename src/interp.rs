@@ -2517,13 +2517,9 @@ impl<'a> ModuleExec<'a> {
                             ),
                         );
                     }
+                    // `Input` ノードはエッジ寄与を max 合流する(issue #99)ので、
+                    // 部分インスタンス出力から直結するだけでよい(var 駆動なし = base 0)。
                     for (s, d) in src.iter().zip(lanes.iter()) {
-                        // トップレベル入力ポートは var 駆動前提の `Input` ノード
-                        // (= 駆動値固定でエッジの寄与を無視する)として生成される。
-                        // ネスト呼び出しで駆動されるポートは回路内配線なので `Plain` に
-                        // 降格させ、部分インスタンス出力からの寄与を受けられるようにする。
-                        let rd = self.c.find(*d);
-                        self.c.nodes[rd].kind = NodeKind::Plain;
                         self.c.add_edge(*s, *d, 0);
                     }
                 }

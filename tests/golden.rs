@@ -419,6 +419,13 @@ fn run_vcd_golden(name: &str) {
     }
 }
 
+/// 入力ポートの max 合流(issue #99): トップレベルの入力ポートも回路内配線から駆動でき、
+/// var 駆動との max になる。自己保持回路がトップレベルと階層経由で同じに動く。
+#[test]
+fn input_feedback() {
+    run_golden("input_feedback");
+}
+
 #[test]
 fn vcd_demo() {
     run_vcd_golden("vcd_demo");

@@ -1074,6 +1074,10 @@ It advances ticks until `cond` is true; exceeding the limit is an error.
 
 Multiple chains merging at the same reg are combined by maximum (matching the game).
 
+Input ports follow the same rule.
+When a var drive (a `logic(args)` binding) and in-circuit wiring (a chain, or a direct connection from a nested call) both power the same input port, the value is the max of all drives.
+A port, a lever, and wiring are all just "power fed into the same point"; the rule is identical for top-level calls and hierarchical instances.
+
 ---
 
 ## 10. Errors and Warnings
@@ -1206,6 +1210,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = HALF_ADDER(x1, x2);` (§5.5) |
 | `examples/nested_call.rv` | Nested calls `y = s_or(s_and(x1,x2), s_xor(x3,x4));` and a one-line MUX (§5.6) |
 | `examples/chain_mixed.rv` | Merging two chain paths into the same point (max) |
+| `examples/input_feedback.rv` | In-circuit feedback into an input port (self-holding latch); the max merge with the var drive is identical for top-level and nested instances (§9.8) |
 
 ### 12.2 Component Behaviors
 
