@@ -37,8 +37,8 @@ An `.rv` file is built from four kinds of top-level elements.
 All `module` definitions in a file run in declaration order.
 Each circuit is independent per module; a circuit built in one module is not visible from another.
 
-Unlike `logic`, a module takes no arguments.
-The legacy form with empty parentheses after the name (`module name() { ... }`) is still accepted but deprecated.
+Unlike `logic`, a module takes no arguments, so no `()` may follow the name
+(the legacy form `module name() { ... }` is an error that points to the new syntax).
 
 Statements end with `;`, blocks use `{}`, and comments are `//` (line) and `/* */` (range).
 
