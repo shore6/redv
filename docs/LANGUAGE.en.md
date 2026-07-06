@@ -30,12 +30,15 @@ For *how* the implementation realizes it, see [ARCHITECTURE.md](ARCHITECTURE.md)
 An `.rv` file is built from four kinds of top-level elements.
 
 - **`logic name(input x, output y) { ... }`**: defines a redstone circuit
-- **`module name() { ... }`**: a testbench; contains `var` declarations and a `sim { ... }` block
+- **`module name { ... }`**: a testbench; contains `var` declarations and a `sim { ... }` block
 - **`param NAME = <const-expr>;`**: a top-level integer constant (§8.3)
 - **`#define` / `#include`** and other directives (§8.1, §8.2)
 
 All `module` definitions in a file run in declaration order.
 Each circuit is independent per module; a circuit built in one module is not visible from another.
+
+Unlike `logic`, a module takes no arguments.
+The legacy form with empty parentheses after the name (`module name() { ... }`) is still accepted but deprecated.
 
 Statements end with `;`, blocks use `{}`, and comments are `//` (line) and `/* */` (range).
 
@@ -48,7 +51,7 @@ logic NOT(input x, output y) {
     x-t-y;                       // Connect x and y with a torch
 }
 
-module test() {
+module test {
     var x, y;
     sim {
         x = 0;
@@ -457,7 +460,7 @@ To instantiate a multi-output logic, receive the outputs as a tuple of bind targ
 Each target is wired (no attenuation) to the corresponding output port in declaration order.
 
 ```rv
-module m() {
+module m {
     var x1, x2, sum, carry;
     sim {
         x1 = 0; x2 = 0;
@@ -657,7 +660,7 @@ The core consists of three kinds of statements — assignment, time advance, and
 ### 7.1 Structure
 
 ```rv
-module test() {
+module test {
     var x, y;
     sim {
         x = 0;
@@ -937,7 +940,7 @@ param W2 = W + 1;              // Earlier params may be used in a const-expr (no
 
 logic NOT(input[W] x, output[W] y) { x - t - y; }   // Parameterize width by param
 
-module m() {
+module m {
     var[W] x;                  // Bus width by param
     var[W2] y;                 // Width from a const-expr (= 5)
     var i;
@@ -969,7 +972,7 @@ logic NOT #(W=4)(input[W] x, output[W] y)
     s - t - y;
 }
 
-module m()
+module m
 {
     var[4] x4, y4;
     var[8] x8, y8;

@@ -15,7 +15,7 @@ logic NOT(input x, output y) {
     x-t-y;                       // x と y をトーチでつなぐ
 }
 
-module test() {
+module test {
     var x, y;
     sim {
         x = 0;

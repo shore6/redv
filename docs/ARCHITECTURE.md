@@ -306,7 +306,7 @@ param 値が子インスタンスへそのまま流れる(`s = inner#(N=W)(...)`
 エラーケースを試すときは必ず呼び出しを添える:
 
 ```rv
-module m(){ var a,y; sim{ a=0; y=g(a); #init } }
+module m{ var a,y; sim{ a=0; y=g(a); #init } }
 ```
 
 ### 4.8 lint パス(デザインルールチェック、issue #48)
