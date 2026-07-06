@@ -10,7 +10,7 @@ logic NOT(input[W] a, output[W] y)
     a - t - y;          // W レーンへトーチ一括(各レーンが NOT)
 }
 
-module test_notN()
+module test_notN
 {
     var[W] a;
     var[W] y;

@@ -11,7 +11,7 @@ logic MUX2(input in0, input in1, input sel, output y) {
     y = s_or(s_and(in0, s_not(sel)), s_and(in1, sel));
 }
 
-module test_nested_call() {
+module test_nested_call {
     var x1, x2, x3, x4, y;
     var in0, in1, sel, m;
     var i;

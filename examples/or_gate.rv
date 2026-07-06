@@ -8,7 +8,7 @@ logic OR2(input x1, input x2, output y)
     y = s;         // 出力ポートを s に接続(長さ0)
 }
 
-module test_or_gate()
+module test_or_gate
 {
     var x1, x2;
     var y;

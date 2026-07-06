@@ -218,7 +218,7 @@ fn stdlogic_demo() {
 #[test]
 fn stdlogic_double_include_is_noop() {
     let src = "#include \"stdlogic\"\n#include \"stdlogic\"\n\
-               module m(){ var a,y; sim{ a=0; y=s_not(a); #init } }";
+               module m{ var a,y; sim{ a=0; y=s_not(a); #init } }";
     let (code, stderr) = run_source("stdlogic_dup", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
@@ -236,7 +236,7 @@ fn stdmem_demo() {
 #[test]
 fn stdmem_nested_stdlogic_include_is_noop() {
     let src = "#include \"stdlogic\"\n#include \"stdmem\"\n\
-               module m(){ var a,en,y,z; sim{ a=0; en=15; y=s_not(a); z=s_dlatch(a,en); #init } }";
+               module m{ var a,en,y,z; sim{ a=0; en=15; y=s_not(a); z=s_dlatch(a,en); #init } }";
     let (code, stderr) = run_source("stdmem_dup", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
@@ -245,7 +245,7 @@ fn stdmem_nested_stdlogic_include_is_noop() {
 /// 存在しないファイルとして通常の include エラーになる(issue #55)。
 #[test]
 fn unknown_stdlib_is_file_error() {
-    let src = "#include \"stdfoo\"\nmodule m(){ var a; sim{ a=0; } }";
+    let src = "#include \"stdfoo\"\nmodule m{ var a; sim{ a=0; } }";
     let (code, stderr) = run_source("stdfoo", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(
@@ -462,6 +462,15 @@ fn run_source(tag: &str, src: &str) -> (Option<i32>, String) {
     (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
+/// module の空 `()` は旧記法として当面受理される(issue #96 Phase 1)。
+/// 新記法 `module name { ... }` と等価に動く。
+#[test]
+fn module_empty_parens_is_accepted() {
+    let src = "module m(){ var a; sim{ a=0; assert(a==0); } }";
+    let (code, stderr) = run_source("module_parens_ok", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
 /// 診断のキャレット表示(issue #47): 構文エラーは `--> file:line:col` + ソース行 +
 /// 正確な列の `^` を出す。`=` は 2 行目 12 桁目なので `:2:12` とキャレットが出る。
 #[test]
@@ -480,7 +489,7 @@ fn caret_diagnostic_points_at_exact_column() {
 #[test]
 fn caret_diagnostic_line_level_for_elaboration_error() {
     let src = "logic g(input x, output y){\n    x - d2q - y;\n}\n\
-               module m(){ var a,b; sim{ a=0; b=g(a); #init } }";
+               module m{ var a,b; sim{ a=0; b=g(a); #init } }";
     let (code, stderr) = run_source("caret_line", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(stderr.contains("unknown element 'q'"), "missing message, stderr:\n{stderr}");
@@ -517,19 +526,19 @@ fn seq_reg_post_assignment_is_error() {
         (
             "post_rep",
             "logic g(input a, output y){ reg m; a-m; m=r; m-y; }\n\
-             module t(){ var u,v; sim{ u=0; v=g(u); #init } }",
+             module t{ var u,v; sim{ u=0; v=g(u); #init } }",
             "must be initialized at its declaration",
         ),
         (
             "post_comp",
             "logic g(input a, output y){ reg cmp; a-cmp; cmp=cd; cmp-y; }\n\
-             module t(){ var u,v; sim{ u=0; v=g(u); #init } }",
+             module t{ var u,v; sim{ u=0; v=g(u); #init } }",
             "must be initialized at its declaration",
         ),
         (
             "post_torch",
             "logic g(input a, output y){ reg z; a-z; z=t; z-y; }\n\
-             module t(){ var u,v; sim{ u=0; v=g(u); #init } }",
+             module t{ var u,v; sim{ u=0; v=g(u); #init } }",
             "a torch belongs inside a wire/chain",
         ),
     ] {
@@ -546,7 +555,7 @@ fn seq_reg_post_assignment_is_error() {
 #[test]
 fn seq_reg_declaration_init_is_accepted() {
     let src = "logic g(input a, output y){ reg m = r; a-m; m-y; }\n\
-               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("decl_rep_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
@@ -556,7 +565,7 @@ fn seq_reg_declaration_init_is_accepted() {
 #[test]
 fn zero_tick_repeater_as_reg_is_error() {
     let src = "logic g(input a, output y){ reg m = r0; a-m; m-y; }\n\
-               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("r0_reg_err", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(
@@ -569,7 +578,7 @@ fn zero_tick_repeater_as_reg_is_error() {
 #[test]
 fn zero_tick_repeater_inline_is_accepted() {
     let src = "logic g(input a, output y){ a-r0-y; }\n\
-               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("r0_inline_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
@@ -579,7 +588,7 @@ fn zero_tick_repeater_inline_is_accepted() {
 #[test]
 fn observer_as_reg_is_error() {
     let src = "logic g(input a, output y){ reg p = o; a-p; p-y; }\n\
-               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("obs_reg_err", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(
@@ -592,7 +601,7 @@ fn observer_as_reg_is_error() {
 #[test]
 fn observer_inline_is_accepted() {
     let src = "logic g(input a, output y){ a-o-y; }\n\
-               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("obs_inline_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
@@ -601,7 +610,7 @@ fn observer_inline_is_accepted() {
 #[test]
 fn observer_variant_as_reg_is_error() {
     let src = "logic g(input a, output y){ reg p = oe; a-p; p-y; }\n\
-               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("obs_variant_reg_err", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(
@@ -615,7 +624,7 @@ fn observer_variant_as_reg_is_error() {
 #[test]
 fn observer_variant_name_collides() {
     let src = "logic g(input a, output y){ reg on; a-on; on-y; }\n\
-               module t(){ var u,v; sim{ u=0; v=g(u); #init } }";
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("obs_variant_name_err", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(
@@ -627,7 +636,7 @@ fn observer_variant_name_collides() {
 /// 全 assert / expect が真なら exit 0 で「all passed」サマリを出す(issue #40)。
 #[test]
 fn assert_all_passed_exits_zero() {
-    let src = "module m(){ var a; sim{ a=0; assert(a==0); expect(a, 0); } }";
+    let src = "module m{ var a; sim{ a=0; assert(a==0); expect(a, 0); } }";
     let (code, stderr) = run_source("assert_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
     assert!(stderr.contains("all passed"), "unexpected stderr:\n{stderr}");
@@ -636,7 +645,7 @@ fn assert_all_passed_exits_zero() {
 /// 偽の assert は失敗を記録し、末尾サマリ付きで非ゼロ終了する(issue #40)。
 #[test]
 fn assert_failure_exits_nonzero() {
-    let src = "module m(){ var a; sim{ a=0; assert(a > 0); } }";
+    let src = "module m{ var a; sim{ a=0; assert(a > 0); } }";
     let (code, stderr) = run_source("assert_fail", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(
@@ -648,7 +657,7 @@ fn assert_failure_exits_nonzero() {
 /// expect の不一致は「実際の値 / 期待値」を出力して非ゼロ終了する(issue #40)。
 #[test]
 fn expect_mismatch_reports_values() {
-    let src = "module m(){ var a; sim{ a=7; expect(a, 3); } }";
+    let src = "module m{ var a; sim{ a=7; expect(a, 3); } }";
     let (code, stderr) = run_source("expect_fail", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(
@@ -660,7 +669,7 @@ fn expect_mismatch_reports_values() {
 /// 失敗しても sim は継続し、全チェックを集計する(2 件失敗を 1 度に把握できる)(issue #40)。
 #[test]
 fn assert_collects_all_failures() {
-    let src = "module m(){ var a; sim{ a=0; assert(a > 0); expect(a, 9); assert(a == 0); } }";
+    let src = "module m{ var a; sim{ a=0; assert(a > 0); expect(a, 9); assert(a == 0); } }";
     let (code, stderr) = run_source("assert_collect", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(stderr.contains("2 of 3 failed"), "unexpected stderr:\n{stderr}");
@@ -672,12 +681,12 @@ fn assert_expect_arity_is_error() {
     for (tag, src, want) in [
         (
             "assert_two",
-            "module m(){ var a; sim{ a=0; assert(a, 1); } }",
+            "module m{ var a; sim{ a=0; assert(a, 1); } }",
             "assert(cond) takes exactly one",
         ),
         (
             "expect_one",
-            "module m(){ var a; sim{ a=0; expect(a); } }",
+            "module m{ var a; sim{ a=0; expect(a); } }",
             "expect(actual, expected) takes exactly two",
         ),
     ] {
@@ -691,7 +700,7 @@ fn assert_expect_arity_is_error() {
 #[test]
 fn non_element_names_are_accepted() {
     let src = "logic g(input a, input b2, output y){ reg cmp, x, c; a-t-y; }\n\
-               module m(){ var u, v; sim{ u=0; v=g(u,u); #init } }";
+               module m{ var u, v; sim{ u=0; v=g(u,u); #init } }";
     let (code, stderr) = run_source("non_elem_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
@@ -700,7 +709,7 @@ fn non_element_names_are_accepted() {
 #[test]
 fn bus_basic_is_accepted() {
     let src = "logic g(input a, output y){ reg[2] p; reg[2] q; a-p[0]; a-p[1]; p-r-q; q[0]-y; }\n\
-               module m(){ var u,v; sim{ u=15; v=g(u); #init } }";
+               module m{ var u,v; sim{ u=15; v=g(u); #init } }";
     let (code, stderr) = run_source("bus_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
@@ -719,7 +728,7 @@ fn bus_scalar_broadcast_is_accepted() {
         ("concat_fanin", "reg[2] p; reg z; a-p[0]; a-p[1]; {a, p} - z; z-y;"),
     ] {
         let src = format!("logic g(input a, output y){{ {body} }}\n\
-                           module m(){{ var u,v; sim{{ u=15; v=g(u); #init }} }}");
+                           module m{{ var u,v; sim{{ u=15; v=g(u); #init }} }}");
         let (code, stderr) = run_source(&format!("bus_bc_{tag}"), &src);
         assert_eq!(code, Some(0), "{tag}: expected success, stderr:\n{stderr}");
     }
@@ -728,7 +737,7 @@ fn bus_scalar_broadcast_is_accepted() {
 /// バスチェーンの幅不一致・スカラ混在・範囲外添字・非バス添字は **エラー**(issue #11)。
 #[test]
 fn bus_misuse_is_error() {
-    let call = "module m(){ var u,v; sim{ u=0; v=g(u); #init } }";
+    let call = "module m{ var u,v; sim{ u=0; v=g(u); #init } }";
     for (tag, body, want) in [
         (
             "width_mismatch",
@@ -806,7 +815,7 @@ fn bus_misuse_is_error() {
 /// ジェネリック param を含む式の範囲外はインスタンス化時、それ以外はパース時に検出する。
 #[test]
 fn slice_const_expr_misuse_is_error() {
-    let call = "module m(){ var[4] u; var y; sim{ u=0; y=g(u); #init } }";
+    let call = "module m{ var[4] u; var y; sim{ u=0; y=g(u); #init } }";
     for (tag, body, want) in [
         // ジェネリック式の評価結果が範囲外(インスタンス化時に検出)
         (
@@ -844,7 +853,7 @@ fn slice_const_expr_misuse_is_error() {
 fn bus_ports_basic_is_accepted() {
     // 4 ビット NOT を バスポートで定義し、バス var を束縛・添字・ブロードキャストする。
     let src = "logic not4(input[4] a, output[4] y){ a-t-y; }\n\
-               module m(){ var[4] x; var[4] y; var i; sim{ x=0; y=not4(x); #init \
+               module m{ var[4] x; var[4] y; var i; sim{ x=0; y=not4(x); #init \
                for(i=0;i<4;i=i+1){ x[i]=15; } #2 } }";
     let (code, stderr) = run_source("bus_ports_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
@@ -859,53 +868,53 @@ fn bus_ports_misuse_is_error() {
         (
             "arg_width_mismatch",
             "logic g(input[4] a, output y){ a[0]-t-y; }\n\
-             module m(){ var[2] x; var y; sim{ x=0; y=g(x); #init } }",
+             module m{ var[2] x; var y; sim{ x=0; y=g(x); #init } }",
             "does not match",
         ),
         // スカラ var をバス入力ポートへ
         (
             "scalar_to_bus_port",
             "logic g(input[4] a, output y){ a[0]-t-y; }\n\
-             module m(){ var x; var y; sim{ x=0; y=g(x); #init } }",
+             module m{ var x; var y; sim{ x=0; y=g(x); #init } }",
             "is a scalar var but",
         ),
         // バス出力ポートをスカラ var へ束縛
         (
             "bus_out_to_scalar",
             "logic g(input a, output[4] y){ a-t-y[0]; a-y[1]; a-y[2]; a-y[3]; }\n\
-             module m(){ var x; var y; sim{ x=0; y=g(x); #init } }",
+             module m{ var x; var y; sim{ x=0; y=g(x); #init } }",
             "bus output",
         ),
         // バス var を添字なしでスカラ式に使う(monitor 引数は別扱いで合成可、
         // それ以外の文脈では従来どおりエラー)
         (
             "bus_in_scalar_expr",
-            "module m(){ var[4] x; sim{ x=0; assert(x); } }",
+            "module m{ var[4] x; sim{ x=0; assert(x); } }",
             "is a bus var",
         ),
         // バス var の範囲外添字
         (
             "bus_var_index_oor",
-            "module m(){ var[2] x; sim{ x=0; x[5]=1; } }",
+            "module m{ var[2] x; sim{ x=0; x[5]=1; } }",
             "out of range",
         ),
         // バスレーンを logic 引数に渡す
         (
             "pass_bus_lane_arg",
             "logic g(input a, output y){ a-t-y; }\n\
-             module m(){ var[2] x; var y; sim{ x=0; y=g(x[0]); #init } }",
+             module m{ var[2] x; var y; sim{ x=0; y=g(x[0]); #init } }",
             "cannot pass a bus lane",
         ),
         // scan() をバス var へ
         (
             "scan_to_bus",
-            "module m(){ var[2] x; sim{ x=scan(); } }",
+            "module m{ var[2] x; sim{ x=scan(); } }",
             "cannot target a whole bus",
         ),
         // 全バスへのパルス代入
         (
             "pulse_on_bus",
-            "module m(){ var[2] x; sim{ x = 5 ~ 2; } }",
+            "module m{ var[2] x; sim{ x = 5 ~ 2; } }",
             "pulse assignment is not supported on a whole bus",
         ),
     ] {
@@ -922,27 +931,27 @@ fn param_basic_is_accepted() {
         // param をバス幅に
         (
             "param_width",
-            "param W=2;\nmodule m(){ var[W] x; sim{ x=0; monitor(\"%\", x[0]); } }",
+            "param W=2;\nmodule m{ var[W] x; sim{ x=0; monitor(\"%\", x[0]); } }",
         ),
         // 定数式を幅に(W+1 -> 幅 3)
         (
             "param_expr_width",
-            "param W=2;\nmodule m(){ var[W+1] x; sim{ x=0; monitor(\"%\", x[2]); } }",
+            "param W=2;\nmodule m{ var[W+1] x; sim{ x=0; monitor(\"%\", x[2]); } }",
         ),
         // param から param を導出
         (
             "param_from_param",
-            "param W=4;\nparam H=W*2;\nmodule m(){ var x; sim{ x=H; monitor(\"%\", x); } }",
+            "param W=4;\nparam H=W*2;\nmodule m{ var x; sim{ x=H; monitor(\"%\", x); } }",
         ),
         // 数値 #define を幅として流用
         (
             "define_as_width",
-            "#define W 3\nmodule m(){ var[W] x; sim{ x=0; monitor(\"%\", x[2]); } }",
+            "#define W 3\nmodule m{ var[W] x; sim{ x=0; monitor(\"%\", x[2]); } }",
         ),
         // sim 式での param 参照(for 上限)
         (
             "param_in_sim_expr",
-            "param W=3;\nmodule m(){ var[W] x; var i; sim{ x=0; for(i=0;i<W;i=i+1){ x[i]=15; } } }",
+            "param W=3;\nmodule m{ var[W] x; var i; sim{ x=0; for(i=0;i<W;i=i+1){ x[i]=15; } } }",
         ),
     ] {
         let (code, stderr) = run_source(&format!("param_{tag}"), src);
@@ -957,25 +966,25 @@ fn param_misuse_is_error() {
         // 未定義の定数を幅に
         (
             "unknown_in_width",
-            "module m(){ var[NOPE] x; sim{ x=0; } }",
+            "module m{ var[NOPE] x; sim{ x=0; } }",
             "unknown constant",
         ),
         // param から幅 0
         (
             "param_width_zero",
-            "param Z=0;\nmodule m(){ var[Z] x; sim{ x=0; } }",
+            "param Z=0;\nmodule m{ var[Z] x; sim{ x=0; } }",
             "bus width must be >= 1",
         ),
         // 前方参照(まだ未定義の param)
         (
             "forward_ref",
-            "param A=B;\nmodule m(){ var u; sim{ u=A; } }",
+            "param A=B;\nmodule m{ var u; sim{ u=A; } }",
             "unknown constant",
         ),
         // 定数式での添字は不可
         (
             "index_in_const",
-            "param W=4;\nmodule m(){ var[W[0]] x; sim{ x=0; } }",
+            "param W=4;\nmodule m{ var[W[0]] x; sim{ x=0; } }",
             "constant expression",
         ),
     ] {
@@ -994,32 +1003,32 @@ fn generic_logic_width_is_accepted() {
         (
             "default_only",
             "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
-             module m(){ var[4] x,y; sim{ x=0; y=g(x); #init } }",
+             module m{ var[4] x,y; sim{ x=0; y=g(x); #init } }",
         ),
         // 実引数で別幅を指定
         (
             "explicit_arg",
             "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
-             module m(){ var[8] x,y; sim{ x=0; y=g#(W=8)(x); #init } }",
+             module m{ var[8] x,y; sim{ x=0; y=g#(W=8)(x); #init } }",
         ),
         // 複数 param
         (
             "multi_param",
             "logic g #(W=4, K=2)(input[W] x, output[W] y){ reg[W] s; x-s; s-t-y; }\n\
-             module m(){ var[8] x,y; sim{ x=0; y=g#(W=8, K=4)(x); #init } }",
+             module m{ var[8] x,y; sim{ x=0; y=g#(W=8, K=4)(x); #init } }",
         ),
         // logic 内の `reg[W+1]` などの派生幅
         (
             "derived_reg_width",
             "logic g #(W=4)(input[W] x, output[W] y){ reg[W] s; x-s; s-t-y; }\n\
-             module m(){ var[4] x,y; sim{ x=0; y=g(x); #init } }",
+             module m{ var[4] x,y; sim{ x=0; y=g(x); #init } }",
         ),
         // 階層: 外側 param を内側 param に渡す
         (
             "passthrough",
             "logic inner #(N=2)(input[N] x, output[N] y){ x-t-y; }\n\
              logic outer #(W=4)(input[W] a, output[W] z){ z = inner#(N=W)(a); }\n\
-             module m(){ var[8] a,z; sim{ a=0; z = outer#(W=8)(a); #init } }",
+             module m{ var[8] a,z; sim{ a=0; z = outer#(W=8)(a); #init } }",
         ),
     ] {
         let (code, stderr) = run_source(&format!("genericw_{tag}"), src);
@@ -1036,35 +1045,35 @@ fn generic_logic_width_is_error() {
         (
             "unknown_param",
             "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
-             module m(){ var[4] x,y; sim{ x=0; y=g#(X=2)(x); #init } }",
+             module m{ var[4] x,y; sim{ x=0; y=g#(X=2)(x); #init } }",
             "has no parameter 'X'",
         ),
         // 既定値なし、呼び出し側でも未指定
         (
             "missing_required_param",
             "logic g #(W)(input[W] x, output[W] y){ x-t-y; }\n\
-             module m(){ var[4] x,y; sim{ x=0; y=g(x); #init } }",
+             module m{ var[4] x,y; sim{ x=0; y=g(x); #init } }",
             "requires parameter 'W'",
         ),
         // 呼び出し側の `#(...)` で param 重複
         (
             "dup_param_at_call",
             "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
-             module m(){ var[4] x,y; sim{ x=0; y=g#(W=4, W=8)(x); #init } }",
+             module m{ var[4] x,y; sim{ x=0; y=g#(W=4, W=8)(x); #init } }",
             "duplicate logic parameter 'W'",
         ),
         // 宣言側の `#(...)` で param 重複
         (
             "dup_param_at_decl",
             "logic g #(W=4, W=8)(input[W] x, output[W] y){ x-t-y; }\n\
-             module m(){ var[4] x,y; sim{ x=0; y=g(x); #init } }",
+             module m{ var[4] x,y; sim{ x=0; y=g(x); #init } }",
             "duplicate logic parameter 'W'",
         ),
         // 実引数が 0 幅
         (
             "zero_width",
             "logic g #(W=4)(input[W] x, output[W] y){ x-t-y; }\n\
-             module m(){ var[4] x,y; sim{ x=0; y=g#(W=0)(x); #init } }",
+             module m{ var[4] x,y; sim{ x=0; y=g#(W=0)(x); #init } }",
             "bus width must be >= 1",
         ),
     ] {
@@ -1079,7 +1088,7 @@ fn generic_logic_width_is_error() {
 #[test]
 fn monitor_fmt_type_suffix_is_error() {
     for (tag, fmt) in [("pct_t", "%t"), ("pct_d", "%d"), ("pct_2d", "%2d")] {
-        let src = format!("module m(){{ var a; sim{{ a=0; monitor(\"{fmt}\", a); }} }}");
+        let src = format!("module m{{ var a; sim{{ a=0; monitor(\"{fmt}\", a); }} }}");
         let (code, stderr) = run_source(&format!("monfmt_{tag}"), &src);
         assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
         assert!(
@@ -1092,7 +1101,7 @@ fn monitor_fmt_type_suffix_is_error() {
 /// `%` / `%N`(幅指定)は引き続き受理される(issue #17)。
 #[test]
 fn monitor_fmt_bare_and_width_is_accepted() {
-    let src = "module m(){ var a; sim{ a=0; monitor(\"x=% y=%2\\n\", a, a); } }";
+    let src = "module m{ var a; sim{ a=0; monitor(\"x=% y=%2\\n\", a, a); } }";
     let (code, stderr) = run_source("monfmt_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
@@ -1100,7 +1109,7 @@ fn monitor_fmt_bare_and_width_is_accepted() {
 /// `scan(fmt)` の書式が `%` / `%b` / `%x` / `%o` 以外ならエラー(issue #77)。
 #[test]
 fn scan_fmt_invalid_is_error() {
-    let src = "module m(){ var a; sim{ a = scan(\"%4b\"); } }";
+    let src = "module m{ var a; sim{ a = scan(\"%4b\"); } }";
     let (code, stderr) = run_source("scanfmt_bad", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(
@@ -1119,7 +1128,7 @@ fn define_expr() {
 /// `#define BAD UNKNOWN_NAME` は未定義参照でエラー(issue #49)。
 #[test]
 fn define_expr_unknown_const_is_error() {
-    let src = "#define BAD UNKNOWN\nmodule m(){ var a; sim{ a=0; } }";
+    let src = "#define BAD UNKNOWN\nmodule m{ var a; sim{ a=0; } }";
     let (code, stderr) = run_source("define_unknown", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(stderr.contains("unknown constant"), "unexpected stderr:\n{stderr}");
@@ -1129,12 +1138,12 @@ fn define_expr_unknown_const_is_error() {
 #[test]
 fn define_mode_keeps_ident_path() {
     // 'element' は受理、'logic' は警告だが続行
-    let src = "#define MODE element\nmodule m(){ var a; sim{ a=0; } }";
+    let src = "#define MODE element\nmodule m{ var a; sim{ a=0; } }";
     let (code, stderr) = run_source("define_mode_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
     assert!(stderr.is_empty(), "no warning expected, stderr:\n{stderr}");
 
-    let src = "#define MODE logic\nmodule m(){ var a; sim{ a=0; } }";
+    let src = "#define MODE logic\nmodule m{ var a; sim{ a=0; } }";
     let (code, stderr) = run_source("define_mode_warn", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
     assert!(stderr.contains("MODE 'logic'"), "unexpected stderr:\n{stderr}");
@@ -1182,7 +1191,7 @@ fn json_output_json_mode() {
 /// `--json` モードで assert/expect の失敗を JSONL で stderr に出す(issue #49)。
 #[test]
 fn json_mode_emits_assert_failure_jsonl() {
-    let src = "module m(){ var a; sim{ a=0; assert(a>0); expect(a, 7); } }";
+    let src = "module m{ var a; sim{ a=0; assert(a>0); expect(a, 7); } }";
     let path = std::env::temp_dir().join("redv_test_json_assert.rv");
     std::fs::write(&path, src).expect("write tmp rv");
     let out = Command::new(bin())
@@ -1213,7 +1222,7 @@ fn json_mode_emits_assert_failure_jsonl() {
 #[test]
 fn json_mode_emits_warning_jsonl() {
     let src = "logic g(input x, output y){ x-t-y; }\n\
-               module m(){ var a,b; sim{ a=999; b=g(a); #init } }";
+               module m{ var a,b; sim{ a=999; b=g(a); #init } }";
     let path = std::env::temp_dir().join("redv_test_json_warn.rv");
     std::fs::write(&path, src).expect("write tmp rv");
     let out = Command::new(bin())
@@ -1244,37 +1253,37 @@ fn multi_output_binding_is_error() {
         // 不足: 1 ターゲットで 2 出力 logic を受ける
         (
             "too_few",
-            "module m(){ var x,p; sim{ x=0; (p) = g(x); #init } }",
+            "module m{ var x,p; sim{ x=0; (p) = g(x); #init } }",
             "g has 2 output port(s) but the binding tuple has 1 target(s)",
         ),
         // 過剰: 3 ターゲットで 1 出力 logic を受ける
         (
             "too_many",
-            "module m(){ var x,p,q,r2; sim{ x=0; (p,q,r2) = g0(x); #init } }",
+            "module m{ var x,p,q,r2; sim{ x=0; (p,q,r2) = g0(x); #init } }",
             "g0 has 1 output port(s) but the binding tuple has 3 target(s)",
         ),
         // 重複 target
         (
             "dup",
-            "module m(){ var x,p; sim{ x=0; (p,p) = g(x); #init } }",
+            "module m{ var x,p; sim{ x=0; (p,p) = g(x); #init } }",
             "duplicate target 'p' in logic-instance binding tuple",
         ),
         // 空タプル
         (
             "empty",
-            "module m(){ var x; sim{ x=0; () = g0(x); #init } }",
+            "module m{ var x; sim{ x=0; () = g0(x); #init } }",
             "empty target tuple '()' is not allowed",
         ),
         // scan のタプル束縛
         (
             "scan_tuple",
-            "module m(){ var a,b2; sim{ (a,b2) = scan(); } }",
+            "module m{ var a,b2; sim{ (a,b2) = scan(); } }",
             "scan() returns a single value",
         ),
         // バスレーンを target にできない
         (
             "bus_lane",
-            "module m(){ var x; var[2] bs; sim{ x=0; (bs[0], bs[1]) = g(x); #init } }",
+            "module m{ var x; var[2] bs; sim{ x=0; (bs[0], bs[1]) = g(x); #init } }",
             "cannot bind a logic output to a bus lane",
         ),
     ] {
@@ -1294,7 +1303,7 @@ fn nested_call_is_accepted() {
         (
             "sim_basic",
             "#include \"stdlogic\"\n\
-             module m(){ var x1,x2,x3,x4,y; sim{ x1=0;x2=0;x3=0;x4=0;\n\
+             module m{ var x1,x2,x3,x4,y; sim{ x1=0;x2=0;x3=0;x4=0;\n\
              \x20\x20\x20\x20y = s_or(s_and(x1,x2), s_xor(x3,x4)); #init } }"
                 .to_string(),
         ),
@@ -1303,21 +1312,21 @@ fn nested_call_is_accepted() {
             "logic_body",
             "#include \"stdlogic\"\n\
              logic G(input a, output y) { y = s_or(s_and(a, a), a); }\n\
-             module m(){ var a,y; sim{ a=0; y=G(a); #init } }"
+             module m{ var a,y; sim{ a=0; y=G(a); #init } }"
                 .to_string(),
         ),
         // 3 段の深いネスト
         (
             "deep",
             "#include \"stdlogic\"\n\
-             module m(){ var a,y; sim{ a=0; y = s_not(s_not(s_not(a))); #init } }"
+             module m{ var a,y; sim{ a=0; y = s_not(s_not(s_not(a))); #init } }"
                 .to_string(),
         ),
         // ジェネリック幅付き + バス出力のネスト
         (
             "generic_bus",
             "logic inv #(W=4)(input[W] x, output[W] y){ x - t - y; }\n\
-             module m(){ var[8] a,y; sim{ a=0; y = inv#(W=8)(inv#(W=8)(a)); #init } }"
+             module m{ var[8] a,y; sim{ a=0; y = inv#(W=8)(inv#(W=8)(a)); #init } }"
                 .to_string(),
         ),
     ] {
@@ -1336,26 +1345,26 @@ fn nested_call_is_error() {
         // 多出力 logic はネストできない(sim)
         (
             "multi_output_sim",
-            "module m(){ var a,b,q,y; sim{ a=0;b=0;q=0; y = OR2(HA(a,b), q); #init } }",
+            "module m{ var a,b,q,y; sim{ a=0;b=0;q=0; y = OR2(HA(a,b), q); #init } }",
             "nested call to HA must have exactly 1 output port (it has 2)",
         ),
         // 多出力 logic はネストできない(logic 本体)
         (
             "multi_output_logic",
             "logic G(input x1, input x2, output y) { y = OR2(HA(x1, x2), x1); }\n\
-             module m(){ var a,b,y; sim{ a=0;b=0; y = G(a,b); #init } }",
+             module m{ var a,b,y; sim{ a=0;b=0; y = G(a,b); #init } }",
             "nested call to HA must have exactly 1 output port (it has 2)",
         ),
         // 未知 logic のネスト
         (
             "unknown_nested",
-            "module m(){ var a,b,y; sim{ a=0;b=0; y = OR2(NOPE(a), b); #init } }",
+            "module m{ var a,b,y; sim{ a=0;b=0; y = OR2(NOPE(a), b); #init } }",
             "unknown logic: NOPE",
         ),
         // scan はネストできない
         (
             "nested_scan",
-            "module m(){ var a,y; sim{ a=0; y = OR2(scan(), a); #init } }",
+            "module m{ var a,y; sim{ a=0; y = OR2(scan(), a); #init } }",
             "scan() cannot be nested in a logic call argument",
         ),
         // ネスト経由の相互再帰
@@ -1363,7 +1372,7 @@ fn nested_call_is_error() {
             "nested_recursion",
             "logic RA(input x, output y) { y = RB(x); }\n\
              logic RB(input x, output y) { y = OR2(RA(x), x); }\n\
-             module m(){ var a,y; sim{ a=0; y = RA(a); #init } }",
+             module m{ var a,y; sim{ a=0; y = RA(a); #init } }",
             "recursive logic instantiation",
         ),
         // ネスト出力の幅不一致(バス出力 -> スカラ入力)。幅検査は logic 本体側と
@@ -1371,7 +1380,7 @@ fn nested_call_is_error() {
         (
             "width_mismatch",
             "logic inv #(W=4)(input[W] x, output[W] y){ x - t - y; }\n\
-             module m(){ var[4] a; var y; sim{ a=0; y = OR2(inv(a), a); #init } }",
+             module m{ var[4] a; var y; sim{ a=0; y = OR2(inv(a), a); #init } }",
             "OR2 input port 'x1': port width mismatch (4 vs 1 lane(s)",
         ),
     ] {
@@ -1387,7 +1396,7 @@ fn nested_call_is_error() {
 #[test]
 fn nested_call_shares_subexpression_instance() {
     let src = "#include \"stdlogic\"\n\
-               module m(){ var x1,x2,x3,t,y; sim{ x1=15;x2=15;x3=0;\n\
+               module m{ var x1,x2,x3,t,y; sim{ x1=15;x2=15;x3=0;\n\
                \x20\x20\x20\x20t = s_and(x1, x2);\n\
                \x20\x20\x20\x20y = s_or(s_and(x1, x2), x3);\n\
                \x20\x20\x20\x20#init ?monitor(\"t=%2 y=%2\\n\", t, y); #1 } }";
@@ -1410,7 +1419,7 @@ fn nested_call_shares_subexpression_instance() {
 #[test]
 fn multi_output_single_target_tuple_is_accepted() {
     let src = "logic g(input x, output y) { x - r - y; }\n\
-               module m(){ var x, p, q; sim{\n\
+               module m{ var x, p, q; sim{\n\
                \x20\x20\x20\x20x = 0;\n\
                \x20\x20\x20\x20p = g(x);\n\
                \x20\x20\x20\x20(q) = g(x);\n\
@@ -1468,7 +1477,7 @@ fn lint_demo_emits_all_rules() {
 #[test]
 fn lint_clean_source_emits_no_lint() {
     let src = "logic g(input x, output y){ reg z; x - t - z; z - r - y; }\n\
-               module m(){ var a,y; sim{ a=0; y=g(a); #init } }";
+               module m{ var a,y; sim{ a=0; y=g(a); #init } }";
     let (code, stderr) = run_source("lint_clean", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
     assert!(!stderr.contains("[lint]"), "unexpected lint, stderr:\n{stderr}");
@@ -1479,7 +1488,7 @@ fn lint_clean_source_emits_no_lint() {
 #[test]
 fn lint_static_rules_fire_once_per_logic() {
     let src = "logic g(input x, output y){ reg orphan; x - r - y; }\n\
-               module m(){ var a1,a2,y1,y2; sim{ a1=0; a2=0;\n\
+               module m{ var a1,a2,y1,y2; sim{ a1=0; a2=0;\n\
                \x20\x20\x20\x20y1=g(a1); y2=g(a2); #init } }";
     let (code, stderr) = run_source("lint_dedup", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
@@ -1495,7 +1504,7 @@ fn lint_static_rules_fire_once_per_logic() {
 #[test]
 fn werror_flag_promotes_warnings() {
     let dirty = "logic g(input x, output y){ reg orphan; x - r - y; }\n\
-                 module m(){ var a,y; sim{ a=0; y=g(a); #init } }";
+                 module m{ var a,y; sim{ a=0; y=g(a); #init } }";
     let (code, stderr) = run_source_args("werror_dirty", dirty, &["-W", "error"]);
     assert_eq!(code, Some(1), "expected exit 1, stderr:\n{stderr}");
     assert!(
@@ -1504,7 +1513,7 @@ fn werror_flag_promotes_warnings() {
     );
 
     let clean = "logic g(input x, output y){ x - r - y; }\n\
-                 module m(){ var a,y; sim{ a=0; y=g(a); #init } }";
+                 module m{ var a,y; sim{ a=0; y=g(a); #init } }";
     let (code, stderr) = run_source_args("werror_clean", clean, &["-W", "error"]);
     assert_eq!(code, Some(0), "expected exit 0, stderr:\n{stderr}");
 }
@@ -1512,7 +1521,7 @@ fn werror_flag_promotes_warnings() {
 /// `-W` の不正モード / モード欠落は CLI エラー(exit 2)(issue #48)。
 #[test]
 fn werror_flag_misuse_exits_2() {
-    let src = "module m(){ var a; sim{ a=0; } }";
+    let src = "module m{ var a; sim{ a=0; } }";
     let (code, _) = run_source_args("werror_bad", src, &["-W", "bogus"]);
     assert_eq!(code, Some(2), "unknown -W mode must exit 2");
 
@@ -1532,7 +1541,7 @@ fn werror_flag_misuse_exits_2() {
 #[test]
 fn json_mode_emits_lint_jsonl() {
     let src = "logic g(input x, output y){ reg orphan; x - r - y; }\n\
-               module m(){ var a,y; sim{ a=0; y=g(a); #init } }";
+               module m{ var a,y; sim{ a=0; y=g(a); #init } }";
     let (code, stderr) = run_source_args("json_lint", src, &["--json"]);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
     assert!(
@@ -1546,7 +1555,7 @@ fn json_mode_emits_lint_jsonl() {
 #[test]
 fn dust_cross_dx_is_error() {
     let src =
-        "logic g(input x, output y){\n    wire seg;\n    seg = dx;\n    x-seg-y;\n}\nmodule m(){ var a,y; sim{ a=15; y=g(a); #init } }";
+        "logic g(input x, output y){\n    wire seg;\n    seg = dx;\n    x-seg-y;\n}\nmodule m{ var a,y; sim{ a=15; y=g(a); #init } }";
     let (code, stderr) = run_source("dust_dx", src);
     assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
     assert!(

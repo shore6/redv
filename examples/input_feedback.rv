@@ -15,7 +15,7 @@ logic wrap(input x, output y)
     y = hold(x);       // 同じ回路を階層経由で使う
 }
 
-module test_input_feedback()
+module test_input_feedback
 {
     var a1, a2, y1, y2;
     sim {

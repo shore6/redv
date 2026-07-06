@@ -8,7 +8,7 @@ logic mix(input x1, input x2, output y)
     s-d2-y;             // s から y へダスト2個ぶん減衰させて出力
 }
 
-module test_mix()
+module test_mix
 {
     var x1, x2, y;
     sim {

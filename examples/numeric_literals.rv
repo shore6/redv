@@ -19,7 +19,7 @@ logic NOT(input[W] a, output[W] y)
     a - t - y;
 }
 
-module test_literals()
+module test_literals
 {
     var[W] a, y;
     var z;

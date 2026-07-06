@@ -979,8 +979,11 @@ impl Parser {
     fn parse_module(&mut self, prog: &mut Program) -> RvResult<()> {
         let line = self.cur().line;
         let name = self.expect_ident("module name")?;
-        self.expect_punct("(")?;
-        self.expect_punct(")")?;
+        // 旧記法 `module name() { ... }` の空 `()` は互換のため受理する(廃止予定)。
+        if self.is_punct("(") {
+            self.i += 1;
+            self.expect_punct(")")?;
+        }
         self.expect_punct("{")?;
         let mut pre = Vec::new();
         let mut sim = Vec::new();

@@ -11,7 +11,7 @@ logic AND2(input x1, input x2, output y)
     s-t-y;
 }
 
-module scan_and()
+module scan_and
 {
     var x1, x2, y;
     sim {

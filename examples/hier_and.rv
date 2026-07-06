@@ -19,7 +19,7 @@ logic AND2(input x1, input x2, output y) {
     y   = NOT(s);   // y = !s = x1 & x2
 }
 
-module sweep_and()
+module sweep_and
 {
     var x1, x2, y;
     var i, ng;

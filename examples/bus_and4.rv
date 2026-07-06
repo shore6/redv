@@ -15,7 +15,7 @@ logic AND2(input[4] x1, input[4] x2, output[4] y)
     s - t - y;          // y = NOT s = x1 AND x2
 }
 
-module test_and4()
+module test_and4
 {
     var[4] x1;         // バス var: x1[0]..x1[3]
     var[4] x2;

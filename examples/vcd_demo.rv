@@ -12,7 +12,7 @@ logic chain(input x, output y)
     a-r2-y;         // y = a を遅延2で複製
 }
 
-module test_chain()
+module test_chain
 {
     var x;
     var y;

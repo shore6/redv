@@ -5,7 +5,7 @@
 
 #include "stdlogic"
 
-module test_stdlogic_gates() {
+module test_stdlogic_gates {
     var x1, x2;
     var ny, ay, oy, xy, ndy, nry, xny;
     var i;

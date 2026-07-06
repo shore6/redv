@@ -15,7 +15,7 @@ logic NOT(input x, output y) {
     x-t-y;                       // Connect x and y with a single torch
 }
 
-module test() {
+module test {
     var x, y;
     sim {
         x = 0;

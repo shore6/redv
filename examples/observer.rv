@@ -6,7 +6,7 @@ logic edge(input x, output y)
     x - o - y;          // x が変化した次の tick に y が 1tick だけ 15 になる
 }
 
-module test_observer()
+module test_observer
 {
     var x, y;
     sim {

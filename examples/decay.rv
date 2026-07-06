@@ -17,7 +17,7 @@ logic via_cmp(input x, output y)
     x-d4ccd4-y;        // 強度を保持して中継(アナログ値を運べる): 15 -> 7
 }
 
-module test_decay()
+module test_decay
 {
     var a;
     var y1, y2, y3;

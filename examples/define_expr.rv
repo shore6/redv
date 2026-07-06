@@ -14,7 +14,7 @@
 #define HALF (N / 2)               // ネスト: 4
 #define ONES (0b1111)              // 数値リテラルとの混在
 
-module test() {
+module test {
     var[N] x;
     var i;
     sim {

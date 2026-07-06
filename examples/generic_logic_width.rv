@@ -11,7 +11,7 @@ logic NOT #(W=4)(input[W] x, output[W] y)
     s - t - y;         // 各レーンを NOT
 }
 
-module test_generic()
+module test_generic
 {
     var[4] x4, y4;
     var[8] x8, y8;

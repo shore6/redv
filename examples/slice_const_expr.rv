@@ -26,7 +26,7 @@ logic TAP(input[4] a, output y)
     a[N+1] - y;              // param 参照はパース時に a[3] へ解決
 }
 
-module test_slice_const_expr()
+module test_slice_const_expr
 {
     var[8] x8;
     var[4] h8, l8;

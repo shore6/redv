@@ -25,7 +25,7 @@ logic split(input a, output[4] y)
     a - r - y;             // ★ fan-out: a を 4 レーンへ複製(各レーンにリピータ)
 }
 
-module test()
+module test
 {
     var a0, a1, a2, a3, y;
     var s; var[4] q;

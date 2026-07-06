@@ -17,7 +17,7 @@ logic OR4(input a0, input a1, input a2, input a3, output y)
     buf[3] - y;
 }
 
-module test_or4()
+module test_or4
 {
     var a0, a1, a2, a3, y;
     var i, ng, exp;
