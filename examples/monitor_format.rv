@@ -6,7 +6,7 @@
  *   scan(fmt) は入力側の基数指定。`scan("%b")` / `scan("%x")` / `scan("%o")`。
  *   `scan()` と `scan("%")` は 10 進(これまでと同じ挙動)。
  */
-module test_format()
+module test_format
 {
     var v, n;
     sim {

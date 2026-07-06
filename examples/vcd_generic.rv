@@ -11,7 +11,7 @@ logic inv #(W=2)(input[W] x, output[W] y)
     x - t - y;         // 各レーンを NOT(トーチ 1 tick 遅れ)
 }
 
-module test_vcd_generic()
+module test_vcd_generic
 {
     var[2] a, y;
     sim {

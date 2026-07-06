@@ -5,7 +5,7 @@ logic pass(input x, output y)
     x-r-y;             // リピータ1段(遅延1・1tickパルスも保持)
 }
 
-module test_pulse()
+module test_pulse
 {
     var a;
     var y;

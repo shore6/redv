@@ -42,7 +42,7 @@ logic HALF_ADDER(input x1, input x2, output sum, output carry)
     carry = AND2(x1, x2);
 }
 
-module test_half_adder()
+module test_half_adder
 {
     var x1, x2, sum, carry;
     var i, ng;

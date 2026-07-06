@@ -8,7 +8,7 @@
  *   ユーザー指定幅はそれより大きいときだけ働く(下限)。
  *   レーン添字を 1 つずつ書かずに、バス全体を 1 行で表示できる。
  */
-module test_monitor_bus()
+module test_monitor_bus
 {
     var[4] bus4;
     var[8] bus8;

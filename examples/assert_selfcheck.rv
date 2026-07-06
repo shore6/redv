@@ -12,7 +12,7 @@ logic AND2(input x1, input x2, output y)
     s-t-y;             // もう一段 NOT = AND
 }
 
-module test_and_selfcheck()
+module test_and_selfcheck
 {
     var x1, x2, y, i;
     sim {

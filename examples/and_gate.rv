@@ -8,7 +8,7 @@ logic AND2(input x1, input x2, output y)
     s-t-y;
 }
 
-module test_and_gate()
+module test_and_gate
 {
     var x1, x2;
     var y;

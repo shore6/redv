@@ -12,7 +12,7 @@ logic buf(input a, output y)
     a-y;               // 直結(遅延なし): y は適用クロックそのもの
 }
 
-module test_clock()
+module test_clock
 {
     var clk, y;
     sim {

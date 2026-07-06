@@ -19,7 +19,7 @@ logic cmp_gate(input x1, input x2, output y)
     cmp-y;             // 前(出力)
 }
 
-module test_comparator_side()
+module test_comparator_side
 {
     var x1, x2;
     var sub, cmp;

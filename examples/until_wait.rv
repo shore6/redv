@@ -9,7 +9,7 @@ logic delayed(input x, output y)
     x-r4r3-y;          // r4 -> r3 のリピータ列で遅延再増幅
 }
 
-module test_until()
+module test_until
 {
     var x, y;
     sim {

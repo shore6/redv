@@ -25,7 +25,7 @@ logic sloppy(input x, input unused_in, output y, output dead)
     x - d15 - dead; // 強度 15 でもダスト 15 個で減衰しきる(unreachable-output)
 }
 
-module test_lint_demo()
+module test_lint_demo
 {
     var x, u, y, dead;
     sim {

@@ -15,7 +15,7 @@ logic lockable(input x, input lk, output y)
     m - y;         // 前(出力)
 }
 
-module test_repeater_lock()
+module test_repeater_lock
 {
     var x, lk, y;
     sim {

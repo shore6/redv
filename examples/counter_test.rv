@@ -8,7 +8,7 @@ logic AND2(input x1, input x2, output y)
     s-t-y;
 }
 
-module sweep_and()
+module sweep_and
 {
     var x1, x2, y;
     var i, ng;

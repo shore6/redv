@@ -12,7 +12,7 @@ logic amp1(input x, output y)
     x-d4rd4-y;         // 1tick 再増幅 (r = r1): 同じ強度だが 1 tick 遅れる
 }
 
-module test_repeater_0tick()
+module test_repeater_0tick
 {
     var a;
     var y0, y1;

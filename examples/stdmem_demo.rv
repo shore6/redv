@@ -10,7 +10,7 @@
 
 #include "stdmem"
 
-module test_stdmem() {
+module test_stdmem {
     var set, reset, q, nq;           // RS ラッチ
     var dx, en, dq;                  // D ラッチ
     var fx, fclk, fq;                // D-FF

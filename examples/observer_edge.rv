@@ -12,7 +12,7 @@ logic edges(input x, output any, output up, output down, output both)
     x - oe - both;      // 2値エッジ(立ち上がり+立ち下がり)
 }
 
-module test_observer_edge()
+module test_observer_edge
 {
     var x, any, up, down, both;
     sim {

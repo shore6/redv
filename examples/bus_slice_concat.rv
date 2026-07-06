@@ -16,7 +16,7 @@ logic rotl4(input[4] a, output[4] out)
     {a[2:0], a[3]} - out[3:0];   // 連結を一括配線(幅は各要素の和 = 3 + 1)
 }
 
-module test_slice_concat()
+module test_slice_concat
 {
     var[4] a, rv, rl;
     var i, ng;

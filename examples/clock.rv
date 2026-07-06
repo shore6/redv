@@ -10,7 +10,7 @@ logic osc(output y)
     y-r4-m;         // y を遅延4で m に戻す(フィードバック)
 }
 
-module test_osc()
+module test_osc
 {
     var y;
     sim {
