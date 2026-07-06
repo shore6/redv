@@ -979,10 +979,9 @@ impl Parser {
     fn parse_module(&mut self, prog: &mut Program) -> RvResult<()> {
         let line = self.cur().line;
         let name = self.expect_ident("module name")?;
-        // 旧記法 `module name() { ... }` の空 `()` は互換のため受理する(廃止予定)。
+        // module は引数を取らない。旧記法 `module name() { ... }` は廃止済み(issue #96)。
         if self.is_punct("(") {
-            self.i += 1;
-            self.expect_punct(")")?;
+            return self.err_cur("module takes no arguments; write `module name { ... }`");
         }
         self.expect_punct("{")?;
         let mut pre = Vec::new();

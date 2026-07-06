@@ -462,13 +462,17 @@ fn run_source(tag: &str, src: &str) -> (Option<i32>, String) {
     (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
-/// module の空 `()` は旧記法として当面受理される(issue #96 Phase 1)。
-/// 新記法 `module name { ... }` と等価に動く。
+/// module 名直後の `()` は旧記法であり、新記法 `module name { ... }` へ誘導する
+/// エラーになる(issue #96 Phase 2 で廃止)。
 #[test]
-fn module_empty_parens_is_accepted() {
+fn module_parens_is_error() {
     let src = "module m(){ var a; sim{ a=0; assert(a==0); } }";
-    let (code, stderr) = run_source("module_parens_ok", src);
-    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+    let (code, stderr) = run_source("module_parens_err", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("module takes no arguments"),
+        "unexpected stderr:\n{stderr}"
+    );
 }
 
 /// 診断のキャレット表示(issue #47): 構文エラーは `--> file:line:col` + ソース行 +
