@@ -172,6 +172,9 @@ This form carries the following restrictions.
 
 Restricting the form to initialization-at-declaration is what fixes the three endpoints (back, side, out; §5.3) at declaration time.
 
+The bus declaration `reg[W] m = r;` follows the same restrictions (§6.5).
+It declares the three endpoints for all W lanes at once.
+
 ---
 
 ## 4. Components
@@ -403,6 +406,8 @@ Side inputs of comparator and repeater regs share the following constraints.
 - Only the plain qualifier is allowed; strength literals, `const`, and `mutable` are not (§3.4)
 - Initialization at declaration is required (`reg cmp; cmp = cd;` after-the-fact assignment is not allowed, §3.4)
 
+In the bus declaration `reg[W] m = r;`, these three endpoints are expanded per lane (§6.5).
+
 ### 5.4 Hierarchical Instantiation
 
 A `logic` body can call another `logic` to nest circuits.
@@ -631,11 +636,38 @@ The other side may be a whole bus, a slice, or a concatenation (broadcasting kic
 If both sides have width > 1 and they disagree, the connection is an error (`bus[4] - bus[2]`, etc.).
 To wire one specific lane, index it as `name[k]` to make it a scalar.
 
-### 6.5 Currently Unsupported Items
+### 6.5 Bus `reg` with a Component Assignment (Comparator / Repeater)
+
+`reg[W] m = r;` declares a lockable repeater's *named point* (§5.3) for all W lanes at once.
+Comparators (`cc` / `cd`) work the same way; every lane gets its own independent back / side / out endpoints.
+
+```rv
+reg[4] m = r;                  // 4 lanes of lockable repeaters
+x  - m;                        // back: lane-by-lane with an equal-width bus (broadcast from a scalar)
+lk - m.side;                   // side: broadcast one lock line to all lanes
+m  - y;                        // out: each lane's output
+```
+
+Chain endpoints are interpreted exactly as for a scalar named point: an unadorned name at the chain's end is the per-lane back input, at the start it is the out output, and `.side` is the side input.
+`.side` can be wired at three granularities.
+
+| Form | Meaning |
+|---|---|
+| `m.side` | All lanes' side. A scalar source broadcasts; an equal-width bus connects element-wise (same rules as §6.4) |
+| `m[k].side` | Drives only lane k's side |
+| `m[hi:lo].side` | The sides of the sliced lanes (the descending / ascending rules of §6.3 apply) |
+
+This makes W parallel repeaters sharing one lock line (the storage of a W-bit register) or a lane-wise bus subtraction (`reg[W] c = cd;` plus an equal-width side) a single declaration.
+Lanes whose side is left unconnected behave as side = 0, just like the scalar form (repeaters stay unlocked; comparators pass through).
+
+The restrictions are the same as for scalar named points (§3.4, §5.3.3):
+plain only, initialization at declaration only, and `r0`, strength literals, and components other than comparators / repeaters are rejected.
+
+### 6.6 Currently Unsupported Items
 
 The following are kept for future extension and are errors or unsupported at present.
 
-- Non-plain bus declarations (`const` / `mutable`, initializers, comparator or repeater bus regs)
+- `const` / `mutable` bus declarations, and initializers other than the component assignment of §6.5
 - Buses on the left or right side of assignment (`a = ...`)
 - Buses in wire sequences, the `wire[N]` syntax
 - Tuple binding of heterogeneous multi-outputs
@@ -901,6 +933,7 @@ You do not need to ship the file separately or write a relative path; the same s
 | Name | Contents |
 |---|---|
 | `stdlogic` | Basic logic gates (`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`). All are scalar 1–2 input / 1 output |
+| `stdmem` | Latches and registers (`s_rslatch` / `s_dlatch` / `s_dff` / `s_register`). All but `s_rslatch` take a generic width `#(W=1)`. Nests `stdlogic` internally |
 
 Repeating `#include` of the same bundled name within one source is a no-op after the first occurrence (no duplicate-definition error).
 The check applies even across nested includes.
@@ -919,6 +952,32 @@ logic EQUAL(input x1, input x2, output y) {
 
 `s_xor` / `s_xnor` are layered on top of `s_not` / `s_and` / `s_or`, so they take 4–5 ticks total.
 Per-gate propagation delays are listed in the header comment of `examples/stdlogic_demo.rv`.
+
+`stdmem` provides four latch/register components.
+
+| logic | Ports | Behavior |
+|---|---|---|
+| `s_rslatch` | `(set, reset) -> (q, nq)` | RS latch (two cross-coupled NORs). `set` makes q=15, `reset` makes q=0, both 0 holds |
+| `s_dlatch` | `#(W=1)` `(x, en) -> q` | D latch. Transparent while `en > 0`, holds while `en = 0` (locked repeater) |
+| `s_dff` | `#(W=1)` `(x, clk) -> q` | D flip-flop. Captures `x` on the rising edge of `clk` |
+| `s_register` | `#(W=1)` `(x, ld, clk) -> q` | Register with load enable. Holds on an edge while `ld = 0` |
+
+`s_dlatch` / `s_dff` / `s_register` take a generic width `#(W=…)` (§8.4).
+Only the data path (`x` / `q`) becomes a W-lane bus port; the control lines (`en` / `ld` / `clk`) stay scalar and are shared by all lanes (internally a bus named point of §6.5 plus broadcast).
+The default `W=1` is scalar-compatible: scalar vars / regs bind directly as before.
+
+```rv
+var[4] x, q;  var ld, clk;
+q = s_register#(W=4)(x, ld, clk);   // 4-bit register with load enable
+```
+
+`s_dff` / `s_register` unlock a locked repeater for exactly 1 tick using rising-edge detection (observer `op`, §4.6.1).
+The capture happens 3 ticks after the edge, so `x` (and `ld` for `s_register`) must stay stable from 1 tick before the edge until 4 ticks after it.
+Also, `s_rslatch` oscillates if `set = reset = 0` from the start; raise `set` or `reset` to 15 once before the first `#init` to settle the initial state.
+Per-component propagation delays are listed in the header comment of `src/stdlib/stdmem.rv`.
+
+`stdmem` pulls in `stdlogic` as a nested include.
+Even if the caller also writes `#include "stdlogic"`, the dedup described above makes the second occurrence a no-op.
 
 ### 8.3 `param` (parameter constants)
 
@@ -1246,12 +1305,16 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/bus_slice_concat.rv` | Slice `a[hi:lo]` (bit reversal) and concatenation `{a, b}` (left rotate) |
 | `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices (§6.3.1): splitting a bus with `x[W-1:W/2]`, plus `a[N+1]` |
 | `examples/bus_scalar.rv` | Bus-to-scalar wiring: fan-in (MAX merge) and fan-out (broadcast) |
+| `examples/bus_reg_side.rv` | Bus regs with component assignments `reg[4] m = r;` / `reg[4] c = cd;`: wiring `.side` via broadcast / element-wise / lane / slice (§6.5) |
 | `examples/param_notN.rv` | N-bit NOT with width parameterized by a `param` constant |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at 4 and 8 bits as separate instances |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`): usable in strengths, bus widths, `param`, `#define`, sim assignments, and tick counts (§1.3) |
 | `examples/define_expr.rv` | Constant expressions in `#define` values (e.g. `(W*2)`) (§8.1) |
+| `examples/monitor_format.rv` | Radix formats `%b` / `%x` / `%o` for monitor / scan, zero padding `%04b`, `-` prefix for negatives, `scan("%x")`, etc. (§7.4.1, §7.8) |
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane packs into a 4-bit nibble for display (§7.4.1) |
 | `examples/stdlogic_demo.rv` | The bundled standard library: `#include "stdlogic"` pulls in 7 basic gates (NOT / AND / OR / XOR / NAND / NOR / XNOR) and the demo sweeps them (§8.2.1) |
+| `examples/stdmem_demo.rv` | The bundled standard library `#include "stdmem"`: drives the 4 latch/register components (RS latch / D latch / D-FF / register) (§8.2.1) |
+| `examples/stdmem_generic.rv` | Generic widths in stdmem: `s_dlatch` / `s_dff` / `s_register` at `#(W=4)` for 4-bit data paths (§8.2.1) |
 
 ### 12.5 Waveform / Structured Output
 
