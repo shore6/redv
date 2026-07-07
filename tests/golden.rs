@@ -230,6 +230,13 @@ fn stdmem_demo() {
     run_golden("stdmem_demo");
 }
 
+/// stdmem のジェネリック幅 `#(W=4)`(issue #95): s_dlatch / s_dff / s_register の
+/// データ経路(x / q)を 4 レーン化し、制御線(en / ld / clk)を全レーン共有する。
+#[test]
+fn stdmem_generic() {
+    run_golden("stdmem_generic");
+}
+
 /// stdmem は内部で stdlogic をネスト include する(issue #87)。利用側が先に
 /// `#include "stdlogic"` を書いていても、stdmem 側のネスト include は no-op になり
 /// 重複定義エラーにならない。両バンドルの logic が同時に使える。

@@ -1,0 +1,47 @@
+/* stdmem のジェネリック幅 #(W=…)(issue #95):
+ * s_dlatch / s_dff / s_register は W レーンのデータ経路(x / q)を持てる。
+ * 制御線(en / ld / clk)はスカラのままで、全レーンに共有される。
+ * 既定 W=1 はスカラ互換(examples/stdmem_demo.rv がそのまま動く)。
+ * 各素子の伝搬遅延は src/stdlib/stdmem.rv のヘッダコメントを参照。 */
+
+#include "stdmem"
+
+module test_stdmem_generic {
+    var[4] dx, dq;                   // s_dlatch#(W=4)
+    var en;
+    var[4] fx, fq;                   // s_dff#(W=4)
+    var fclk;
+    var[4] rx, rq;                   // s_register#(W=4)
+    var ld, rclk;
+    sim {
+        dx = 0; en = 15;
+        dq = s_dlatch#(W=4)(dx, en);
+        fx = 0; fclk = 0;
+        fq = s_dff#(W=4)(fx, fclk);
+        rx = 0; ld = 0; rclk = 0;
+        rq = s_register#(W=4)(rx, ld, rclk);
+        #init
+        ?monitor("t=%2 | DL q=%x | FF q=%x | REG q=%x\n", $time, dq, fq, rq);
+
+        // --- s_dlatch#(W=4): 透過 -> 保持 ---
+        dx[0] = 15; dx[2] = 15; #3   // en=15: 透過 -> dq=0f0f
+        en = 0; #3                   // 保持開始
+        dx = 0; #3                   // 保持中は dq=0f0f のまま
+
+        // --- s_dff#(W=4): clk 立ち上がりで取り込み ---
+        fx[1] = 15; fx[3] = 15; #2
+        fclk = 15; #6                // エッジ -> fq=f0f0
+        fclk = 0; #2
+
+        // --- s_register#(W=4): ld=0 は保持、ld=15 で取り込み ---
+        rx[0] = 15; rx[3] = 15; #2
+        rclk = 15; #6                // ld=0: エッジでも rq=0000 のまま
+        rclk = 0; #2
+        ld = 15; #2
+        rclk = 15; #6                // ld=15: エッジで取り込み -> rq=f00f
+        rclk = 0; #2
+        ld = 0; rx = 0; #2
+        rclk = 15; #6                // ld=0 に戻すと rx=0 でも rq=f00f を保持
+        rclk = 0; #2
+    }
+}

@@ -1,0 +1,16 @@
+t= 0 | DL q=0000 | FF q=0000 | REG q=0000
+t= 3 | DL q=0f0f | FF q=0000 | REG q=0000
+t= 6 | DL q=0f0f | FF q=0000 | REG q=0000
+t= 9 | DL q=0f0f | FF q=0000 | REG q=0000
+t=11 | DL q=0f0f | FF q=0000 | REG q=0000
+t=17 | DL q=0f0f | FF q=f0f0 | REG q=0000
+t=19 | DL q=0f0f | FF q=f0f0 | REG q=0000
+t=21 | DL q=0f0f | FF q=f0f0 | REG q=0000
+t=27 | DL q=0f0f | FF q=f0f0 | REG q=0000
+t=29 | DL q=0f0f | FF q=f0f0 | REG q=0000
+t=31 | DL q=0f0f | FF q=f0f0 | REG q=0000
+t=37 | DL q=0f0f | FF q=f0f0 | REG q=f00f
+t=39 | DL q=0f0f | FF q=f0f0 | REG q=f00f
+t=41 | DL q=0f0f | FF q=f0f0 | REG q=f00f
+t=47 | DL q=0f0f | FF q=f0f0 | REG q=f00f
+t=49 | DL q=0f0f | FF q=f0f0 | REG q=f00f
