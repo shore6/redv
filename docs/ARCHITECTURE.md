@@ -254,6 +254,13 @@ reg cmp = cd;  →  back ノード ─┐
   この束を共有するので、新しい side 系素子を足すときはこのパターンに倣う。
 - **宣言時初期化に限る**(`reg cmp; cmp = cd;` の後置代入はエラー)。これは 3 端子を宣言時に確定させる
   ための制約で、後置代入(`AssignSingle`)経路では `apply_elem` が宣言時形へ誘導するエラーを出す。
+- **バス版**(`reg[W] m = r;`、issue #95)はこの束をレーンごとに W 個展開する。out レーン列は
+  `buses[name]`(始端・インスタンス引数など out を読む経路をバス reg と共用)、(backs, sides) は
+  `bus_side_regs[name]` に登録し、`resolve_ref` が終端無印 → backs / `.side` → sides を全体・
+  レーン・スライスの各粒度で解決する。broadcast / element-wise は既存のバスチェーン規則
+  (LANGUAGE.md §6.4)にそのまま乗り、circuit 側の変更はない(レーンごとに
+  `add_comp`/`add_rep_lock` を呼ぶだけ)。floating-reg lint はスカラ版と同じ規則
+  (全レーンの back・side 未駆動かつ out が何も駆動しない)で判定する。
 
 ### 4.5 階層インスタンス化
 

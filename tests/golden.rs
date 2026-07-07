@@ -230,6 +230,13 @@ fn stdmem_demo() {
     run_golden("stdmem_demo");
 }
 
+/// stdmem のジェネリック幅 `#(W=4)`(issue #95): s_dlatch / s_dff / s_register の
+/// データ経路(x / q)を 4 レーン化し、制御線(en / ld / clk)を全レーン共有する。
+#[test]
+fn stdmem_generic() {
+    run_golden("stdmem_generic");
+}
+
 /// stdmem は内部で stdlogic をネスト include する(issue #87)。利用側が先に
 /// `#include "stdlogic"` を書いていても、stdmem 側のネスト include は no-op になり
 /// 重複定義エラーにならない。両バンドルの logic が同時に使える。
@@ -295,6 +302,14 @@ fn generic_logic_width() {
 #[test]
 fn bus_slice_concat() {
     run_golden("bus_slice_concat");
+}
+
+/// バス reg への素子代入(issue #95): `reg[4] m = r;` / `reg[4] c = cd;` をレーンごとの
+/// named point に展開し、`.side` を全体(broadcast / element-wise)・レーン `m[k].side`・
+/// スライス `m[hi:lo].side` の各粒度で結線する。
+#[test]
+fn bus_reg_side() {
+    run_golden("bus_reg_side");
 }
 
 /// スライス / レーン添字の定数式化(issue #89):
@@ -882,6 +897,66 @@ fn bus_misuse_is_error() {
             stderr.contains(want),
             "{tag}: unexpected stderr:\n{stderr}"
         );
+    }
+}
+
+/// バス reg への素子代入(issue #95)の誤用は **エラー**。初期化子の制約はスカラ named
+/// point と同じ(コンパレータ/リピーターのみ、r0 不可、強度不可、plain のみ)で、
+/// `.side` の粒度解決(レーン/スライス/非バス/範囲外/幅不一致)も検査する。
+#[test]
+fn bus_side_reg_misuse_is_error() {
+    let call = "module m{ var u,v; sim{ u=0; v=g(u); #init } }";
+    for (tag, body, want) in [
+        (
+            "r0_bus_reg",
+            "reg[4] m = r0; a-m; m[0]-y;",
+            "a 0-tick repeater (r0) cannot be a lockable reg",
+        ),
+        (
+            "strength_init",
+            "reg[4] m = 15; a-m[0]; m[0]-y;",
+            "a bus reg cannot take a signal strength",
+        ),
+        (
+            "non_seq_element_init",
+            "reg[4] m = t; a-m[0]; m[0]-y;",
+            "a bus reg initializer must be a comparator or repeater element",
+        ),
+        (
+            "const_bus_reg",
+            "const reg[4] m = r; a-m; m[0]-y;",
+            "a bus reg must be plain",
+        ),
+        (
+            "side_on_plain_bus",
+            "reg[4] p; a-p[0].side; p[0]-y;",
+            "'.side' is only valid on a comparator/repeater reg",
+        ),
+        (
+            "side_as_source",
+            "reg[4] m = r; a-m; m.side-y;",
+            "cannot be a wire source",
+        ),
+        (
+            "indexed_side_on_scalar_reg",
+            "reg c = cd; a-c[0].side; c-y;",
+            "is a scalar comparator/repeater reg and cannot be indexed",
+        ),
+        (
+            "side_lane_out_of_range",
+            "reg[4] m = r; a-m; a-m[5].side; m[0]-y;",
+            "bus index out of range",
+        ),
+        (
+            "side_width_mismatch",
+            "reg[2] m = r; reg[4] s; a-s[0]; a-m; s-m.side; m[0]-y;",
+            "bus width mismatch",
+        ),
+    ] {
+        let src = format!("logic g(input a, output y){{ {body} }}\n{call}");
+        let (code, stderr) = run_source(&format!("busreg_{tag}"), &src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }
 }
 

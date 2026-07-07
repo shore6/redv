@@ -680,12 +680,8 @@ impl Parser {
                 self.check_decl_name(&name, "reg", ln)?;
                 let mut init = None;
                 if self.is_punct("=") {
-                    if width.is_some() {
-                        return fail(
-                            ln,
-                            "a bus reg cannot have an initializer (drive each lane via a chain)",
-                        );
-                    }
+                    // バス reg の初期化子はコンパレータ / リピーターの素子代入
+                    // (`reg[W] m = r;` 等)に限る。妥当性判定は interp が行う(issue #95)。
                     self.i += 1;
                     let mut strength = -1;
                     if self.cur().k == Tk::Num {
@@ -913,7 +909,8 @@ impl Parser {
     }
 
     /// 名前 + レーン選択(`[k]` / `[hi:lo]`)+ 任意の `.side` を読み、`Endpoint::Ref` を返す。
-    /// `allow_side` が false(連結要素)なら `.side` はエラー。
+    /// `allow_side` が false(連結要素)なら `.side` はエラー。添字と `.side` の併用は
+    /// バス named point のレーン横入力(`m[k].side`)として受理する(妥当性は interp)。
     fn parse_ref(&mut self, allow_side: bool) -> RvResult<Endpoint> {
         let name = self.expect_ident("element chunk or endpoint")?;
         let sel = self.parse_sel()?;
@@ -931,12 +928,8 @@ impl Parser {
             if !allow_side {
                 return fail(ln, "'.side' cannot appear inside a concatenation '{...}'");
             }
-            if !matches!(sel, Sel::All) {
-                return fail(
-                    ln,
-                    format!("'{}' cannot take both a lane/slice index and '.side'", name),
-                );
-            }
+            // レーン / スライス添字との併用(`m[k].side` / `m[hi:lo].side`)はバス
+            // named point の横入力として合法(issue #95)。妥当性は interp が判定する。
             side = true;
         }
         Ok(Endpoint::Ref { name, side, sel })

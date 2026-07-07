@@ -87,6 +87,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/half_adder.rv` | Multi-output logic with tuple binding `(sum, carry) = HALF_ADDER(x1, x2);` |
 | `examples/nested_call.rv` | Nested calls `y = s_or(s_and(x1,x2), s_xor(x3,x4));` and a one-line MUX |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses |
+| `examples/bus_reg_side.rv` | Bus regs with component assignments `reg[4] m = r;`, wiring `.side` via broadcast / lane / slice |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices: splitting a generic-width bus with `x[W-1:W/2]` |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`) for strengths, widths, `#define`, sim assignments, and more |
@@ -95,6 +96,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane is packed as a 4-bit nibble (lane[0] is the lowest) |
 | `examples/stdlogic_demo.rv` | `#include "stdlogic"` pulls in the basic gate library (NOT / AND / OR / XOR / NAND / NOR / XNOR) |
 | `examples/stdmem_demo.rv` | `#include "stdmem"` pulls in the latch/register library (RS latch / D latch / D-FF / register) |
+| `examples/stdmem_generic.rv` | Generic widths in stdmem: `s_register#(W=4)` and friends widen the data path to 4 bits |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
 | `examples/lint_demo.rv` | Demo that fires all 5 design-rule-check (lint) warnings |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |
