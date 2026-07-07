@@ -862,6 +862,33 @@ impl<'p> Elaborator<'_, 'p> {
         Ok(())
     }
 
+    /// 裸数値初期化子(`const reg n = 15;`)を適用する。素子トークンを伴わない
+    /// 強度指定は const 専用で、宣言時初期化(DeclReg)からしか到達しない。
+    fn apply_bare_strength(
+        &mut self,
+        node_id: usize,
+        strength: i32,
+        qual: Qual,
+        line: i32,
+    ) -> RvResult<()> {
+        if qual != Qual::Const {
+            return fail(line, "signal-strength literals are only allowed on const reg");
+        }
+        if strength > 15 {
+            return fail(
+                line,
+                format!("const signal strength out of range 0-15: {}", strength),
+            );
+        }
+        let root = self.c.find(node_id);
+        let nd = &mut self.c.nodes[root];
+        nd.kind = NodeKind::Const;
+        nd.base = strength;
+        nd.is_const_qual = true;
+        nd.elem_assigned = true;
+        Ok(())
+    }
+
     /// 1 本のスカラチェーン `fi -chunks- ti` を回路に構築する。
     /// `label` は内部ノード名の識別子(`#chN` / `#chN_i` で trace 非表示)。
     /// バスチェーンはレーンごとに本関数を呼び、各レーンで独立した素子列を展開する。
@@ -1233,14 +1260,15 @@ impl<'p> Elaborator<'_, 'p> {
                         continue;
                     }
                     // コンパレータ reg(`reg r = cd;` / `cc`)は back/side/out の 3 ノード束。
-                    let comp_kind = match init {
-                        Some(ri) => comparator_mode(&ri.tok, *line)?,
+                    let init_tok = init.as_ref().and_then(|ri| ri.tok.as_deref());
+                    let comp_kind = match init_tok {
+                        Some(t) => comparator_mode(t, *line)?,
                         None => None,
                     };
                     // ロック付きリピーター reg(`reg m = r;` / `r1`-`r4`)も同じ 3 ノード束。
                     let rep_delay = if comp_kind.is_none() {
-                        match init {
-                            Some(ri) => repeater_delay(&ri.tok, *line)?,
+                        match init_tok {
+                            Some(t) => repeater_delay(t, *line)?,
                             None => None,
                         }
                     } else {
@@ -1321,9 +1349,12 @@ impl<'p> Elaborator<'_, 'p> {
                         scope.insert(name.clone(), id);
                         qual_of.insert(name.clone(), *qual);
                         match init {
-                            Some(ri) => {
-                                self.apply_elem(id, name, &ri.tok, ri.strength, *qual, *line)?
-                            }
+                            Some(ri) => match &ri.tok {
+                                Some(t) => {
+                                    self.apply_elem(id, name, t, ri.strength, *qual, *line)?
+                                }
+                                None => self.apply_bare_strength(id, ri.strength, *qual, *line)?,
+                            },
                             None => {
                                 if *qual == Qual::Const {
                                     return fail(*line, "const reg requires an initializer");

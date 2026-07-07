@@ -84,6 +84,7 @@ This split preserves existing forms such as the strength-0 block declaration `co
 
 To write a strength-15 block in hex, separate `0xf` from `b` with whitespace (`const reg hi = 0xf b;`).
 `0xfb` is lexed as `251` and exceeds the strength range (0–15), producing an error.
+A bare-number initializer (§3.2) has no element token, so the separation issue does not arise at all (`const reg hi = 0xf;`).
 A binary literal followed by a `2`–`9` decimal digit (e.g. `0b12`) is rejected as a typo.
 
 ---
@@ -103,7 +104,7 @@ For details, see §3 (qualifiers and initialization), §4 (component notation), 
 | `wire` | A reusable component sequence (a template with no endpoints, §5.2) |
 | `reg` | A point. A single component can be assigned to it (§3) |
 | `reg[N] a;` | A bus (N parallel lanes, §6) |
-| `const reg n = 15b;` | A constant whose component and value are both fixed; the strength is required (§3) |
+| `const reg n = 15;` | A fixed-strength constant (initialization with a number 0–15 is required, §3) |
 | `mutable reg n = d;` | The component is fixed; the value changes as the circuit runs (§3) |
 | `var` | An integer variable for testbenches; usable only in `sim`, not embeddable in a circuit |
 | `param NAME = <const-expr>;` | A top-level integer constant (§8.3) |
@@ -149,12 +150,14 @@ This is the most flexible form of declaration.
 ### 3.2 const
 
 ```rv
-const reg n = 15b;     // A single block, locked at strength 15
-const reg z = 3d;      // A constant strength equivalent to 3 dusts (8 = 15 attenuated 3 steps)
+const reg n = 15;      // Locked at strength 15 (0b1111 / 0xf work the same)
+const reg z = 3;       // Locked at strength 3
 ```
 
-A `const reg` is immutable in both component and value.
-The strength must be given, and values outside 0–15 are errors (§10).
+A `const reg` is a fixed-strength constant whose value never changes.
+Initialization with a number from 0 to 15 is required, and values outside that range are errors (§10).
+The legacy forms with an element token after the number (`15b` / `3d`) are also accepted.
+They are interpreted the same way as bare numbers: the number itself is the strength (the element letter does not affect the value).
 
 ### 3.3 mutable
 
@@ -1220,6 +1223,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | File | Contents |
 |---|---|
 | `examples/decay.rv` | Comparison of dust attenuation, repeater re-amplification, and comparator strength pass-through |
+| `examples/const_reg.rv` | Bare-number `const reg` initialization (`const reg n = 15;`): fixed-strength constant sources (§3.2) |
 | `examples/comparator_side.rv` | Comparator side input (`cd` subtract, `cc` compare) |
 | `examples/repeater_lock.rv` | Repeater lock (`.side` on `reg m = r;` freezes the output) |
 | `examples/repeater_0tick.rv` | 0-tick repeater (`r0`) vs. normal repeater (`r1`): timing comparison |

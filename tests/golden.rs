@@ -313,6 +313,14 @@ fn numeric_literals() {
     run_golden("numeric_literals");
 }
 
+/// const reg の裸数値初期化 `const reg n = 15;`(issue #75, Phase 1):
+/// 素子トークンを伴わない数値だけの初期化。10 進 / 16 進とも使え、
+/// 従来の素子接尾字形(`15b` / `3d`)とも併存する。
+#[test]
+fn const_reg() {
+    run_golden("const_reg");
+}
+
 #[test]
 fn bus_scalar() {
     run_golden("bus_scalar");
@@ -562,6 +570,44 @@ fn seq_reg_declaration_init_is_accepted() {
                module t{ var u,v; sim{ u=0; v=g(u); #init } }";
     let (code, stderr) = run_source("decl_rep_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
+}
+
+/// 裸数値初期化は const 専用(issue #75, Phase 1)。plain / mutable reg に
+/// 数値だけを与えると素子接尾字形と同じメッセージで停止する。
+#[test]
+fn bare_strength_on_non_const_is_error() {
+    for (tag, src) in [
+        (
+            "bare_plain",
+            "logic g(input a, output y){ reg n = 15; a-t-y; }\n\
+             module t{ var u,v; sim{ u=0; v=g(u); #init } }",
+        ),
+        (
+            "bare_mutable",
+            "logic g(input a, output y){ mutable reg n = 15; a-t-y; }\n\
+             module t{ var u,v; sim{ u=0; v=g(u); #init } }",
+        ),
+    ] {
+        let (code, stderr) = run_source(tag, src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(
+            stderr.contains("signal-strength literals are only allowed on const reg"),
+            "{tag}: unexpected stderr:\n{stderr}"
+        );
+    }
+}
+
+/// 裸数値初期化も強度の範囲(0-15)を検査する(issue #75, Phase 1)。
+#[test]
+fn bare_strength_out_of_range_is_error() {
+    let src = "logic g(input a, output y){ const reg n = 16; a-t-y; }\n\
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("bare_range_err", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("const signal strength out of range 0-15: 16"),
+        "unexpected stderr:\n{stderr}"
+    );
 }
 
 /// 0tick リピータ(`r0`)は inline チェーン専用。ロック付き reg(`reg m = r0;`)は

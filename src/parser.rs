@@ -692,7 +692,13 @@ impl Parser {
                         strength = self.cur().num as i32;
                         self.i += 1;
                     }
-                    let tok = self.expect_ident("element")?;
+                    // 数値の後に素子トークンが続かなければ裸数値初期化
+                    // (`const reg n = 15;`)。数値なしなら素子トークン必須。
+                    let tok = if strength >= 0 && self.cur().k != Tk::Ident {
+                        None
+                    } else {
+                        Some(self.expect_ident("element")?)
+                    };
                     init = Some(RegInit { strength, tok });
                 }
                 if width.is_some() && qual != Qual::Plain {

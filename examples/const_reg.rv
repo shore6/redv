@@ -1,0 +1,22 @@
+/* const reg の裸数値初期化 (issue #75):
+ *   const reg は素子ではなく固定強度の定数源なので、数値だけで初期化する。
+ *   10 進のほか 2 進 (0b1111) / 16 進 (0xf) も使える(§1)。
+ */
+logic SRC(output full, output low, output faded)
+{
+    const reg hi = 15;            // 10 進
+    const reg lo = 0x3;           // 16 進(= 3)
+    hi - full;                    // そのまま 15
+    hi - d3 - faded;              // ダスト 3 段で 15 → 12 に減衰
+    lo - low;
+}
+
+module const_demo
+{
+    var f, l, fd;
+    sim {
+        (f, l, fd) = SRC();
+        #init
+        monitor("hi=% lo=% faded=%\n", f, l, fd);
+    }
+}
