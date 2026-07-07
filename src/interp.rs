@@ -117,7 +117,7 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
             // 接尾字でエッジ判定モードを選ぶ(issue #58): `o` = 変化全部 /
             // `op` = 立ち上がり / `on` = 立ち下がり / `oe` = 2値エッジ。
             // `n` にモード(0=変化全部, 1=立ち上がり, 2=立ち下がり, 3=2値エッジ)を
-            // 載せる(消費は build_chain_body。既存素子文字 b/c/d/o/r/t は
+            // 載せる(消費は build_chain_body。既存素子文字 c/d/o/r/t は
             // 「オブザーバ+素子」の既存解釈があるため接尾字に使えない)。
             i += 1;
             let n = match b.get(i) {
@@ -136,9 +136,6 @@ pub fn parse_chunk(s: &str, line: i32) -> RvResult<Vec<Elem>> {
                 _ => 0,
             };
             out.push(Elem { k: 'o', n, line });
-        } else if c == b'b' {
-            out.push(Elem { k: 'b', n: 1, line });
-            i += 1;
         } else if c == b'c' {
             if i + 1 >= b.len() {
                 return fail(
@@ -318,7 +315,7 @@ fn param_env_key(decl_params: &[(String, Option<i64>)], env: &HashMap<String, i6
 /// 名前全体が素子列として解釈できる(= 素子名と衝突する)なら true。
 /// reg / wire / ポート名がこれに該当するのは禁止する: チェーン内に置いたとき
 /// 「名前付きの点」と「素子列」が曖昧になり、回路が読みにくくバグの温床になる。
-/// 例: `b`(ブロック)/ `r`(リピータ)/ `cd`(コンパレータ)/ `tb`(トーチ+ブロック)。
+/// 例: `r`(リピータ)/ `cd`(コンパレータ)/ `td`(トーチ+ダスト)。
 pub fn name_collides_with_element(name: &str) -> bool {
     !name.is_empty() && parse_chunk(name, 0).is_ok()
 }
@@ -787,6 +784,19 @@ impl<'p> Elaborator<'_, 'p> {
         qual: Qual,
         line: i32,
     ) -> RvResult<()> {
+        // 素子トークンつきの強度リテラル(旧 `15b` / `3d`)は廃止した(issue #75)。
+        // 固定強度は素子を伴わない裸数値(`const reg n = 15;`)で書く。
+        // parse_chunk より先に検査し、旧 `15b` にもこの案内を出す。
+        if strength >= 0 {
+            return fail(
+                line,
+                format!(
+                    "an element cannot take a signal strength; write a bare number instead \
+                     (`const reg {} = {};`)",
+                    name, strength
+                ),
+            );
+        }
         let es = parse_chunk(tok, line)?;
         if es.len() != 1 {
             return fail(line, format!("a reg must hold exactly one element: \"{}\"", tok));
@@ -835,29 +845,16 @@ impl<'p> Elaborator<'_, 'p> {
             );
         }
         if qual == Qual::Const {
-            if strength < 0 {
-                return fail(line, "const reg requires a signal strength (e.g. 15b)");
-            }
-            if strength > 15 {
-                return fail(
-                    line,
-                    format!("const signal strength out of range 0-15: {}", strength),
-                );
-            }
-            let nd = &mut self.c.nodes[root];
-            nd.kind = NodeKind::Const;
-            nd.base = strength;
-            nd.is_const_qual = true;
-        } else {
-            if strength >= 0 {
-                return fail(line, "signal-strength literals are only allowed on const reg");
-            }
-            self.c.nodes[root].kind = if e.k == 'b' {
-                NodeKind::Block
-            } else {
-                NodeKind::Plain
-            };
+            return fail(
+                line,
+                format!(
+                    "a const reg must be initialized with a bare signal strength \
+                     (e.g. `const reg {} = 15;`)",
+                    name
+                ),
+            );
         }
+        self.c.nodes[root].kind = NodeKind::Plain;
         self.c.nodes[root].elem_assigned = true;
         Ok(())
     }
@@ -921,14 +918,6 @@ impl<'p> Elaborator<'_, 'p> {
             idx += 1;
             match e.k {
                 'd' => decay += 1,
-                'b' => {
-                    let nn = self
-                        .c
-                        .new_node(format!("{}.{}#b{}", prefix, label, idx), NodeKind::Block);
-                    self.c.add_edge(prev, nn, decay);
-                    prev = nn;
-                    decay = 0;
-                }
                 // 0tick リピータ(`r0`): 遅延ゼロの組合せ増幅器。順序素子ではなく
                 // 不動点ループ内で評価する zero_rep として展開する。
                 'r' if e.n == 0 => {
@@ -1260,7 +1249,12 @@ impl<'p> Elaborator<'_, 'p> {
                         continue;
                     }
                     // コンパレータ reg(`reg r = cd;` / `cc`)は back/side/out の 3 ノード束。
-                    let init_tok = init.as_ref().and_then(|ri| ri.tok.as_deref());
+                    // 強度つき初期化子(旧 `15b` 形)はコンパレータ / リピーターには
+                    // なりえないので判定を飛ばし、apply_elem の廃止案内エラーに任せる。
+                    let init_tok = init
+                        .as_ref()
+                        .filter(|ri| ri.strength < 0)
+                        .and_then(|ri| ri.tok.as_deref());
                     let comp_kind = match init_tok {
                         Some(t) => comparator_mode(t, *line)?,
                         None => None,
