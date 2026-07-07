@@ -440,6 +440,8 @@ fn bus_slice(v: &[usize], name: &str, hi: i32, lo: i32, line: i32) -> RvResult<V
 /// 単一の名前参照(`name` / `name[k]` / `name[hi:lo]` / `name.side`)を解決する。
 /// `dst` が true なら終端(信号先)としての規則: `.side` はコンパレータ/リピーター reg の
 /// 横入力、無印の同 reg は後ろ入力。`dst` が false なら始端(信号源)で `.side` は不可。
+/// バス named point(`reg[W] m = r;` 等、issue #95)はレーン選択つきの `.side` /
+/// back / out をレーン列へ展開する。
 /// 添字はここで `param_env` / `defines` 下の定数式として評価する(issue #89)。
 #[allow(clippy::too_many_arguments)]
 fn resolve_ref(
@@ -449,6 +451,7 @@ fn resolve_ref(
     dst: bool,
     scope: &HashMap<String, usize>,
     side_regs: &HashMap<String, (usize, usize)>,
+    bus_side_regs: &HashMap<String, (Vec<usize>, Vec<usize>)>,
     buses: &HashMap<String, Vec<usize>>,
     wire_names: &HashSet<String>,
     param_env: &HashMap<String, i64>,
@@ -462,20 +465,48 @@ fn resolve_ref(
                 format!("'{}.side' cannot be a wire source (side is an input terminal)", name),
             );
         }
-        return match side_regs.get(name) {
-            Some((_back, s)) => Ok(Ep::Single(*s)),
-            None => fail(
-                line,
-                format!(
-                    "'.side' is only valid on a comparator/repeater reg, but '{}' is not",
-                    name
+        if let Some((_back, s)) = side_regs.get(name) {
+            // スカラ named point の横入力。添字は付けられない。
+            return match sel {
+                Sel::All => Ok(Ep::Single(*s)),
+                _ => fail(
+                    line,
+                    format!("'{}' is a scalar comparator/repeater reg and cannot be indexed", name),
                 ),
+            };
+        }
+        if let Some((_backs, sides)) = bus_side_regs.get(name) {
+            // バス named point の横入力: 全体 / レーン / スライスをレーン列で解決。
+            return match sel {
+                Sel::All => Ok(Ep::Bus(sides.clone())),
+                Sel::Lane(ie) => {
+                    let k = resolve_idx(ie, param_env, defines, line)?;
+                    bus_lane(sides, name, k, line)
+                }
+                Sel::Slice(hie, loe) => {
+                    let hi = resolve_idx(hie, param_env, defines, line)?;
+                    let lo = resolve_idx(loe, param_env, defines, line)?;
+                    Ok(Ep::Bus(bus_slice(sides, name, hi, lo, line)?))
+                }
+            };
+        }
+        return fail(
+            line,
+            format!(
+                "'.side' is only valid on a comparator/repeater reg, but '{}' is not",
+                name
             ),
-        };
+        );
     }
     match sel {
         Sel::Lane(ie) => {
             let k = resolve_idx(ie, param_env, defines, line)?;
+            // 終端のバス named point はレーンの後ろ入力(back)。
+            if dst {
+                if let Some((backs, _sides)) = bus_side_regs.get(name) {
+                    return bus_lane(backs, name, k, line);
+                }
+            }
             match buses.get(name) {
                 Some(v) => bus_lane(v, name, k, line),
                 None => {
@@ -486,6 +517,11 @@ fn resolve_ref(
         Sel::Slice(hie, loe) => {
             let hi = resolve_idx(hie, param_env, defines, line)?;
             let lo = resolve_idx(loe, param_env, defines, line)?;
+            if dst {
+                if let Some((backs, _sides)) = bus_side_regs.get(name) {
+                    return Ok(Ep::Bus(bus_slice(backs, name, hi, lo, line)?));
+                }
+            }
             match buses.get(name) {
                 Some(v) => Ok(Ep::Bus(bus_slice(v, name, hi, lo, line)?)),
                 None => fail(
@@ -499,6 +535,9 @@ fn resolve_ref(
             if dst {
                 if let Some((back, _side)) = side_regs.get(name) {
                     return Ok(Ep::Single(*back));
+                }
+                if let Some((backs, _sides)) = bus_side_regs.get(name) {
+                    return Ok(Ep::Bus(backs.clone()));
                 }
             }
             if let Some(n) = scope.get(name) {
@@ -530,6 +569,7 @@ fn resolve_endpoint(
     dst: bool,
     scope: &HashMap<String, usize>,
     side_regs: &HashMap<String, (usize, usize)>,
+    bus_side_regs: &HashMap<String, (Vec<usize>, Vec<usize>)>,
     buses: &HashMap<String, Vec<usize>>,
     wire_names: &HashSet<String>,
     param_env: &HashMap<String, i64>,
@@ -538,14 +578,16 @@ fn resolve_endpoint(
 ) -> RvResult<Ep> {
     match ep {
         Endpoint::Ref { name, side, sel } => resolve_ref(
-            name, sel, *side, dst, scope, side_regs, buses, wire_names, param_env, defines, line,
+            name, sel, *side, dst, scope, side_regs, bus_side_regs, buses, wire_names, param_env,
+            defines, line,
         ),
         Endpoint::Concat(elems) => {
             let mut lanes = Vec::new();
             for e in elems {
                 lanes.extend(
                     resolve_endpoint(
-                        e, dst, scope, side_regs, buses, wire_names, param_env, defines, line,
+                        e, dst, scope, side_regs, bus_side_regs, buses, wire_names, param_env,
+                        defines, line,
                     )?
                     .lanes(),
                 );
@@ -1115,6 +1157,9 @@ impl<'p> Elaborator<'_, 'p> {
         let mut qual_of: HashMap<String, Qual> = HashMap::new();
         // コンパレータ / ロック付きリピーター reg の (back, side) ノード。scope[name] は out ノード。
         let mut side_regs: HashMap<String, (usize, usize)> = HashMap::new();
+        // バス named point(`reg[W] m = r;` 等、issue #95)の (backs, sides) レーン列。
+        // out レーン列は buses[name] に置く(始端・引数など out を読む経路を共用するため)。
+        let mut bus_side_regs: HashMap<String, (Vec<usize>, Vec<usize>)> = HashMap::new();
         let mut wire_names: HashSet<String> = HashSet::new();
         // バス reg(`reg[n] a;`)/ バスポート。name -> レーンノード列。scope とは別空間。
         let mut buses: HashMap<String, Vec<usize>> = HashMap::new();
@@ -1231,13 +1276,82 @@ impl<'p> Elaborator<'_, 'p> {
                                 "a bus reg must be plain (const/mutable not supported yet)",
                             );
                         }
-                        if init.is_some() {
-                            return fail(
-                                *line,
-                                "a bus reg cannot have an initializer (drive each lane via a chain)",
-                            );
-                        }
                         let w = resolve_width(we, &param_env, self.defines, *line)?;
+                        // 素子代入つきバス reg(`reg[W] m = r;` / `cc` / `cd`、issue #95):
+                        // レーンごとに back/side/out の 3 ノード束を展開し、バス named point
+                        // として登録する(out レーンは buses、(backs, sides) は bus_side_regs)。
+                        if let Some(ri) = init {
+                            if ri.strength >= 0 {
+                                return fail(
+                                    *line,
+                                    "a bus reg cannot take a signal strength; only a comparator/\
+                                     repeater element assignment is allowed (e.g. `reg[4] m = r;`)",
+                                );
+                            }
+                            let tok = ri.tok.as_deref().unwrap(); // strength < 0 なら必ず Some
+                            let comp_kind = comparator_mode(tok, *line)?;
+                            let rep_delay = if comp_kind.is_none() {
+                                repeater_delay(tok, *line)?
+                            } else {
+                                None
+                            };
+                            if comp_kind.is_none() && rep_delay.is_none() {
+                                return fail(
+                                    *line,
+                                    format!(
+                                        "a bus reg initializer must be a comparator or repeater \
+                                         element (cc/cd/r/r1-r4): \"{}\"",
+                                        tok
+                                    ),
+                                );
+                            }
+                            if rep_delay == Some(0) {
+                                return fail(
+                                    *line,
+                                    format!(
+                                        "a 0-tick repeater (r0) cannot be a lockable reg; place it \
+                                         inline in a chain (e.g. 'x - r0 - {};')",
+                                        name
+                                    ),
+                                );
+                            }
+                            let mut backs = Vec::with_capacity(w as usize);
+                            let mut sides = Vec::with_capacity(w as usize);
+                            let mut outs = Vec::with_capacity(w as usize);
+                            for i in 0..w {
+                                let back = self.c.new_node(
+                                    format!("{}.{}[{}]#back", prefix, name, i),
+                                    NodeKind::Plain,
+                                );
+                                let side = self.c.new_node(
+                                    format!("{}.{}[{}]#side", prefix, name, i),
+                                    NodeKind::Plain,
+                                );
+                                let out = self.c.new_node(
+                                    format!("{}.{}[{}]", prefix, name, i),
+                                    NodeKind::Plain,
+                                );
+                                let label = format!("{}.{}[{}]", prefix, name, i);
+                                if let Some(ck) = comp_kind {
+                                    self.c.add_comp(ck, back, Some(side), out, label, *line);
+                                } else {
+                                    self.c.add_rep_lock(
+                                        rep_delay.unwrap(),
+                                        back,
+                                        side,
+                                        out,
+                                        label,
+                                        *line,
+                                    );
+                                }
+                                backs.push(back);
+                                sides.push(side);
+                                outs.push(out);
+                            }
+                            buses.insert(name.clone(), outs);
+                            bus_side_regs.insert(name.clone(), (backs, sides));
+                            continue;
+                        }
                         let mut lanes = Vec::with_capacity(w as usize);
                         for i in 0..w {
                             let id = self
@@ -1507,12 +1621,12 @@ impl<'p> Elaborator<'_, 'p> {
             // 端点をレーン列へ解決(`.side` を源に置く誤りは resolve_endpoint が弾く)。
             // 添字の遅延式(ジェネリック param 参照)はこの `param_env` 下で評価される。
             let src = resolve_endpoint(
-                from_ep, false, &scope, &side_regs, &buses, &wire_names, &param_env,
-                self.defines, line,
+                from_ep, false, &scope, &side_regs, &bus_side_regs, &buses, &wire_names,
+                &param_env, self.defines, line,
             )?;
             let dst = resolve_endpoint(
-                to_ep, true, &scope, &side_regs, &buses, &wire_names, &param_env, self.defines,
-                line,
+                to_ep, true, &scope, &side_regs, &bus_side_regs, &buses, &wire_names, &param_env,
+                self.defines, line,
             )?;
             match (src, dst) {
                 (Ep::Single(fi), Ep::Single(ti)) => {
@@ -1686,6 +1800,36 @@ impl<'p> Elaborator<'_, 'p> {
                     continue;
                 }
                 let mut all_floating = true;
+                if let Some((backs, sides)) = bus_side_regs.get(name.as_str()) {
+                    // バス named point: スカラ版と同じく、全レーンで back・side とも未駆動
+                    // かつ out が何も駆動しない(出力ポートでもない)ときのみ孤立と見なす。
+                    // out レーンは素子出力なのでエッジの有無だけでは判定できない。
+                    let outs = &buses[name.as_str()];
+                    for i in 0..outs.len() {
+                        let rb = self.c.find(backs[i]);
+                        let rs = self.c.find(sides[i]);
+                        let ro = self.c.find(outs[i]);
+                        if self.c.nodes[rb].has_incoming
+                            || self.c.nodes[rs].has_incoming
+                            || self.c.nodes[ro].has_outgoing
+                            || self.c.nodes[ro].is_out_port
+                        {
+                            all_floating = false;
+                            break;
+                        }
+                    }
+                    if all_floating {
+                        lint(
+                            decl_lines.get(name.as_str()).copied().unwrap_or(0),
+                            "floating-reg",
+                            format!(
+                                "bus reg '{}' in logic '{}' is not connected to anything",
+                                name, l.name
+                            ),
+                        );
+                    }
+                    continue;
+                }
                 for &lane in &buses[name.as_str()] {
                     let r = self.c.find(lane);
                     let nd = &self.c.nodes[r];

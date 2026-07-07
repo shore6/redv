@@ -1,0 +1,5 @@
+t= 0 x=0000 | hold=0000 sub=0000 mask=0000
+t= 3 x=0f0f | hold=0f0f sub=070c mask=0f0f
+t= 6 x=0f0f | hold=0f0f sub=070c mask=0f0f
+t= 9 x=ffff | hold=0f0f sub=77fc mask=0fff
+t=12 x=ffff | hold=ffff sub=77fc mask=ffff

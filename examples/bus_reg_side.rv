@@ -1,0 +1,50 @@
+/* バス reg への素子代入(issue #95):
+ *   reg[W] m = r;    ロック可能リピーター W レーン(バス named point)
+ *   reg[W] c = cd;   減算コンパレータ W レーン(cc = 比較)
+ * チェーンの終端無印はレーンごとの back、始端は out、`.side` は横入力。
+ * `.side` は 3 つの粒度で結線できる:
+ *   m.side        バス全体(スカラ源なら broadcast、同幅バスなら element-wise)
+ *   m[k].side     レーン単独
+ *   m[hi:lo].side スライス
+ */
+
+logic HOLD4(input[4] x, input lk, output[4] y) {
+    reg[4] m = r;              // ロック可能リピーター 4 レーン
+    x - m;                     // back(レーン対応)
+    lk - m.side;               // 1 本のロック線を全レーンへ broadcast
+    m - y;                     // out
+}
+
+logic SUB4(input[4] x, input[4] s, output[4] y) {
+    reg[4] c = cd;             // 減算コンパレータ 4 レーン
+    x - c;
+    s - c.side;                // 同幅バスは element-wise(レーンごとの side)
+    c - y;                     // y[i] = max(0, x[i] - s[i])
+}
+
+logic MASKHI4(input[4] x, input lk, output[4] y) {
+    reg[4] m = r;
+    x - m;
+    lk - m[3:2].side;          // 上位 2 レーンだけロック線を繋ぐ(下位は常に透過)
+    m - y;
+}
+
+module test_bus_reg_side {
+    var[4] x, s;
+    var lk;
+    var[4] hold_q, sub_q, mask_q;
+    sim {
+        x = 0; s = 0; lk = 0;
+        hold_q = HOLD4(x, lk);
+        sub_q  = SUB4(x, s);
+        mask_q = MASKHI4(x, lk);
+        #init
+        ?monitor("t=%2 x=%x | hold=%x sub=%x mask=%x\n",
+                 $time, x, hold_q, sub_q, mask_q);
+        x[0] = 15; x[2] = 15;          // x = 0f0f
+        s[0] = 3;  s[2] = 8; s[3] = 8; #3
+        lk = 15; #3                    // ロック(hold は全レーン、mask は上位 2 レーンのみ)
+        x = 15; #3                     // hold は保持、mask は下位 2 レーンだけ追従
+        lk = 0; #3                     // 解錠 -> 追従
+    }
+}
