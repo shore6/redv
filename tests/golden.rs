@@ -313,9 +313,8 @@ fn numeric_literals() {
     run_golden("numeric_literals");
 }
 
-/// const reg の裸数値初期化 `const reg n = 15;`(issue #75, Phase 1):
-/// 素子トークンを伴わない数値だけの初期化。10 進 / 16 進とも使え、
-/// 従来の素子接尾字形(`15b` / `3d`)とも併存する。
+/// const reg の裸数値初期化 `const reg n = 15;`(issue #75):
+/// 素子トークンを伴わない数値だけの初期化。10 進 / 16 進とも使える。
 #[test]
 fn const_reg() {
     run_golden("const_reg");
@@ -517,9 +516,9 @@ fn element_name_collision_is_error() {
     // 単体素子・コンパレータ・連結素子列、reg / wire / port の各サイト。
     for (tag, src) in [
         ("reg_cd", "logic g(input a, output y){ reg cd; a-t-y; }"),
-        ("port_b", "logic g(input a, input b, output y){ a-t-y; }"),
+        ("port_d", "logic g(input a, input d, output y){ a-t-y; }"),
         ("wire_r", "logic g(input a, output y){ wire r; a-t-y; }"),
-        ("reg_tb", "logic g(input a, output y){ reg tb; a-t-y; }"),
+        ("reg_td", "logic g(input a, output y){ reg td; a-t-y; }"),
     ] {
         let (code, stderr) = run_source(tag, src);
         assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
@@ -527,6 +526,30 @@ fn element_name_collision_is_error() {
             stderr.contains("collides with an element name"),
             "{tag}: unexpected stderr:\n{stderr}"
         );
+    }
+}
+
+/// ブロック素子 `b` と素子接尾字つき強度リテラルは廃止(issue #75)。
+/// チェーン / reg の `b` は unknown element、旧 `15b` / `3d` は裸数値への
+/// 案内エラー、数字を伴わない `0b` は字句エラーになる。
+#[test]
+fn block_element_is_removed() {
+    for (tag, body, want) in [
+        ("chain_b", "a - b - y;", "unknown element 'b'"),
+        ("reg_b", "reg p = b; a-p; p-y;", "unknown element 'b'"),
+        ("const_15b", "const reg n = 15b; n-y;", "write a bare number instead"),
+        ("const_3d", "const reg n = 3d; n-y;", "write a bare number instead"),
+        ("const_elem_only", "const reg n = d; n-y;", "bare signal strength"),
+        ("digitless_0b", "const reg n = 0b; n-y;", "expected binary digits after '0b'"),
+    ] {
+        let src = format!(
+            "logic g(input a, output y){{ {} }}\n\
+             module t{{ var u,v; sim{{ u=0; v=g(u); #init }} }}",
+            body
+        );
+        let (code, stderr) = run_source(&format!("rmblk_{tag}"), &src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }
 }
 
@@ -747,9 +770,10 @@ fn assert_expect_arity_is_error() {
 }
 
 /// 素子名でない宣言名(`b2` / `cmp` / `x` / `c` 等)は受理される。
+/// `b` / `tb` はブロック素子の廃止(issue #75)で素子列でなくなったので使える。
 #[test]
 fn non_element_names_are_accepted() {
-    let src = "logic g(input a, input b2, output y){ reg cmp, x, c; a-t-y; }\n\
+    let src = "logic g(input a, input b2, output y){ reg cmp, x, c, b, tb; a-t-y; }\n\
                module m{ var u, v; sim{ u=0; v=g(u,u); #init } }";
     let (code, stderr) = run_source("non_elem_ok", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");

@@ -74,17 +74,32 @@ impl Lexer {
                     len: (self.p - b) as i32,
                 });
             } else if c.is_ascii_digit() {
-                // 接頭辞 `0b` / `0x` の後に最低 1 つの有効な数字が続くときだけ
-                // 2 / 16 進リテラルとして扱う。`0b` 単独や `0xg` はフォールバックして
-                // `0` (Num) + 後続 (Ident) として lex する(`const reg n = 0b;` の
-                // 「強度 0 + ブロック」を従来どおり許すため)。
-                let radix: Option<u32> = if c == b'0' && self.p + 2 < self.s.len() {
+                // 接頭辞 `0b` / `0x` は直後に最低 1 つの有効な数字を要求する。
+                // `0b` 単独や `0xg` は誤記としてエラーにする(かつては強度ブロック
+                // `0b` を温存するため `0` + `b` に分割していたが、ブロック素子の
+                // 廃止(issue #75)で分割の理由がなくなった)。
+                let radix: Option<u32> = if c == b'0' && self.p + 1 < self.s.len() {
                     let pref = self.s[self.p + 1];
-                    let nxt = self.s[self.p + 2];
-                    if pref == b'b' && (nxt == b'0' || nxt == b'1') {
-                        Some(2)
-                    } else if pref == b'x' && nxt.is_ascii_hexdigit() {
-                        Some(16)
+                    if pref == b'b' || pref == b'x' {
+                        let nxt = self.s.get(self.p + 2).copied();
+                        let ok = if pref == b'b' {
+                            matches!(nxt, Some(b'0') | Some(b'1'))
+                        } else {
+                            matches!(nxt, Some(d) if d.is_ascii_hexdigit())
+                        };
+                        if !ok {
+                            return fail_at(
+                                ln,
+                                col,
+                                2,
+                                format!(
+                                    "expected {} digits after '0{}'",
+                                    if pref == b'b' { "binary" } else { "hex" },
+                                    pref as char
+                                ),
+                            );
+                        }
+                        Some(if pref == b'b' { 2 } else { 16 })
                     } else {
                         None
                     }

@@ -49,7 +49,6 @@ impl Default for Config {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
     Plain,
-    Block,
     Const,
     Input,
 }
@@ -254,7 +253,7 @@ impl Circuit {
     }
 
     /// 2 つのノードを「同じ点」として併合する(エイリアス `x = y;` や階層直結で使う)。
-    /// 種別は **ランク**(`Const` > `Input` > `Block` > `Plain`)が高い方を残し、各フラグは
+    /// 種別は **ランク**(`Const` > `Input` > `Plain`)が高い方を残し、各フラグは
     /// OR で合成する。base 値の食い違う const 同士の併合は曖昧なのでエラー。
     pub fn merge(&mut self, a: usize, b: usize, line: i32) -> RvResult<()> {
         let a = self.find(a);
@@ -263,9 +262,8 @@ impl Circuit {
             return Ok(());
         }
         let rank = |k: NodeKind| match k {
-            NodeKind::Const => 3,
-            NodeKind::Input => 2,
-            NodeKind::Block => 1,
+            NodeKind::Const => 2,
+            NodeKind::Input => 1,
             NodeKind::Plain => 0,
         };
         // 競合する const reg の併合はエラー
@@ -498,7 +496,6 @@ impl Circuit {
     /// `n` は事前に `find` した代表ノードを渡す。種別ごとの合流規則がそのまま MAX 合流の単調性を担う:
     ///
     /// - `Const` は駆動値固定なので無視、
-    /// - `Block` は給電(`v>0`)で 15 にラッチ(2 値)、
     /// - `Plain`/`Input` は max(増加方向のみ更新)。`Input` は毎 tick `base`(var 駆動値)へ
     ///   リセットされるので、実効値は max(var 駆動, エッジ寄与) になる(issue #99)。
     ///   var とワイヤーが同じ点へ給電して max 合流する形で、階層インスタンスの
@@ -507,12 +504,6 @@ impl Circuit {
         let nd = &mut self.nodes[n];
         match nd.kind {
             NodeKind::Const => {}
-            NodeKind::Block => {
-                if v > 0 && nd.value < 15 {
-                    nd.value = 15;
-                    *ch = true;
-                }
-            }
             NodeKind::Plain | NodeKind::Input => {
                 if v > nd.value {
                     nd.value = v;
@@ -555,18 +546,12 @@ impl Circuit {
                 _ => 0,
             };
         }
-        // contribute() と同じ合流規則(Block は >0 で 15 ラッチ、Plain/Input は MAX、
-        // Const は固定)。Input は初期値 15(var の最大)なので join は実質増えないが、
+        // contribute() と同じ合流規則(Plain/Input は MAX、Const は固定)。
+        // Input は初期値 15(var の最大)なので join は実質増えないが、
         // step() と規則を揃えておく。単調なので step() と同じ発散ガードで必ず収束する。
         let join = |nodes: &Vec<CNode>, pot: &mut Vec<i32>, n: usize, v: i32, ch: &mut bool| {
             match nodes[n].kind {
                 NodeKind::Const => {}
-                NodeKind::Block => {
-                    if v > 0 && pot[n] < 15 {
-                        pot[n] = 15;
-                        *ch = true;
-                    }
-                }
                 NodeKind::Plain | NodeKind::Input => {
                     if v > pot[n] {
                         pot[n] = v;

@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 /// (0=変化全部, 1=立ち上がり, 2=立ち下がり, 3=2値エッジ。`parse_chunk` 参照)。
 #[derive(Debug, Clone, Copy)]
 pub struct Elem {
-    /// 'd' dust, 'b' block, 'r' repeater, 't' torch, 'o' observer,
+    /// 'd' dust, 'r' repeater, 't' torch, 'o' observer,
     /// 'C' comparator(compare), 'S' comparator(subtract)
     pub k: char,
     pub n: i32,

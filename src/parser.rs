@@ -139,14 +139,14 @@ impl Parser {
         Ok(r)
     }
 
-    /// reg / wire / ポートの宣言名が素子名(`b` / `r` / `cd` 等)と衝突しないか検査する。
+    /// reg / wire / ポートの宣言名が素子名(`d` / `r` / `cd` 等)と衝突しないか検査する。
     /// 衝突する名前はチェーン内で素子列と区別できず曖昧になるためエラーにする。
     fn check_decl_name(&self, name: &str, kind: &str, line: i32) -> RvResult<()> {
         if crate::interp::name_collides_with_element(name) {
             return fail(
                 line,
                 format!(
-                    "{} name '{}' collides with an element name (e.g. 'b', 'r', 'cd'); \
+                    "{} name '{}' collides with an element name (e.g. 'd', 'r', 'cd'); \
                      pick a name that is not an element sequence",
                     kind, name
                 ),

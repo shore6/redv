@@ -7,7 +7,7 @@
 *[日本語版/Japanese](README.md)*
 
 redv (Red Verilog) is a toolchain that compiles and simulates redstone circuits described as Verilog-style HDL text from the command line.
-You describe circuits at the *component level* (below the gate level) by connecting any two points with a chain of components (dust, repeater, torch, comparator, block, observer).
+You describe circuits at the *component level* (below the gate level) by connecting any two points with a chain of components (dust, repeater, torch, comparator, observer).
 You can design and verify circuits with nothing but a text editor and a terminal.
 
 ```rv
@@ -116,7 +116,7 @@ logic OR2(input x1, input x2, output y) {
 }
 ```
 
-`reg` / `wire` / port names cannot collide with element names (`b` / `r` / `cd`, etc.).
+`reg` / `wire` / port names cannot collide with element names (`d` / `r` / `cd`, etc.).
 Such names would be ambiguous inside a chain.
 See [docs/LANGUAGE.en.md §2](docs/LANGUAGE.en.md) for details.
 

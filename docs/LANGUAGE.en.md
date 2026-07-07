@@ -79,13 +79,8 @@ Integer literals can be written in decimal, binary, or hexadecimal.
 All three forms produce the same integer token from the lexer.
 They are interchangeable anywhere an integer is accepted: strengths, bus widths, `param`, `#define`, sim expressions, tick counts, and so on.
 
-When the `0b` / `0x` prefix is not followed by a valid digit (`0b` alone, `0x` alone, or `0xg` where the following byte is not a digit), the literal interpretation is rejected and the input is split into `0` and the rest as separate tokens.
-This split preserves existing forms such as the strength-0 block declaration `const reg n = 0b;`.
-
-To write a strength-15 block in hex, separate `0xf` from `b` with whitespace (`const reg hi = 0xf b;`).
-`0xfb` is lexed as `251` and exceeds the strength range (0–15), producing an error.
-A bare-number initializer (§3.2) has no element token, so the separation issue does not arise at all (`const reg hi = 0xf;`).
-A binary literal followed by a `2`–`9` decimal digit (e.g. `0b12`) is rejected as a typo.
+When the `0b` / `0x` prefix is not followed by a valid digit (`0b` alone, `0x` alone, or `0xg` where the following byte is not a digit), the input is rejected as a typo.
+A binary literal followed by a `2`–`9` decimal digit (e.g. `0b12`) is also rejected as a typo.
 
 ---
 
@@ -116,15 +111,15 @@ Specifically, any name that as a whole can be interpreted as a component sequenc
 
 Examples of colliding names:
 
-- Single components: `b` / `d` / `o` / `r` / `t`
+- Single components: `d` / `o` / `r` / `t`
 - Comparators: `cc` / `cd`
 - Observer edge variants: `op` / `on` / `oe`
 - Notations with a count: `r2` / `d3`
-- Concatenations of the above: `tb` (= torch + block), and similar
+- Concatenations of the above: `td` (= torch + dust), and similar
 
 If such names were allowed, a chain could not tell a named point apart from a component sequence.
 Use names that cannot be parsed as component sequences, like `b2` / `cmp` / `in_b`.
-Single letters `a` / `x` / `c` are not component names and may be used.
+Single letters `a` / `b` / `x` / `c` are not component names and may be used.
 
 A `var` lives in a separate namespace from chains, so this constraint does not apply to it.
 
@@ -156,8 +151,7 @@ const reg z = 3;       // Locked at strength 3
 
 A `const reg` is a fixed-strength constant whose value never changes.
 Initialization with a number from 0 to 15 is required, and values outside that range are errors (§10).
-The legacy forms with an element token after the number (`15b` / `3d`) are also accepted.
-They are interpreted the same way as bare numbers: the number itself is the strength (the element letter does not affect the value).
+The old forms with an element token after the number (`15b` / `3d`) were removed together with the block element (issue #75).
 
 ### 3.3 mutable
 
@@ -196,9 +190,8 @@ Behavioral differences from the actual game are collected in §11.
 | `r0` | 0-tick repeater | Zero-delay re-amplification, `out = in > 0 ? 15 : 0` | §4.3 |
 | `t` | Torch | Inverts with a 1-tick delay | §4.4 |
 | `cc` / `cd` | Comparator (compare / subtract) | 1-tick delay; behavior depends on the side input | §4.5 |
-| `b` | Block | Immediate; strength is only 0 or 15 | §4.6 |
-| `o` | Observer | Detects input changes and emits a 1-tick pulse | §4.7 |
-| `op` / `on` / `oe` | Observer (edge variants) | Detects only rising / falling / binary edges | §4.7.1 |
+| `o` | Observer | Detects input changes and emits a 1-tick pulse | §4.6 |
+| `op` / `on` / `oe` | Observer (edge variants) | Detects only rising / falling / binary edges | §4.6.1 |
 
 `r` is the same as `r1` (delay 1).
 `r5` and higher are errors, and `c` alone (no mode given) is also an error.
@@ -260,12 +253,7 @@ x - d4 - cc - d4 - y;          // Inline cc and cd act as relays (side = 0)
 
 To connect a side input, turn the comparator into a *named point* (§5.3).
 
-### 4.6 Block (`b`)
-
-A block is an immediately propagating 2-value component.
-It outputs 15 when the input is `> 0`, and 0 when `= 0` (no intermediate strength).
-
-### 4.7 Observer (`o`)
+### 4.6 Observer (`o`)
 
 An observer is a sequential element that emits a 1-tick pulse when its input changes.
 If the current sample differs from the previous tick, it outputs strength 15 for one tick; otherwise it holds 0.
@@ -284,7 +272,7 @@ The observer is inline-only.
 Like the torch, it cannot be put on a reg (`reg p = o;` is rejected).
 If the input is steady (no change), the output settles to 0, so `#init` (§7.2) terminates (no oscillation).
 
-#### 4.7.1 Edge Variants (`op`, `on`, `oe`)
+#### 4.6.1 Edge Variants (`op`, `on`, `oe`)
 
 Three variants replace only the edge condition via a suffix letter.
 Everything else — the 1-tick pulse, strength 15, inline-only placement, no reg form — is shared with the base `o`.
@@ -1025,7 +1013,7 @@ Game-tick components and sub-redstone-tick pulses are out of scope.
 Each tick proceeds in three phases.
 
 1. Sequential element output (compute output for repeater, torch, comparator, and observer from the front of `hist`)
-2. Combinational network fixed-point resolution (converge dust and block values via MAX merge)
+2. Combinational network fixed-point resolution (converge dust values via MAX merge)
 3. Sequential element input sampling (advance `hist` for the next tick)
 
 The merge is monotone max, so the fixed point converges deterministically and is independent of traversal order.
@@ -1035,13 +1023,12 @@ This implementation guarantees the result of a sequential queue scheme, order-in
 
 Attenuation is computed dynamically every tick.
 Dust subtracts 1 per piece; merge points take the maximum.
-A block is two-valued: 15 when input is `> 0`, 0 when `= 0`.
 
 ### 9.4 Component Update Timing
 
 The output rules for each component:
 
-- Dust, block: immediate (output is decided within the same tick)
+- Dust: immediate (output is decided within the same tick)
 - 0-tick repeater `r0`: `out(T) = in(T) > 0 ? 15 : 0` (same tick, combinational; §4.3)
 - Repeater `rn`: `out(T) = in(T−n) > 0 ? 15 : 0` (also holds 1-tick pulses)
 - Lockable repeater: while side input is `> 0`, `out(T) = out(T−1)` (frozen)
@@ -1049,7 +1036,7 @@ The output rules for each component:
 - Comparator: `out(T) = f(back(T−1), side(T−1))`
 - Comparator (side unconnected): `out(T) = back(T−1)` (pass-through)
 - Observer: `out(T) = in(T−2) != in(T−1) ? 15 : 0` (neighbor-sample change detection)
-- Observer (edge variants): `op` / `on` / `oe` replace only the rule with rising / falling / binary edge detection (§4.7.1)
+- Observer (edge variants): `op` / `on` / `oe` replace only the rule with rising / falling / binary edge detection (§4.6.1)
 
 ### 9.5 Reflecting Input Changes
 
@@ -1196,7 +1183,13 @@ The game's observer fires on block-state updates and has spatial properties (ori
 redv works at the component level and watches only input-signal changes (no orientation, no QC).
 
 Also, the game's observer comes in a single kind that detects every change; it has no edge-condition variants.
-`op` / `on` / `oe` (§4.7.1) are redv extensions for writing pulse-shaping circuits concisely in text (issue #58).
+`op` / `on` / `oe` (§4.6.1) are redv extensions for writing pulse-shaping circuits concisely in text (issue #58).
+
+### 11.6 No Block Component
+
+In the game, a block is a conductor that passes power while distinguishing weak from strong power, and it plays spatial roles such as mounting torches and carrying signals through walls.
+redv has no spatial dimension in its "connect any two points with a component sequence" abstraction, so these roles are covered by writing the connections themselves.
+redv used to provide `b` as a binarizing component (15 when input `> 0`), but the 0-tick repeater `r0` (§4.3) computes the same combinational function, so the block component was removed (issue #75).
 
 ---
 
