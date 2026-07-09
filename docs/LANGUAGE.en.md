@@ -424,7 +424,7 @@ logic AND2(input x1, input x2, output y) {
 
 The form is `out = callee(args...);`.
 `out` refers to a reg or output port of the current logic; `args` refers to regs or input port names (wires, components, and numeric literals cannot be passed).
-Both `out` and `args` may also be a bus lane `x[k]` or a slice `x[hi:lo]` (indices are constant expressions per §6.3.1).
+Both `out` and `args` may also be a bus lane `x[k]`, a slice `x[hi:lo]` (indices are constant expressions per §6.3.1), or a concatenation `{a, b, c[1:0]}` (§6.3).
 
 The connection rules are:
 
@@ -437,11 +437,20 @@ For a logic with multiple output ports, use the tuple binding in §5.5.
 The single port may itself be a scalar or a bus (`output[N]`); a bus port is bound lane-by-lane as a homogeneous multi-output (§6).
 
 The number of arguments must match the callee's input port count.
-Each argument is a reg, a port, a whole bus, or a bus lane `x[k]` / slice `x[hi:lo]`.
+Each argument is a reg, a port, a whole bus, a bus lane `x[k]` / slice `x[hi:lo]`, or a concatenation `{e1, e2, ...}`.
 A lane binds to a scalar input port; a slice binds to a bus input port of the same width.
+A concatenation becomes a bus argument whose width is the sum of its parts and binds to a bus input port of that width (several scalars can be bundled into one bus port).
+Concatenation elements follow the same restrictions as chain endpoints (§6.3); additionally, nested calls (§5.6) cannot appear as elements.
 
-The lane list of a slice keeps its §6.3 order and pairs element-wise with the port's ascending lanes `[0..W)`.
+The lane list of a slice or a concatenation keeps its §6.3 order and pairs element-wise with the port's ascending lanes `[0..W)`.
 This is the same rule as chaining to a whole bus name: the identity pass is the ascending `x[0:3]` (a partial version of the whole bus `x`), while the descending `x[3:0]` is a bit reversal.
+In a concatenation, the first element corresponds to port lane 0.
+
+A concatenation on the `out` side distributes in the opposite direction: the lanes of a bus output port are received by the parts in order.
+
+```rv
+{rest, msb} = SHIFT4(x);       // split the width-4 output into rest (lower 3 lanes) and msb
+```
 
 Recursive instantiation (self or mutual cycles) is an error.
 
@@ -474,9 +483,9 @@ module m {
 Tuple binding works both inside a logic body and inside a sim block.
 Rules and constraints:
 
-- Each target is a reg / port / bus reg / bus port / var / bus var, or a bus lane `sum[k]` / slice `sum[hi:lo]` (indices are constant expressions per §6.3.1). Concatenations `{...}` and `.side` are not allowed
+- Each target is a reg / port / bus reg / bus port / var / bus var, a bus lane `sum[k]` / slice `sum[hi:lo]` (indices are constant expressions per §6.3.1), or a concatenation `{c, s[3:0]}` (the same distribution as the `out` side of §5.4). `.side` is not allowed
 - The number of targets must match the callee's output port count exactly (both shortage and excess are errors)
-- Binding the same lane more than once is an error. Besides textual duplicates (`(p, p)`), partial overlaps of the resolved lanes (`(sum[1:0], sum[1])` or `(sum, sum[0])`) are also detected
+- Binding the same lane more than once is an error. Besides textual duplicates (`(p, p)`), partial overlaps of the resolved lanes (`(sum[1:0], sum[1])` or `(sum, sum[0])`) and duplicates inside a concatenation (`{p, p}`) are also detected
 - Each target and its corresponding output port must agree in shape (scalar vs. bus) and width
 - A 1-output logic may also be received as a **1-target tuple** `(t) = callee(args...)` — equivalent to the conventional `t = callee(args...)`
 
@@ -602,8 +611,9 @@ hi - {carry, sum};             // Concatenation as bulk wiring (width is the sum
 The whole-bus name supplies lanes in ascending index order `[0..N)` (same as a regular whole-bus chain).
 Use a slice `x[hi:lo]` to control the bit order explicitly.
 
-Slices and concatenations are endpoint-only; they cannot appear in intermediate chunks or on the right-hand side of `=`.
-Concatenation elements may not carry `.side` or nest as `{{..}}`.
+Slices and concatenations can appear at chain endpoints and in logic call arguments / bind targets (§5.4, §5.5, §7.3).
+They cannot appear in intermediate chunks or in a component assignment `=`.
+Concatenation elements may not carry `.side` or nest as `{{..}}` (in call arguments / targets, nested calls are also not allowed).
 Out-of-range indices and slices on non-bus names are errors.
 
 ### 6.3.1 Constant Expressions in Indices
@@ -687,7 +697,6 @@ The following are kept for future extension and are errors or unsupported at pre
 - Buses on the left or right side of a component assignment (`a = 15r` etc.)
 - Buses in wire sequences, the `wire[N]` syntax
 - Tuple binding of heterogeneous multi-outputs
-- Concatenations `{...}` in logic call arguments / bind targets (lanes and slices are allowed, §5.4)
 
 ---
 
@@ -742,7 +751,7 @@ y = NOT(x);               // x becomes the input, y the output
 The binding rules are:
 
 - The same `(logic-name, argument list)` pair shares a single instance (the target list is not part of the cache key)
-- Argument indices are part of the key: `g(x[0])` and `g(x[1])` are distinct instances, and a second call of `g(x[0])` shares the first one (`x[k:k]` is normalized to the same key as `x[k]`)
+- Argument indices and concatenations are part of the key: `g(x[0])` and `g(x[1])` are distinct instances, and a second call of `g(x[0])` shares the first one (`x[k:k]` is normalized to the same key as `x[k]`, and a single-element concatenation `{x}` to the same key as `x`)
 - Input variables stay bound; output variables are updated every tick
 - Bus ports (§6.2) take a whole bus var of matching shape and width
 
@@ -755,7 +764,8 @@ y[0] = NOT(x[3]);              // Bind lanes directly as arg / target
 ```
 
 Scalar ports require scalar vars, bus ports require bus vars; shape or width mismatches are errors.
-Arguments and targets may also be bus var lanes `x[k]` / slices `x[hi:lo]` (same rules as §5.4 / §5.5).
+Arguments and targets may also be bus var lanes `x[k]` / slices `x[hi:lo]`, or concatenations `{a, b, c[1:0]}` (same rules as §5.4 / §5.5).
+With a concatenation, several scalar vars can be bundled into one bus port (`y = g({a, b, c});`), and a bus output can be distributed over several vars (`{rest, msb} = g(x);`).
 Because the binding is fixed statically before the sim runs, the indices are limited to constant expressions per §6.3.1 (unlike the ordinary lane assignment `x[i] = v`, a runtime var index cannot be used).
 
 A multi-output logic is received with a `(t1, t2, ...)` tuple binding (§5.5).
@@ -1333,6 +1343,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/bus_and4.rv` | Bus ports and bus vars: bitwise AND of two 4-bit buses |
 | `examples/bus_slice_concat.rv` | Slice `a[hi:lo]` (bit reversal) and concatenation `{a, b}` (left rotate) |
 | `examples/bus_lane_call.rv` | Lanes / slices directly in logic call arguments and tuple-binding targets (§5.4 / §5.5): a ripple-carry adder in one line per stage |
+| `examples/concat_call.rv` | Concatenations directly in call arguments and bind targets: bundle scalars with `g({a, b, c})`, distribute an output with `{rest, msb} = g(x)` (§5.4 / §7.3) |
 | `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices (§6.3.1): splitting a bus with `x[W-1:W/2]`, plus `a[N+1]` |
 | `examples/bus_scalar.rv` | Bus-to-scalar wiring: fan-in (MAX merge) and fan-out (broadcast) |
 | `examples/bus_reg_side.rv` | Bus regs with component assignments `reg[4] m = r;` / `reg[4] c = cd;`: wiring `.side` via broadcast / element-wise / lane / slice (§6.5) |

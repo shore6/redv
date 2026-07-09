@@ -1,0 +1,27 @@
+/* 連結 {…} を logic 呼び出しの引数・束縛 target に直接書く(issue #123):
+ * - 引数: {a, b, c} はスカラやレーンを束ねた「幅 = 要素和」のバス引数になる
+ * - 束縛 target: {rest, msb} = g(...) は出力レーンを複数の受け皿へ分配する
+ * 並びは §6.3 の連結と同じで、先頭要素がポートのレーン 0 に対応する。 */
+
+#include "stdlogic"
+
+logic NROTL(input[4] x, output[4] y) {
+    y = s_not#(W=4)({x[3], x[0:2]});   // logic 本体でも連結引数を書ける(1 ビット左ローテートの NOT)
+}
+
+module test_concat_call {
+    var a, b;  var[2] c;
+    var[4] nx, nr;
+    var msb;  var[3] rest;
+    sim {
+        a = 0; b = 0; c = 0;
+        nx = s_not#(W=4)({a, b, c});     // スカラ 2 本 + 2 ビットバスを束ねて 4 ビット NOT
+        {rest, msb} = s_not#(W=4)(nx);   // 2 段 NOT = 元の値を下位 3 ビットと最上位へ分配
+        nr = NROTL(nx);
+        #init
+        ?monitor("a=%2 b=%2 c=%x | nx=%x rest=%x msb=%2 | nr=%x\n",
+                 a, b, c, nx, rest, msb, nr);
+        a = 15; c[1] = 15; #init
+        b = 15; c = 0; #init
+    }
+}

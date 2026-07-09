@@ -76,10 +76,21 @@ pub enum Sel {
     Slice(IdxExpr, IdxExpr),
 }
 
+/// 名前 + レーン選択の単純参照。連結 `{...}` の要素と `BindTarget` の基本形に使う
+/// (チェーン端点の `Endpoint::Ref` から `.side` を除いた形)。
+#[derive(Debug, Clone)]
+pub struct BindRef {
+    pub name: String,
+    pub sel: Sel,
+}
+
 /// logic 呼び出しの引数。名前 + レーン選択(reg / ポート / var / バス。レーン `x[k]` /
-/// スライス `x[hi:lo]` も書ける、issue #118)か、ネストした logic 呼び出し(issue #97)。
+/// スライス `x[hi:lo]` も書ける、issue #118)か、連結 `{e1, e2, ...}`(issue #123)か、
+/// ネストした logic 呼び出し(issue #97)。
 /// レーンはスカラ入力ポートへ、スライスは同幅のバス入力ポートへ束縛される(添字は
-/// §6.3.1 の定数式)。ネスト呼び出しは **出力ポートちょうど 1 個** の logic に限り、
+/// §6.3.1 の定数式)。連結は幅 = 各要素の和のバス引数として同幅のバス入力ポートへ
+/// 束縛される(要素は §6.3 と同じ制約: `.side`・ネスト連結・ネスト呼び出しは不可)。
+/// ネスト呼び出しは **出力ポートちょうど 1 個** の logic に限り、
 /// その出力ポートが外側の入力ポートへ減衰なしで直結される(中間 reg / var を
 /// 手書きした場合と等価な配線)。logic 本体(`Instance`)と sim(`CallBind`)で共用する。
 #[derive(Debug, Clone)]
@@ -88,6 +99,7 @@ pub enum InstArg {
         name: String,
         sel: Sel,
     },
+    Concat(Vec<BindRef>),
     Call {
         line: i32,
         callee: String,
@@ -96,14 +108,26 @@ pub enum InstArg {
     },
 }
 
-/// logic 呼び出しの束縛 target(タプル束縛 / 単一 target)。名前 + レーン選択。
+/// logic 呼び出しの束縛 target(タプル束縛 / 単一 target)。単純参照(名前 + レーン選択)
+/// または連結 `{e1, e2, ...}`(issue #123)。
 /// レーン `sum[k]` / スライス `sum[hi:lo]` はバス(reg / ポート / var)の該当レーンへ、
 /// `Sel::All` はスカラ点またはバス全体へ束縛する(issue #118)。添字は §6.3.1 の定数式。
+/// 連結は出力ポートのレーン列を要素の並び順に element-wise で受ける。
 /// logic 本体(`Instance`)と sim(`CallBind`)で共用する。
 #[derive(Debug, Clone)]
-pub struct BindTarget {
-    pub name: String,
-    pub sel: Sel,
+pub enum BindTarget {
+    Ref(BindRef),
+    Concat(Vec<BindRef>),
+}
+
+impl BindTarget {
+    /// 構成する単純参照の列(`Ref` は 1 要素、`Concat` は要素列)。
+    pub fn refs(&self) -> &[BindRef] {
+        match self {
+            BindTarget::Ref(r) => std::slice::from_ref(r),
+            BindTarget::Concat(v) => v,
+        }
+    }
 }
 
 /// チェーン端点。スカラ点 / バス全体 / レーン / スライス / 連結のいずれか。
@@ -170,8 +194,8 @@ pub enum LogicStmt {
     },
     /// `(o1, o2, ...) = callee#(P=v, ...)(args...)` — 別 logic の階層インスタンス化。
     /// `outputs` は親の reg / ポート列(出力ポートと位置対応。レーン `sum[k]` / スライス
-    /// `sum[hi:lo]` も書ける `BindTarget`、issue #118)、`args` は親の reg / ポート名
-    /// またはネストした logic 呼び出し(`InstArg`、issue #97)。
+    /// `sum[hi:lo]`(issue #118)・連結 `{c, s[3:0]}`(issue #123)も書ける `BindTarget`)、
+    /// `args` は親の reg / ポート名またはネストした logic 呼び出し(`InstArg`、issue #97)。
     /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
     /// 出力 1 個の `out = callee(...)` は `outputs = vec![out]` として正規化する(`(out) = ...` も同義)。
     Instance {
@@ -271,7 +295,8 @@ pub enum SimStmt {
     },
     /// `(t1, t2, ...) = callee#(P=v, ...)(args)` — sim から logic をインスタンス化する束縛。
     /// `targets` は出力ポートと位置対応の束縛先 var 列(スカラ var / バス var。バス var の
-    /// レーン `y[k]` / スライス `y[hi:lo]` も書ける `BindTarget`、issue #118)。出力 1 個の
+    /// レーン `y[k]` / スライス `y[hi:lo]`(issue #118)・連結 `{c, s[3:0]}`(issue #123)も
+    /// 書ける `BindTarget`)。出力 1 個の
     /// `t = callee(...)` は `targets = vec![t]` として正規化する(`(t) = ...` も同義)。
     /// `bind_args` は var 名またはネストした logic 呼び出し(`InstArg`、issue #97)。
     /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
