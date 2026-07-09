@@ -298,6 +298,14 @@ fn generic_logic_width() {
     run_golden("generic_logic_width");
 }
 
+/// バスのレーン / スライスを logic 呼び出しの引数とタプル束縛 target に直接書く
+/// (issue #118): リップルキャリー加算器のレーン引数・レーン target、スライス引数、
+/// sim 側のレーン引数 / target を 16x16 全ケースの参照モデルで検証する。
+#[test]
+fn bus_lane_call() {
+    run_golden("bus_lane_call");
+}
+
 /// バスのスライス `a[hi:lo]`(ビット反転)と連結 `{a, b}`(左ローテート)(issue #43)。
 #[test]
 fn bus_slice_concat() {
@@ -1047,12 +1055,19 @@ fn bus_ports_misuse_is_error() {
             "module m{ var[2] x; sim{ x=0; x[5]=1; } }",
             "out of range",
         ),
-        // バスレーンを logic 引数に渡す
+        // 範囲外レーンを logic 引数に渡す(レーン引数自体は issue #118 で合法化)
         (
-            "pass_bus_lane_arg",
+            "pass_bus_lane_arg_oor",
             "logic g(input a, output y){ a-t-y; }\n\
-             module m{ var[2] x; var y; sim{ x=0; y=g(x[0]); #init } }",
-            "cannot pass a bus lane",
+             module m{ var[2] x; var y; sim{ x=0; y=g(x[5]); #init } }",
+            "bus index out of range",
+        ),
+        // スカラ var に添字を付けて logic 引数に渡す
+        (
+            "index_scalar_arg",
+            "logic g(input a, output y){ a-t-y; }\n\
+             module m{ var x; var y; sim{ x=0; y=g(x[0]); #init } }",
+            "is not a bus var; cannot index it",
         ),
         // scan() をバス var へ
         (
@@ -1388,8 +1403,9 @@ fn json_mode_emits_warning_jsonl() {
     );
 }
 
-/// 多出力 logic のタプル束縛(issue #79): sim・logic 本体ともに過不足・重複・空・
-/// バスレーン直指定はエラー。1 出力 logic の `(v) = ...` も統一性のため許容する。
+/// 多出力 logic のタプル束縛(issue #79): sim・logic 本体ともに過不足・重複・空は
+/// エラー。1 出力 logic の `(v) = ...` も統一性のため許容する。
+/// バスレーン target は issue #118 で合法化されたため、重複はレーン単位で検査する。
 #[test]
 fn multi_output_binding_is_error() {
     // 共通ヘッダ: g は 2 出力 logic、g0 は 1 出力 logic。
@@ -1429,11 +1445,17 @@ fn multi_output_binding_is_error() {
             "module m{ var a,b2; sim{ (a,b2) = scan(); } }",
             "scan() returns a single value",
         ),
-        // バスレーンを target にできない
+        // 同一レーンの字面重複(issue #118: レーン target は合法、重複はエラー)
         (
-            "bus_lane",
-            "module m{ var x; var[2] bs; sim{ x=0; (bs[0], bs[1]) = g(x); #init } }",
-            "cannot bind a logic output to a bus lane",
+            "dup_lane",
+            "module m{ var x; var[2] bs; sim{ x=0; (bs[0], bs[0]) = g(x); #init } }",
+            "duplicate target 'bs[0]' in logic-instance binding tuple",
+        ),
+        // 解決後レーンの部分重複(バス全体とレーンが同じ点を束縛)
+        (
+            "overlap_lane",
+            "module m{ var x; var[2] bs; sim{ x=0; (bs, bs[0]) = g(x); #init } }",
+            "targets 'bs' and 'bs[0]' in logic-instance binding tuple overlap",
         ),
     ] {
         let src = format!("{header}{body}");

@@ -437,6 +437,59 @@ fn bus_slice(v: &[usize], name: &str, hi: i32, lo: i32, line: i32) -> RvResult<V
     Ok(out)
 }
 
+/// 幅 `w` のバスに対するレーン選択をレーン番号列へ解決する(sim 側の束縛用、issue #118)。
+/// `All` は昇順 `[0..w)`、レーン / スライスは §6.3 の並び順(範囲検査つき)。
+/// sim には logic ローカル param が無いので添字は `defines` だけで解決できる。
+fn sel_lane_indices(
+    sel: &Sel,
+    w: usize,
+    name: &str,
+    defines: &HashMap<String, i64>,
+    line: i32,
+) -> RvResult<Vec<usize>> {
+    let all: Vec<usize> = (0..w).collect();
+    let no_params: HashMap<String, i64> = HashMap::new();
+    match sel {
+        Sel::All => Ok(all),
+        Sel::Lane(ie) => {
+            let k = resolve_idx(ie, &no_params, defines, line)?;
+            Ok(bus_lane(&all, name, k, line)?.lanes())
+        }
+        Sel::Slice(hie, loe) => {
+            let hi = resolve_idx(hie, &no_params, defines, line)?;
+            let lo = resolve_idx(loe, &no_params, defines, line)?;
+            bus_slice(&all, name, hi, lo, line)
+        }
+    }
+}
+
+/// sim 側インスタンスキーの引数 1 個分。添字を含めて正規化する(issue #118:
+/// `g(x[0])` と `g(x[1])` は別インスタンス、同じ添字の 2 度目は共有)。
+/// `x[k:k]` は `x[k]` と等価(§6.3)なのでレーン形へ正規化する。
+fn sim_arg_key(
+    name: &str,
+    sel: &Sel,
+    defines: &HashMap<String, i64>,
+    line: i32,
+) -> RvResult<String> {
+    let no_params: HashMap<String, i64> = HashMap::new();
+    Ok(match sel {
+        Sel::All => name.to_string(),
+        Sel::Lane(ie) => {
+            format!("{}[{}]", name, resolve_idx(ie, &no_params, defines, line)?)
+        }
+        Sel::Slice(hie, loe) => {
+            let hi = resolve_idx(hie, &no_params, defines, line)?;
+            let lo = resolve_idx(loe, &no_params, defines, line)?;
+            if hi == lo {
+                format!("{}[{}]", name, hi)
+            } else {
+                format!("{}[{}:{}]", name, hi, lo)
+            }
+        }
+    })
+}
+
 /// 単一の名前参照(`name` / `name[k]` / `name[hi:lo]` / `name.side`)を解決する。
 /// `dst` が true なら終端(信号先)としての規則: `.side` はコンパレータ/リピーター reg の
 /// 横入力、無印の同 reg は後ろ入力。`dst` が false なら始端(信号源)で `.side` は不可。
@@ -597,18 +650,25 @@ fn resolve_endpoint(
     }
 }
 
+/// レーン選択を診断メッセージ用の添字文字列に整形する(`` / `[3]` / `[3:0]`)。
+fn sel_suffix(sel: &Sel) -> String {
+    match sel {
+        Sel::All => String::new(),
+        Sel::Lane(ie) => format!("[{}]", idx_desc(ie)),
+        Sel::Slice(hi, lo) => format!("[{}:{}]", idx_desc(hi), idx_desc(lo)),
+    }
+}
+
+/// 束縛 target を診断メッセージ用の文字列に整形する(`p` / `sum[0]` / `sum[3:1]`)。
+fn bind_target_desc(t: &BindTarget) -> String {
+    format!("{}{}", t.name, sel_suffix(&t.sel))
+}
+
 /// 端点を診断メッセージ用の文字列に整形する(`p` / `p[3:0]` / `{a, b}` 等)。
 fn endpoint_desc(ep: &Endpoint) -> String {
     match ep {
         Endpoint::Ref { name, side, sel } => {
-            let mut s = name.clone();
-            match sel {
-                Sel::All => {}
-                Sel::Lane(ie) => s.push_str(&format!("[{}]", idx_desc(ie))),
-                Sel::Slice(hi, lo) => {
-                    s.push_str(&format!("[{}:{}]", idx_desc(hi), idx_desc(lo)))
-                }
-            }
+            let mut s = format!("{}{}", name, sel_suffix(sel));
             if *side {
                 s.push_str(".side");
             }
@@ -661,29 +721,60 @@ type Ports = Vec<(String, PortShape)>;
 
 /// 保留中の階層インスタンス文(`(o1, o2, ...) = callee#(P=v)(args)`)。
 /// 順序: (line, outputs, callee, args, call_params)。`outputs` は出力ポートと位置対応の親側
-/// 端点名(reg/ポート/バス reg/バスポート)で、長さは callee の出力ポート数と一致する必要がある。
+/// 端点(reg/ポート/バス reg/バスポート。レーン / スライス添字つき可)で、長さは callee の
+/// 出力ポート数と一致する必要がある。
 /// call_params は `#(...)` 実引数で、callee の `param_env` ビルド時に親 logic の環境下で評価する(Phase 2)。
-type PendingInstance = (i32, Vec<String>, String, Vec<InstArg>, Vec<(String, Expr)>);
+type PendingInstance = (i32, Vec<BindTarget>, String, Vec<InstArg>, Vec<(String, Expr)>);
 
 /// 階層インスタンスの親側端点(reg/ポート = スカラ、内部バス reg/バスポート = バス)を
-/// `PortShape` として解決する。
+/// `PortShape` として解決する。レーン `x[k]` / スライス `x[hi:lo]`(issue #118)は
+/// バスの該当レーン列へ切り出す(添字はチェーン端点と同じく `param_env` 下の定数式)。
+#[allow(clippy::too_many_arguments)]
 fn resolve_parent_ref(
     name: &str,
+    sel: &Sel,
     scope: &HashMap<String, usize>,
     buses: &HashMap<String, Vec<usize>>,
     wire_names: &HashSet<String>,
+    param_env: &HashMap<String, i64>,
+    defines: &HashMap<String, i64>,
     line: i32,
 ) -> RvResult<PortShape> {
-    if let Some(n) = scope.get(name) {
-        return Ok(PortShape::Scalar(*n));
-    }
-    if let Some(v) = buses.get(name) {
-        return Ok(PortShape::Bus(v.clone()));
-    }
     if wire_names.contains(name) {
         return fail(line, format!("'{}' is a wire, not a reg/port", name));
     }
-    fail(line, format!("unknown logic instance endpoint: {}", name))
+    match sel {
+        Sel::All => {
+            if let Some(n) = scope.get(name) {
+                return Ok(PortShape::Scalar(*n));
+            }
+            if let Some(v) = buses.get(name) {
+                return Ok(PortShape::Bus(v.clone()));
+            }
+            fail(line, format!("unknown logic instance endpoint: {}", name))
+        }
+        Sel::Lane(ie) => {
+            let k = resolve_idx(ie, param_env, defines, line)?;
+            match buses.get(name) {
+                Some(v) => Ok(PortShape::Scalar(bus_lane(v, name, k, line)?.lanes()[0])),
+                None => fail(
+                    line,
+                    format!("'{}' is indexed with '[{}]' but is not a bus", name, k),
+                ),
+            }
+        }
+        Sel::Slice(hie, loe) => {
+            let hi = resolve_idx(hie, param_env, defines, line)?;
+            let lo = resolve_idx(loe, param_env, defines, line)?;
+            match buses.get(name) {
+                Some(v) => Ok(PortShape::Bus(bus_slice(v, name, hi, lo, line)?)),
+                None => fail(
+                    line,
+                    format!("'{}' is sliced with '[{}:{}]' but is not a bus", name, hi, lo),
+                ),
+            }
+        }
+    }
 }
 
 /// 2 つのポート(`src` -> `dst`)をレーン対応で減衰なし結線する。幅整合は厳格。
@@ -768,16 +859,21 @@ fn check_binding_arity(callee: &str, n_out: usize, n_targets: usize, line: i32) 
     Ok(())
 }
 
-/// 同じ target を束縛タプルに 2 回書くのはエラー(同じ var/reg へ複数出力をぶつけるのは意図と違う)。
-fn check_duplicate_targets(targets: &[String], line: i32) -> RvResult<()> {
-    for i in 0..targets.len() {
-        for j in (i + 1)..targets.len() {
-            if targets[i] == targets[j] {
+/// 同じ点(レーン)を束縛タプルで 2 回以上束縛するのはエラー(同じ点へ複数出力を
+/// ぶつけるのは意図と違う)。字面が違っても解決後のレーンが重なれば検出する
+/// (`(sum[1:0], sum[1])` / `(sum, sum[0])` 等、issue #118)。
+/// logic 本体側はノード id、sim 側は var レーンキーで比較する(issue #100 の共通ヘルパー)。
+/// `descs` は診断用の target 字面で、`lanes` と位置対応。
+fn check_target_overlap<T: PartialEq>(descs: &[String], lanes: &[Vec<T>], line: i32) -> RvResult<()> {
+    for i in 0..lanes.len() {
+        for j in (i + 1)..lanes.len() {
+            if lanes[i].iter().any(|a| lanes[j].contains(a)) {
                 return fail(
                     line,
                     format!(
-                        "duplicate target '{}' in logic-instance binding tuple",
-                        targets[i]
+                        "targets '{}' and '{}' in logic-instance binding tuple overlap \
+                         (the same lane is bound more than once)",
+                        descs[i], descs[j]
                     ),
                 );
             }
@@ -1044,7 +1140,8 @@ impl<'p> Elaborator<'_, 'p> {
 
     /// 階層インスタンスの引数 1 個を `PortShape` へ解決する(issue #97)。
     ///
-    /// - 裸の名前 … 親の reg / ポート / バス(従来どおり `resolve_parent_ref`)。
+    /// - 名前 … 親の reg / ポート / バス(従来どおり `resolve_parent_ref`)。レーン /
+    ///   スライス添字(issue #118)は該当レーン列へ切り出される。
     /// - ネスト呼び出し `h(x)` … サブ logic を新規インスタンスとして展開し、引数を
     ///   再帰解決してサブ入力ポートへ減衰なし直結したうえで、**単一出力ポート** の形を
     ///   返す(外側の入力ポートへの直結は呼び出し側が行う)。出力ポートが 1 個で
@@ -1061,14 +1158,14 @@ impl<'p> Elaborator<'_, 'p> {
         line: i32,
     ) -> RvResult<PortShape> {
         match arg {
-            InstArg::Name(a) => {
+            InstArg::Name { name: a, sel } => {
                 if wire_names.contains(a.as_str()) {
                     return fail(
                         line,
                         format!("logic instance argument '{}' must be a reg/port, not a wire", a),
                     );
                 }
-                resolve_parent_ref(a, scope, buses, wire_names, line)
+                resolve_parent_ref(a, sel, scope, buses, wire_names, param_env, self.defines, line)
             }
             InstArg::Call {
                 line: cl,
@@ -1681,17 +1778,32 @@ impl<'p> Elaborator<'_, 'p> {
         // callee 解決・出力ポート検査・target 検査は sim 側と共通のヘルパー(issue #100)。
         for (line, outputs, callee, args, call_params) in &instances {
             let sub = lookup_logic(self.logics, callee, *line)?;
-            check_duplicate_targets(outputs, *line)?;
             let mut out_refs: Vec<PortShape> = Vec::with_capacity(outputs.len());
             for output in outputs {
-                if wire_names.contains(output) {
+                if wire_names.contains(&output.name) {
                     return fail(
                         *line,
-                        format!("logic instance output '{}' must be a reg/port, not a wire", output),
+                        format!(
+                            "logic instance output '{}' must be a reg/port, not a wire",
+                            output.name
+                        ),
                     );
                 }
-                out_refs.push(resolve_parent_ref(output, &scope, &buses, &wire_names, *line)?);
+                out_refs.push(resolve_parent_ref(
+                    &output.name,
+                    &output.sel,
+                    &scope,
+                    &buses,
+                    &wire_names,
+                    &param_env,
+                    self.defines,
+                    *line,
+                )?);
             }
+            // 解決後レーンの重複検査(レーン / スライス target の部分重複も検出。issue #118)
+            let out_descs: Vec<String> = outputs.iter().map(bind_target_desc).collect();
+            let out_lanes: Vec<Vec<usize>> = out_refs.iter().map(|r| r.lanes()).collect();
+            check_target_overlap(&out_descs, &out_lanes, *line)?;
             let mut arg_refs: Vec<PortShape> = Vec::new();
             for a in args {
                 arg_refs.push(self.resolve_inst_arg(
@@ -1714,7 +1826,7 @@ impl<'p> Elaborator<'_, 'p> {
             {
                 let ctx = format!(
                     "output '{}' of {} bound to '{}'",
-                    out_name, callee, outputs[i]
+                    out_name, callee, out_descs[i]
                 );
                 connect_ports(self.c, sub_shape, out_ref, &ctx, *line)?;
             }
@@ -2554,13 +2666,24 @@ impl<'a> ModuleExec<'a> {
     fn do_scan(
         &mut self,
         line: i32,
-        target: &str,
+        target: &BindTarget,
         bind_args: &[InstArg],
         fmt: Option<&str>,
     ) -> RvResult<()> {
         if !bind_args.is_empty() {
             return fail(line, "scan() takes no arguments");
         }
+        // scan は logic 束縛ではないので、レーン / スライス添字は対象外(issue #118)。
+        if !matches!(target.sel, Sel::All) {
+            return fail(
+                line,
+                format!(
+                    "scan() cannot target a bus lane/slice '{}'; scan into a scalar var",
+                    bind_target_desc(target)
+                ),
+            );
+        }
+        let target = target.name.as_str();
         if self.var_buses.contains_key(target) {
             return fail(
                 line,
@@ -2604,12 +2727,16 @@ impl<'a> ModuleExec<'a> {
         // 別インスタンス(別ノード群)としてエラボレートする。targets はキーに含めない
         // (同じ呼び出しを別の var 組で受けても回路は同一インスタンスを共有する)。
         let param_part = param_env_key(&lit.params, &env);
-        // 引数キー: 裸の名前はそのまま、ネスト呼び出しは部分インスタンスを先に確定して
-        // その正規化キーを使う(外側がキャッシュ済みならネスト側もキャッシュ済みで no-op)。
+        // 引数キー: 名前は添字込みで正規化(issue #118: `g(x[0])` と `g(x[1])` は
+        // 別インスタンス。`x[k:k]` は `x[k]` と等価なのでレーン形へ正規化)、ネスト
+        // 呼び出しは部分インスタンスを先に確定してその正規化キーを使う(外側が
+        // キャッシュ済みならネスト側もキャッシュ済みで no-op)。
         let mut arg_keys: Vec<String> = Vec::with_capacity(bind_args.len());
         for a in bind_args {
             match a {
-                InstArg::Name(n) => arg_keys.push(n.clone()),
+                InstArg::Name { name: n, sel } => {
+                    arg_keys.push(sim_arg_key(n, sel, &prog.defines, line)?)
+                }
                 InstArg::Call {
                     line: cl,
                     callee: sub,
@@ -2628,9 +2755,13 @@ impl<'a> ModuleExec<'a> {
             return Ok(key);
         }
         for a in bind_args {
-            if let InstArg::Name(n) = a {
+            if let InstArg::Name { name: n, sel } = a {
                 if !self.vars.contains_key(n) && !self.var_buses.contains_key(n) {
                     return fail(line, format!("undeclared variable passed to logic: {}", n));
+                }
+                // 添字はバス var にしか付けられない(範囲検査は束縛時)。
+                if !matches!(sel, Sel::All) && !self.var_buses.contains_key(n) {
+                    return fail(line, format!("'{}' is not a bus var; cannot index it", n));
                 }
             }
         }
@@ -2660,19 +2791,32 @@ impl<'a> ModuleExec<'a> {
         for (i, (arg, (pname, pshape))) in bind_args.iter().zip(inputs.iter()).enumerate() {
             let lanes = pshape.lanes();
             match arg {
-                InstArg::Name(n) => match self.bus_width(n) {
+                InstArg::Name { name: n, sel } => match self.bus_width(n) {
                     Some(w) => {
-                        if lanes.len() != w as usize {
+                        // レーン選択をレーン番号列へ解決し(All は昇順 [0..w)、issue #118)、
+                        // ポートの昇順レーンと並び順で対応させる(チェーン端点と同じ規則)。
+                        let idxs = sel_lane_indices(sel, w as usize, n, &prog.defines, line)?;
+                        if lanes.len() != idxs.len() {
+                            let what = if matches!(sel, Sel::All) {
+                                format!("argument '{}' (bus var width {})", n, w)
+                            } else {
+                                format!(
+                                    "argument '{}{}' (width {})",
+                                    n,
+                                    sel_suffix(sel),
+                                    idxs.len()
+                                )
+                            };
                             return fail(
                                 line,
                                 format!(
-                                    "argument '{}' (bus var width {}) does not match {} input port '{}' (width {})",
-                                    n, w, callee, pname, lanes.len()
+                                    "{} does not match {} input port '{}' (width {})",
+                                    what, callee, pname, lanes.len()
                                 ),
                             );
                         }
-                        for (j, node) in lanes.iter().enumerate() {
-                            in_vars.push(Self::lane_key(n, j as i64));
+                        for (node, k) in lanes.iter().zip(idxs.iter()) {
+                            in_vars.push(Self::lane_key(n, *k as i64));
                             in_nodes.push(*node);
                         }
                     }
@@ -2722,7 +2866,7 @@ impl<'a> ModuleExec<'a> {
     fn do_call_bind(
         &mut self,
         line: i32,
-        targets: &[String],
+        targets: &[BindTarget],
         callee: &str,
         bind_args: &[InstArg],
         call_params: &[(String, Expr)],
@@ -2730,46 +2874,73 @@ impl<'a> ModuleExec<'a> {
         let key = self.ensure_instance(line, callee, bind_args, call_params)?;
         let out_ports = self.insts.get(&key).unwrap().out_ports.clone();
         check_binding_arity(callee, out_ports.len(), targets.len(), line)?;
-        // 各出力ポートを対応する target(スカラ/バス var)へレーン対応で束縛(呼び出しごと)。
-        for (target, out_lanes) in targets.iter().zip(out_ports.iter()) {
-            match self.bus_width(target) {
-                Some(w) => {
-                    if out_lanes.len() != w as usize {
-                        return fail(
-                            line,
-                            format!(
-                                "output of {} (width {}) does not match bus var '{}' (width {})",
-                                callee, out_lanes.len(), target, w
-                            ),
-                        );
-                    }
-                    for (j, node) in out_lanes.iter().enumerate() {
-                        let lk = Self::lane_key(target, j as i64);
-                        self.out_bind.insert(lk.clone(), *node);
-                        let val = self.c.read(*node) as i64;
-                        self.vars.insert(lk, val);
-                    }
-                }
-                None => {
-                    if !self.vars.contains_key(target) {
-                        return fail(line, format!("undeclared variable: {}", target));
-                    }
-                    if out_lanes.len() != 1 {
-                        return fail(
-                            line,
-                            format!(
-                                "{} has a bus output (width {}); bind it to a bus var (e.g. 'var[{}] {};')",
-                                callee, out_lanes.len(), out_lanes.len(), target
-                            ),
-                        );
-                    }
-                    self.out_bind.insert(target.to_string(), out_lanes[0]);
-                    let val = self.c.read(out_lanes[0]) as i64;
-                    self.vars.insert(target.to_string(), val);
-                }
+        // 各 target をレーンキー列(out_bind / vars のキー、束縛順)へ解決してから、
+        // 解決後レーンの重複を検査する(レーン / スライス target の部分重複も検出。issue #118)。
+        let mut target_keys: Vec<Vec<String>> = Vec::with_capacity(targets.len());
+        for t in targets {
+            target_keys.push(self.bind_target_keys(t, line)?);
+        }
+        let descs: Vec<String> = targets.iter().map(bind_target_desc).collect();
+        check_target_overlap(&descs, &target_keys, line)?;
+        // 各出力ポートを対応する target のレーンキー列へレーン対応で束縛(呼び出しごと)。
+        for ((t, keys), out_lanes) in targets.iter().zip(target_keys.iter()).zip(out_ports.iter())
+        {
+            if out_lanes.len() != keys.len() {
+                return fail(
+                    line,
+                    if self.bus_width(&t.name).is_none() {
+                        format!(
+                            "{} has a bus output (width {}); bind it to a bus var (e.g. 'var[{}] {};')",
+                            callee, out_lanes.len(), out_lanes.len(), t.name
+                        )
+                    } else if matches!(t.sel, Sel::All) {
+                        format!(
+                            "output of {} (width {}) does not match bus var '{}' (width {})",
+                            callee, out_lanes.len(), t.name, keys.len()
+                        )
+                    } else {
+                        format!(
+                            "output of {} (width {}) does not match target '{}' (width {})",
+                            callee, out_lanes.len(), bind_target_desc(t), keys.len()
+                        )
+                    },
+                );
+            }
+            for (lk, node) in keys.iter().zip(out_lanes.iter()) {
+                self.out_bind.insert(lk.clone(), *node);
+                let val = self.c.read(*node) as i64;
+                self.vars.insert(lk.clone(), val);
             }
         }
         Ok(())
+    }
+
+    /// 束縛 target をレーンキー列(out_bind / vars のキー、束縛順)へ解決する。
+    /// スカラ var は自身のキー 1 個、バス var はレーン選択に応じたレーンキー列
+    /// (All は昇順 [0..w)、レーン / スライスは §6.3 の並び順。issue #118)。
+    fn bind_target_keys(&self, t: &BindTarget, line: i32) -> RvResult<Vec<String>> {
+        match self.bus_width(&t.name) {
+            Some(w) => {
+                let idxs =
+                    sel_lane_indices(&t.sel, w as usize, &t.name, &self.prog.defines, line)?;
+                Ok(idxs
+                    .into_iter()
+                    .map(|k| Self::lane_key(&t.name, k as i64))
+                    .collect())
+            }
+            None => {
+                if !self.vars.contains_key(&t.name) {
+                    return fail(line, format!("undeclared variable: {}", t.name));
+                }
+                if !matches!(t.sel, Sel::All) {
+                    return fail(
+                        line,
+                        format!("'{}' is not a bus var; cannot index it", t.name),
+                    );
+                }
+                Ok(vec![t.name.clone()])
+            }
+        }
     }
 
     fn exec_list(&mut self, body: &'a [SimStmt]) -> RvResult<()> {
@@ -2896,8 +3067,8 @@ impl<'a> ModuleExec<'a> {
                 params,
                 fmt,
             } => {
-                // 同一 target を 2 度以上書くのはエラー(out_bind の暗黙上書きを禁止)。
-                check_duplicate_targets(targets, *line)?;
+                // 同一レーンを 2 度以上束縛するのはエラー(out_bind の暗黙上書きを禁止)。
+                // 検査は target をレーンキー列へ解決した後の do_call_bind で行う。
                 if callee == "scan" {
                     if !params.is_empty() {
                         return fail(*line, "scan() does not take generic '#(...)' parameters");

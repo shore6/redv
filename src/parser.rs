@@ -385,10 +385,11 @@ impl Parser {
     }
 
     /// `(t1, t2, ...)` — 多出力束縛 / インスタンス化の **target タプル**を解析。
-    /// 文頭 `(` の直後から `)` までを消費する。各 target は素朴な ident で、添字や `.side` は不可。
-    /// 同名 target の重複はエラー。空タプル `()` もエラー(束縛先が無いと意味が無い)。
+    /// 文頭 `(` の直後から `)` までを消費する。各 target は名前 + 任意のレーン / スライス添字
+    /// (`sum[0]` / `sum[3:1]`、issue #118)で、`.side` は不可。字面が同じ target の重複は
+    /// ここでエラー(解決後レーンの重複は interp が検査)。空タプル `()` もエラー。
     /// `kind` は診断用ラベル(例: "logic instance output (reg/port name)")。
-    fn parse_target_tuple(&mut self, kind: &str) -> RvResult<Vec<String>> {
+    fn parse_target_tuple(&mut self, kind: &str) -> RvResult<Vec<BindTarget>> {
         let ln = self.cur().line;
         self.expect_punct("(")?;
         if self.is_punct(")") {
@@ -397,20 +398,11 @@ impl Parser {
                 "empty target tuple '()' is not allowed in a logic-instance binding",
             );
         }
-        let mut out: Vec<String> = Vec::new();
+        let mut out: Vec<BindTarget> = Vec::new();
         loop {
             let name_ln = self.cur().line;
             let name = self.expect_ident(kind)?;
-            if self.is_punct("[") {
-                return fail(
-                    name_ln,
-                    format!(
-                        "cannot bind a logic output to a bus lane '{}[..]'; \
-                         bind the whole bus var/reg/port instead",
-                        name
-                    ),
-                );
-            }
+            let sel = self.parse_sel()?;
             if self.is_punct(".") {
                 return fail(
                     name_ln,
@@ -420,13 +412,20 @@ impl Parser {
                     ),
                 );
             }
-            if out.iter().any(|n| n == &name) {
-                return fail(
-                    name_ln,
-                    format!("duplicate target '{}' in logic-instance binding tuple", name),
-                );
+            // 字面重複の早期検査(リテラル添字のみ。式添字や部分重複は interp が
+            // 解決後レーンで検査する)。
+            if let Some(key) = Self::target_key(&name, &sel) {
+                if out
+                    .iter()
+                    .any(|t| Self::target_key(&t.name, &t.sel).as_deref() == Some(key.as_str()))
+                {
+                    return fail(
+                        name_ln,
+                        format!("duplicate target '{}' in logic-instance binding tuple", key),
+                    );
+                }
             }
-            out.push(name);
+            out.push(BindTarget { name, sel });
             if self.is_punct(",") {
                 self.i += 1;
                 continue;
@@ -437,8 +436,20 @@ impl Parser {
         Ok(out)
     }
 
+    /// target の字面キー(重複検査用)。添字がリテラルへ確定済みの場合のみ `Some`
+    /// (`p` / `p[0]` / `p[3:1]`)。ジェネリック param の遅延式を含む場合は `None`
+    /// (パース時に比較できないので interp のレーン重複検査に任せる)。
+    fn target_key(name: &str, sel: &Sel) -> Option<String> {
+        match sel {
+            Sel::All => Some(name.to_string()),
+            Sel::Lane(IdxExpr::Lit(k)) => Some(format!("{}[{}]", name, k)),
+            Sel::Slice(IdxExpr::Lit(h), IdxExpr::Lit(l)) => Some(format!("{}[{}:{}]", name, h, l)),
+            _ => None,
+        }
+    }
+
     /// `callee #(P=v, ...) (args...)` を 1 つ消費する。`;` は呼び出し側で消費する。
-    /// 引数は素朴な ident またはネスト呼び出しで、`name[..]` のレーン渡しはエラー(現仕様)。
+    /// 引数は名前(レーン / スライス添字つき可)またはネスト呼び出し。
     /// 返り値は (callee 名, `#(...)` 実引数, 引数列)。
     fn parse_callee_invocation(&mut self) -> RvResult<CalleeInvocation> {
         let callee = self.expect_ident("logic name")?;
@@ -450,24 +461,15 @@ impl Parser {
     }
 
     /// logic 呼び出しの引数列(`(` の直後から `)` の手前まで)を消費する。
-    /// 各引数は素朴な ident か、`h(x)` / `h#(W=4)(x)` 形の **ネスト呼び出し**(issue #97。
-    /// 引数位置の `ident (` / `ident #` は従来エラーだったトークン列への純加算)。
+    /// 各引数は名前(レーン `x[k]` / スライス `x[hi:lo]` 添字つき可、issue #118。
+    /// 添字は §6.3.1 の定数式)か、`h(x)` / `h#(W=4)(x)` 形の **ネスト呼び出し**(issue #97。
+    /// 引数位置の `ident (` / `ident #` / `ident [` は従来エラーだったトークン列への純加算)。
     fn parse_inst_args(&mut self) -> RvResult<Vec<InstArg>> {
         let mut args = Vec::new();
         if !self.is_punct(")") {
             loop {
                 let ln = self.cur().line;
                 let an = self.expect_ident("logic input (reg/port/var name)")?;
-                if self.is_punct("[") {
-                    return fail(
-                        self.cur().line,
-                        format!(
-                            "cannot pass a bus lane '{}[..]' as a logic argument; \
-                             pass the whole bus reg/port/var",
-                            an
-                        ),
-                    );
-                }
                 if self.is_punct("(") || self.is_punct("#") {
                     let params = self.parse_logic_call_params()?;
                     self.expect_punct("(")?;
@@ -480,7 +482,8 @@ impl Parser {
                         args: sub,
                     });
                 } else {
-                    args.push(InstArg::Name(an));
+                    let sel = self.parse_sel()?;
+                    args.push(InstArg::Name { name: an, sel });
                 }
                 if self.is_punct(",") {
                     self.i += 1;
@@ -758,29 +761,14 @@ impl Parser {
             });
             return Ok(());
         }
-        // チェーンでない: head は代入対象の素朴な名前(添字・連結・`.side` 不可)。
-        let target = match head {
+        // チェーンでない: head は代入 / インスタンス化の target。レーン / スライス添字は
+        // logic 呼び出しの束縛 target(issue #118)としてのみ許し、素子代入では不可。
+        let (tname, tsel) = match head {
             Endpoint::Ref { name, side, sel } => {
                 if side {
                     return fail(ln, "'.side' is only valid as a chain endpoint");
                 }
-                match sel {
-                    Sel::All => name,
-                    Sel::Lane(_) => {
-                        return fail(
-                            ln,
-                            "cannot assign to a bus lane '[..]' yet; drive it with a chain \
-                             (e.g. 'src - a[0];')",
-                        )
-                    }
-                    Sel::Slice(..) => {
-                        return fail(
-                            ln,
-                            "cannot assign to a bus slice '[..:..]'; drive it with a chain \
-                             (e.g. 'src - a[3:0];')",
-                        )
-                    }
-                }
+                (name, sel)
             }
             Endpoint::Concat(_) => {
                 return fail(ln, "a concatenation '{...}' is only valid as a chain endpoint")
@@ -798,13 +786,34 @@ impl Parser {
             self.expect_punct(";")?;
             stmts.push(LogicStmt::Instance {
                 line: ln,
-                outputs: vec![target],
+                outputs: vec![BindTarget {
+                    name: tname,
+                    sel: tsel,
+                }],
                 callee,
                 args,
                 params: call_params,
             });
             return Ok(());
         }
+        // 以降は素子代入 / wire 素子列定義。target に添字は付けられない。
+        let target = match tsel {
+            Sel::All => tname,
+            Sel::Lane(_) => {
+                return fail(
+                    ln,
+                    "cannot assign to a bus lane '[..]'; drive it with a chain \
+                     (e.g. 'src - a[0];') or bind a logic output (e.g. 'a[0] = g(x);')",
+                )
+            }
+            Sel::Slice(..) => {
+                return fail(
+                    ln,
+                    "cannot assign to a bus slice '[..:..]'; drive it with a chain \
+                     (e.g. 'src - a[3:0];') or bind a logic output (e.g. 'a[3:0] = g(x);')",
+                )
+            }
+        };
         if self.cur().k == Tk::Num {
             let strength = self.cur().num as i32;
             self.i += 1;
@@ -963,6 +972,12 @@ impl Parser {
     /// 範囲検査(バス幅との照合)は elaborate 側で行うため、ここでは値域のみ確認する。
     fn parse_idx_expr(&mut self, ln: i32) -> RvResult<IdxExpr> {
         let e = self.parse_expr()?;
+        self.idx_expr_of(e, ln)
+    }
+
+    /// 解析済みの式をレーン / スライス添字 `IdxExpr` へ変換する(`parse_idx_expr` の後半。
+    /// sim のレーン束縛 target のように、式を読んでから添字と確定する経路と共用する)。
+    fn idx_expr_of(&mut self, e: Expr, ln: i32) -> RvResult<IdxExpr> {
         if !self.logic_params.is_empty() && Self::expr_refs_logic_param(&e, &self.logic_params) {
             return Ok(IdxExpr::Expr(e));
         }
@@ -1204,13 +1219,37 @@ impl Parser {
                 let call = self.parse_call()?;
                 return Ok(SimStmt::Call { line: ln, call });
             }
-            // バス var のレーン代入:  name[idx] = value [~ pulse];
+            // バス var のレーン代入 `name[idx] = value [~ pulse];`、または
+            // レーン / スライスへの logic 束縛 `name[k] = g(...);` / `name[hi:lo] = g(...);`
+            // (issue #118。従来はどちらも構文エラーだったトークン列への純加算)。
             if self.peek(1).k == Tk::Punct && self.peek(1).s == "[" {
                 self.i += 1; // name
                 self.expect_punct("[")?;
                 let idx = self.parse_expr()?;
+                // スライスは logic 束縛 target 専用(§6.3 は端点 / 束縛 target のみ)。
+                if self.is_punct(":") {
+                    self.i += 1;
+                    let lo = self.parse_expr()?;
+                    self.expect_punct("]")?;
+                    self.expect_punct("=")?;
+                    if !self.at_callee_invocation() {
+                        return fail(
+                            ln,
+                            "a bus slice '[..:..]' can only be the target of a logic call \
+                             binding (e.g. 'y[3:0] = g(x);')",
+                        );
+                    }
+                    let sel = Sel::Slice(self.idx_expr_of(idx, ln)?, self.idx_expr_of(lo, ln)?);
+                    return self.parse_call_bind_rest(ln, BindTarget { name, sel });
+                }
                 self.expect_punct("]")?;
                 self.expect_punct("=")?;
+                // レーンへの logic 束縛(issue #118)。束縛は静的なので添字は定数式に限る
+                // (実行時 var 添字が使える通常のレーン代入と違う点)。
+                if self.at_callee_invocation() {
+                    let sel = Sel::Lane(self.idx_expr_of(idx, ln)?);
+                    return self.parse_call_bind_rest(ln, BindTarget { name, sel });
+                }
                 let value = self.parse_expr()?;
                 let pulse = if self.is_punct("~") {
                     self.i += 1;
@@ -1232,34 +1271,14 @@ impl Parser {
                 // CallBind(1 出力):  target = callee#(P=v, ...)(args...)
                 // タプル形 `(t1, t2) = callee(...)` は文頭 `(` 分岐で別に扱う(多出力)。
                 // ジェネリック幅 param は `#(...)` で実引数を渡す(Phase 2)。`#(` は省略可。
-                if self.cur().k == Tk::Ident
-                    && self.peek(1).k == Tk::Punct
-                    && (self.peek(1).s == "(" || self.peek(1).s == "#")
-                {
-                    let callee = self.cur().s.clone();
-                    self.i += 1; // skip callee
-                    let call_params = self.parse_logic_call_params()?; // `#(...)` があれば消費
-                    self.expect_punct("(")?;
-                    let mut bind_args = Vec::new();
-                    // `scan("%x")` のような書式文字列を受理する(scan のみ。
-                    // 他の callee は ident / ネスト呼び出しの引数列として読む)。
-                    let mut scan_fmt: Option<String> = None;
-                    if callee == "scan" && self.cur().k == Tk::Str {
-                        scan_fmt = Some(self.cur().s.clone());
-                        self.i += 1;
-                    } else {
-                        bind_args = self.parse_inst_args()?;
-                    }
-                    self.expect_punct(")")?;
-                    self.expect_punct(";")?;
-                    return Ok(SimStmt::CallBind {
-                        line: ln,
-                        targets: vec![name],
-                        callee,
-                        bind_args,
-                        params: call_params,
-                        fmt: scan_fmt,
-                    });
+                if self.at_callee_invocation() {
+                    return self.parse_call_bind_rest(
+                        ln,
+                        BindTarget {
+                            name,
+                            sel: Sel::All,
+                        },
+                    );
                 }
                 // plain Assign(`~ width` を付けるとパルス代入)
                 let value = self.parse_expr()?;
@@ -1281,6 +1300,42 @@ impl Parser {
         }
 
         fail(ln, "unexpected token in sim block")
+    }
+
+    /// 現在位置が logic 呼び出し `callee (` / `callee #(...)` の先頭か(`=` の直後で使う)。
+    fn at_callee_invocation(&self) -> bool {
+        self.cur().k == Tk::Ident
+            && self.peek(1).k == Tk::Punct
+            && (self.peek(1).s == "(" || self.peek(1).s == "#")
+    }
+
+    /// sim の 1-target CallBind の残り(callee 以降)を解析する。`=` まで消費済みで、
+    /// 現在位置は callee の ident。`scan("%x")` の書式文字列もここで受理する。
+    fn parse_call_bind_rest(&mut self, ln: i32, target: BindTarget) -> RvResult<SimStmt> {
+        let callee = self.cur().s.clone();
+        self.i += 1; // skip callee
+        let call_params = self.parse_logic_call_params()?; // `#(...)` があれば消費
+        self.expect_punct("(")?;
+        let mut bind_args = Vec::new();
+        // `scan("%x")` のような書式文字列を受理する(scan のみ。
+        // 他の callee は ident / ネスト呼び出しの引数列として読む)。
+        let mut scan_fmt: Option<String> = None;
+        if callee == "scan" && self.cur().k == Tk::Str {
+            scan_fmt = Some(self.cur().s.clone());
+            self.i += 1;
+        } else {
+            bind_args = self.parse_inst_args()?;
+        }
+        self.expect_punct(")")?;
+        self.expect_punct(";")?;
+        Ok(SimStmt::CallBind {
+            line: ln,
+            targets: vec![target],
+            callee,
+            bind_args,
+            params: call_params,
+            fmt: scan_fmt,
+        })
     }
 
     /// callee が現在位置にある呼び出し `name ( ... ) ;` を解析。末尾 ';' まで消費。

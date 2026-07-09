@@ -1,0 +1,88 @@
+/* バスのレーン / スライスを logic 呼び出しの引数とタプル束縛 target に直接書く(issue #118)。
+ * レーンはスカラポートへ、スライスは同幅のバスポートへ束縛される(添字は §6.3.1 の定数式)。
+ * スライスのレーン列はチェーン端点と同じ並び順で、ポートの昇順レーン [0..W) と対応する
+ * (identity は昇順 a[0:3]。降順 a[3:0] はビット反転)。
+ *
+ *  - ADD4: 全加算器 4 個のリップルキャリー。レーン引数 a[i]・b[i] とレーン target sum[i]
+ *          で「レーン -> スカラ reg の写し」なしに 1 段 1 行で書ける。
+ *  - sim 側でも同じ記法が使える。インスタンス共有キーは添字を含む
+ *    (s_or(a[0], b[0]) と s_or(a[1], b[1]) は別インスタンス)。
+ */
+#include stdlogic
+
+logic HALF_ADDER(input a, input b, output sum, output carry)
+{
+    sum   = s_xor(a, b);
+    carry = s_and(a, b);
+}
+
+logic FULL_ADDER(input x, input y, input c_in, output sum, output c_out)
+{
+    reg s1, c1, c2;
+    (s1, c1)  = HALF_ADDER(x, y);
+    (sum, c2) = HALF_ADDER(s1, c_in);
+    c_out = s_or(c1, c2);            // 両段のキャリーは同時に立たないので OR でよい
+}
+
+// 4 ビット加算器。各段の引数と target をレーンで直接書く(issue #118 の動機の形)。
+logic ADD4(input[4] a, input[4] b, input c_in, output[4] sum, output carry)
+{
+    reg c0, c1, c2;
+    (sum[0], c0)    = FULL_ADDER(a[0], b[0], c_in);
+    (sum[1], c1)    = FULL_ADDER(a[1], b[1], c0);
+    (sum[2], c2)    = FULL_ADDER(a[2], b[2], c1);
+    (sum[3], carry) = FULL_ADDER(a[3], b[3], c2);
+}
+
+// スライス引数のデモ。本体でもレーンを引数に直接書ける。
+logic AND2(input[2] p, output y)
+{
+    y = s_and(p[0], p[1]);
+}
+
+// 全 16x16 の加算(キャリー入力は交互に 0/1)を参照モデルと突き合わせ、
+// 代表ケースだけ表示する(合否は終了時の assert 集計で分かる)。
+module add4_tb
+{
+    var[4] a, b, sum;
+    var ci, carry, lo_and, or0;
+    var av, bv, k, p, sv, total;
+    sim {
+        a = 0;  b = 0;  ci = 0;
+        (sum, carry) = ADD4(a, b, ci);
+        lo_and = AND2(a[0:1]);          // スライス引数(昇順 = ポートと同順)
+        or0    = s_or(a[0], b[0]);      // sim 側のレーン引数
+        #init
+
+        for (av = 0; av < 16; av = av + 1) {
+            for (bv = 0; bv < 16; bv = bv + 1) {
+                p = 1;
+                for (k = 0; k < 4; k = k + 1) {    // 整数値を各レーン(0/15)へビット展開
+                    a[k] = av / p % 2 * 15;
+                    b[k] = bv / p % 2 * 15;
+                    p = p * 2;
+                }
+                ci = (av + bv) % 2 * 15;
+                #init                              // 組合せ回路なので定常まで待てば確定
+
+                // 参照モデル: total = A + B + ci
+                total = av + bv + ci / 15;
+                p = 1;
+                for (k = 0; k < 4; k = k + 1) {
+                    expect(sum[k], total / p % 2 * 15);
+                    p = p * 2;
+                }
+                expect(carry, total / 16 * 15);
+                expect(lo_and, av % 2 * (av / 2 % 2) * 15);
+                expect(or0, (av % 2 + bv % 2 > 0) * 15);
+
+                if (av == 5 && bv == 3 || av == 9 && bv == 8 || av == 15 && bv == 15) {
+                    sv = (sum[0] > 0) + (sum[1] > 0) * 2
+                       + (sum[2] > 0) * 4 + (sum[3] > 0) * 8;
+                    monitor("%2 + %2 + % = %2 (carry %)\n",
+                            av, bv, ci / 15, sv, carry / 15);
+                }
+            }
+        }
+    }
+}
