@@ -294,7 +294,7 @@ The suffixes correspond to Verilog's posedge / negedge / edge.
 x - op - y;                    // The tick after x rises, y gets a 1-tick pulse
 ```
 
-The suffixes are chosen from letters outside the existing component set `b`/`c`/`d`/`o`/`r`/`t`.
+The suffixes are chosen from letters outside the existing component set `c`/`d`/`o`/`r`/`t`.
 For example `od` already means "observer + dust" as a component sequence, so it cannot be the falling-edge suffix.
 The variant spellings are component sequences themselves, so the name-collision rule (§2.2) forbids `on` and the like as reg / wire / port names.
 The edge variants are an extension not present in the game's observer (§11.5).
@@ -1154,7 +1154,7 @@ Unrecoverable conditions raise errors and halt; recoverable conditions print war
 | Duplicate names, undeclared variables | Detected statically |
 | Argument count mismatch | Caught at logic instantiation |
 | `c` alone, `r5` or higher | Validity of component notation |
-| Name collides with a component name | `b` / `r` / `cd` / `tb`, etc. (§2.2) |
+| Name collides with a component name | `r` / `cd` / `td`, etc. (§2.2) |
 | After-the-fact assignment to a repeater or comparator reg | `reg m; m = r;` (must initialize at declaration; §3.4) |
 | `.side` on an unsupported reg or at a source end | Side is input-only; only cmp / r* support it |
 | `#init` exceeds `INIT_TIMEOUT` | Oscillation, or a never-satisfied condition |
