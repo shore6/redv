@@ -76,19 +76,34 @@ pub enum Sel {
     Slice(IdxExpr, IdxExpr),
 }
 
-/// logic 呼び出しの引数。裸の名前(reg / ポート / var / バス)か、ネストした
-/// logic 呼び出し(issue #97)。ネスト呼び出しは **出力ポートちょうど 1 個** の logic に
-/// 限り、その出力ポートが外側の入力ポートへ減衰なしで直結される(中間 reg / var を
+/// logic 呼び出しの引数。名前 + レーン選択(reg / ポート / var / バス。レーン `x[k]` /
+/// スライス `x[hi:lo]` も書ける、issue #118)か、ネストした logic 呼び出し(issue #97)。
+/// レーンはスカラ入力ポートへ、スライスは同幅のバス入力ポートへ束縛される(添字は
+/// §6.3.1 の定数式)。ネスト呼び出しは **出力ポートちょうど 1 個** の logic に限り、
+/// その出力ポートが外側の入力ポートへ減衰なしで直結される(中間 reg / var を
 /// 手書きした場合と等価な配線)。logic 本体(`Instance`)と sim(`CallBind`)で共用する。
 #[derive(Debug, Clone)]
 pub enum InstArg {
-    Name(String),
+    Name {
+        name: String,
+        sel: Sel,
+    },
     Call {
         line: i32,
         callee: String,
         params: Vec<(String, Expr)>,
         args: Vec<InstArg>,
     },
+}
+
+/// logic 呼び出しの束縛 target(タプル束縛 / 単一 target)。名前 + レーン選択。
+/// レーン `sum[k]` / スライス `sum[hi:lo]` はバス(reg / ポート / var)の該当レーンへ、
+/// `Sel::All` はスカラ点またはバス全体へ束縛する(issue #118)。添字は §6.3.1 の定数式。
+/// logic 本体(`Instance`)と sim(`CallBind`)で共用する。
+#[derive(Debug, Clone)]
+pub struct BindTarget {
+    pub name: String,
+    pub sel: Sel,
 }
 
 /// チェーン端点。スカラ点 / バス全体 / レーン / スライス / 連結のいずれか。
@@ -154,13 +169,14 @@ pub enum LogicStmt {
         rhs: String,
     },
     /// `(o1, o2, ...) = callee#(P=v, ...)(args...)` — 別 logic の階層インスタンス化。
-    /// `outputs` は親の reg / ポート列(出力ポートと位置対応)、`args` は親の reg / ポート名
+    /// `outputs` は親の reg / ポート列(出力ポートと位置対応。レーン `sum[k]` / スライス
+    /// `sum[hi:lo]` も書ける `BindTarget`、issue #118)、`args` は親の reg / ポート名
     /// またはネストした logic 呼び出し(`InstArg`、issue #97)。
     /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
     /// 出力 1 個の `out = callee(...)` は `outputs = vec![out]` として正規化する(`(out) = ...` も同義)。
     Instance {
         line: i32,
-        outputs: Vec<String>,
+        outputs: Vec<BindTarget>,
         callee: String,
         args: Vec<InstArg>,
         params: Vec<(String, Expr)>,
@@ -254,7 +270,8 @@ pub enum SimStmt {
         pulse: Option<Expr>,
     },
     /// `(t1, t2, ...) = callee#(P=v, ...)(args)` — sim から logic をインスタンス化する束縛。
-    /// `targets` は出力ポートと位置対応の束縛先 var 列(スカラ var / バス var)。出力 1 個の
+    /// `targets` は出力ポートと位置対応の束縛先 var 列(スカラ var / バス var。バス var の
+    /// レーン `y[k]` / スライス `y[hi:lo]` も書ける `BindTarget`、issue #118)。出力 1 個の
     /// `t = callee(...)` は `targets = vec![t]` として正規化する(`(t) = ...` も同義)。
     /// `bind_args` は var 名またはネストした logic 呼び出し(`InstArg`、issue #97)。
     /// `params` はジェネリック幅の実引数(`#(W=8)` 等。空なら既定値で展開する。Phase 2)。
@@ -262,7 +279,7 @@ pub enum SimStmt {
     /// scan は常に `targets.len() == 1`)。
     CallBind {
         line: i32,
-        targets: Vec<String>,
+        targets: Vec<BindTarget>,
         callee: String,
         bind_args: Vec<InstArg>,
         params: Vec<(String, Expr)>,
