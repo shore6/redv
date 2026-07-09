@@ -424,6 +424,7 @@ logic AND2(input x1, input x2, output y) {
 
 The form is `out = callee(args...);`.
 `out` refers to a reg or output port of the current logic; `args` refers to regs or input port names (wires, components, and numeric literals cannot be passed).
+Both `out` and `args` may also be a bus lane `x[k]` or a slice `x[hi:lo]` (indices are constant expressions per §6.3.1).
 
 The connection rules are:
 
@@ -436,7 +437,11 @@ For a logic with multiple output ports, use the tuple binding in §5.5.
 The single port may itself be a scalar or a bus (`output[N]`); a bus port is bound lane-by-lane as a homogeneous multi-output (§6).
 
 The number of arguments must match the callee's input port count.
-Each argument is a reg, a port, or a whole bus.
+Each argument is a reg, a port, a whole bus, or a bus lane `x[k]` / slice `x[hi:lo]`.
+A lane binds to a scalar input port; a slice binds to a bus input port of the same width.
+
+The lane list of a slice keeps its §6.3 order and pairs element-wise with the port's ascending lanes `[0..W)`.
+This is the same rule as chaining to a whole bus name: the identity pass is the ascending `x[0:3]` (a partial version of the whole bus `x`), while the descending `x[3:0]` is a bit reversal.
 
 Recursive instantiation (self or mutual cycles) is an error.
 
@@ -469,13 +474,24 @@ module m {
 Tuple binding works both inside a logic body and inside a sim block.
 Rules and constraints:
 
-- Each target is a plain reg / port / bus reg / bus port / var / bus var. Lane indices (`a[0]`), slices, concatenations, and `.side` are not allowed
+- Each target is a reg / port / bus reg / bus port / var / bus var, or a bus lane `sum[k]` / slice `sum[hi:lo]` (indices are constant expressions per §6.3.1). Concatenations `{...}` and `.side` are not allowed
 - The number of targets must match the callee's output port count exactly (both shortage and excess are errors)
-- The same target cannot appear twice (`(p, p) = g(x);` is an error)
+- Binding the same lane more than once is an error. Besides textual duplicates (`(p, p)`), partial overlaps of the resolved lanes (`(sum[1:0], sum[1])` or `(sum, sum[0])`) are also detected
 - Each target and its corresponding output port must agree in shape (scalar vs. bus) and width
 - A 1-output logic may also be received as a **1-target tuple** `(t) = callee(args...)` — equivalent to the conventional `t = callee(args...)`
 
 The argument list, recursion ban, and binding semantics are identical to §5.4.
+Since lanes can be written directly in arguments and targets, repetitive multi-bit structures like a ripple-carry chain of full adders take one line per stage.
+
+```rv
+logic ADD4(input[4] a, input[4] b, input c_in, output[4] sum, output carry) {
+    reg c0, c1, c2;
+    (sum[0], c0)    = FULL_ADDER(a[0], b[0], c_in);   // lanes directly as args / targets
+    (sum[1], c1)    = FULL_ADDER(a[1], b[1], c0);
+    (sum[2], c2)    = FULL_ADDER(a[2], b[2], c1);
+    (sum[3], carry) = FULL_ADDER(a[3], b[3], c2);
+}
+```
 
 ### 5.6 Nested Calls in Arguments
 
@@ -668,10 +684,10 @@ plain only, initialization at declaration only, and `r0`, strength literals, and
 The following are kept for future extension and are errors or unsupported at present.
 
 - `const` / `mutable` bus declarations, and initializers other than the component assignment of §6.5
-- Buses on the left or right side of assignment (`a = ...`)
+- Buses on the left or right side of a component assignment (`a = 15r` etc.)
 - Buses in wire sequences, the `wire[N]` syntax
 - Tuple binding of heterogeneous multi-outputs
-- Passing a single bus lane directly as a logic argument (`g(x[0])`; pass the whole bus, or copy into a scalar var first)
+- Concatenations `{...}` in logic call arguments / bind targets (lanes and slices are allowed, §5.4)
 
 ---
 
@@ -726,6 +742,7 @@ y = NOT(x);               // x becomes the input, y the output
 The binding rules are:
 
 - The same `(logic-name, argument list)` pair shares a single instance (the target list is not part of the cache key)
+- Argument indices are part of the key: `g(x[0])` and `g(x[1])` are distinct instances, and a second call of `g(x[0])` shares the first one (`x[k:k]` is normalized to the same key as `x[k]`)
 - Input variables stay bound; output variables are updated every tick
 - Bus ports (§6.2) take a whole bus var of matching shape and width
 
@@ -734,9 +751,12 @@ Example with bus vars:
 ```rv
 var[4] x, y;
 y = AND2(x, x);                // Bind a whole bus var to bus ports
+y[0] = NOT(x[3]);              // Bind lanes directly as arg / target
 ```
 
 Scalar ports require scalar vars, bus ports require bus vars; shape or width mismatches are errors.
+Arguments and targets may also be bus var lanes `x[k]` / slices `x[hi:lo]` (same rules as §5.4 / §5.5).
+Because the binding is fixed statically before the sim runs, the indices are limited to constant expressions per §6.3.1 (unlike the ordinary lane assignment `x[i] = v`, a runtime var index cannot be used).
 
 A multi-output logic is received with a `(t1, t2, ...)` tuple binding (§5.5).
 
@@ -1303,6 +1323,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/bus_or4.rv` | Bus `reg[N]`: wire all 4 lanes in one line with `in - r - buf;` |
 | `examples/bus_and4.rv` | Bus ports and bus vars: bitwise AND of two 4-bit buses |
 | `examples/bus_slice_concat.rv` | Slice `a[hi:lo]` (bit reversal) and concatenation `{a, b}` (left rotate) |
+| `examples/bus_lane_call.rv` | Lanes / slices directly in logic call arguments and tuple-binding targets (§5.4 / §5.5): a ripple-carry adder in one line per stage |
 | `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices (§6.3.1): splitting a bus with `x[W-1:W/2]`, plus `a[N+1]` |
 | `examples/bus_scalar.rv` | Bus-to-scalar wiring: fan-in (MAX merge) and fan-out (broadcast) |
 | `examples/bus_reg_side.rv` | Bus regs with component assignments `reg[4] m = r;` / `reg[4] c = cd;`: wiring `.side` via broadcast / element-wise / lane / slice (§6.5) |

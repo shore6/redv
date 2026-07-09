@@ -88,6 +88,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/nested_call.rv` | Nested calls `y = s_or(s_and(x1,x2), s_xor(x3,x4));` and a one-line MUX |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses |
 | `examples/bus_reg_side.rv` | Bus regs with component assignments `reg[4] m = r;`, wiring `.side` via broadcast / lane / slice |
+| `examples/bus_lane_call.rv` | A ripple-carry adder writing lanes / slices directly in logic call arguments and tuple-binding targets |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices: splitting a generic-width bus with `x[W-1:W/2]` |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`) for strengths, widths, `#define`, sim assignments, and more |
