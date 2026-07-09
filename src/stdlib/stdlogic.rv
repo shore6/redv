@@ -4,64 +4,64 @@
  * ファイルを置く必要も相対パスを書く必要もない。
  *
  * 提供する logic(delay は伝搬遅延 = 入力変化から出力確定までの tick 数):
- *   s_not  (NOT)   input x      -> output y   delay: 1
- *   s_and  (AND)   input x1, x2 -> output y   delay: 2
- *   s_or   (OR)    input x1, x2 -> output y   delay: 1
- *   s_nand (NAND)  input x1, x2 -> output y   delay: 1
- *   s_nor  (NOR)   input x1, x2 -> output y   delay: 2
- *   s_xor  (XOR)   input x1, x2 -> output y   delay: 4
- *   s_xnor (XNOR)  input x1, x2 -> output y   delay: 5
+ *   s_not  (NOT)   #(W=1)  input[W] x      -> output[W] y   delay: 1
+ *   s_and  (AND)   #(W=1)  input[W] x1, x2 -> output[W] y   delay: 2
+ *   s_or   (OR)    #(W=1)  input[W] x1, x2 -> output[W] y   delay: 1
+ *   s_nand (NAND)  #(W=1)  input[W] x1, x2 -> output[W] y   delay: 1
+ *   s_nor  (NOR)   #(W=1)  input[W] x1, x2 -> output[W] y   delay: 2
+ *   s_xor  (XOR)   #(W=1)  input[W] x1, x2 -> output[W] y   delay: 4
+ *   s_xnor (XNOR)  #(W=1)  input[W] x1, x2 -> output[W] y   delay: 5
+ *
+ * 全ゲートはジェネリック幅 #(W=…) を持つ(issue #121)。全ポートが W レーンで、
+ * 演算はレーンごとの element-wise(ビット単位)になる。既定 W=1 はスカラと互換で、
+ * 従来どおりスカラ var/reg をそのまま結線できる。
  *
  * 入力は 0/15 の論理レベルを想定する(中間強度は丸めず素子の特性に従う)。
  */
 
-logic s_not(input x, output y) {
+logic s_not #(W=1)(input[W] x, output[W] y) {
     x - t - y;
 }
 
-logic s_and(input x1, input x2, output y) {
-    reg s;
-    s = d;
+logic s_and #(W=1)(input[W] x1, input[W] x2, output[W] y) {
+    reg[W] s;
     x1 - t - s;
     x2 - t - s;
     s - t - y;
 }
 
-logic s_or(input x1, input x2, output y) {
-    reg s;
-    s = d;
+logic s_or #(W=1)(input[W] x1, input[W] x2, output[W] y) {
+    reg[W] s;
     x1 - r - s;
     x2 - r - s;
-    y = s;
+    s - y;
 }
 
-logic s_nand(input x1, input x2, output y) {
-    reg s;
-    s = d;
+logic s_nand #(W=1)(input[W] x1, input[W] x2, output[W] y) {
+    reg[W] s;
     x1 - t - s;
     x2 - t - s;
-    y = s;
+    s - y;
 }
 
-logic s_nor(input x1, input x2, output y) {
-    reg s;
-    s = d;
+logic s_nor #(W=1)(input[W] x1, input[W] x2, output[W] y) {
+    reg[W] s;
     x1 - r - s;
     x2 - r - s;
     s - t - y;
 }
 
-logic s_xor(input x1, input x2, output y) {
-    reg na, nb, sand_a, sand_b;
-    na     = s_not(x1);
-    nb     = s_not(x2);
-    sand_a = s_and(x1, nb);          // x1 AND NOT x2
-    sand_b = s_and(na, x2);          // NOT x1 AND x2
-    y      = s_or(sand_a, sand_b);   // どちらか一方だけ 1
+logic s_xor #(W=1)(input[W] x1, input[W] x2, output[W] y) {
+    reg[W] na, nb, sand_a, sand_b;
+    na     = s_not#(W=W)(x1);
+    nb     = s_not#(W=W)(x2);
+    sand_a = s_and#(W=W)(x1, nb);          // x1 AND NOT x2
+    sand_b = s_and#(W=W)(na, x2);          // NOT x1 AND x2
+    y      = s_or#(W=W)(sand_a, sand_b);   // どちらか一方だけ 1
 }
 
-logic s_xnor(input x1, input x2, output y) {
-    reg sxor;
-    sxor = s_xor(x1, x2);
-    y    = s_not(sxor);
+logic s_xnor #(W=1)(input[W] x1, input[W] x2, output[W] y) {
+    reg[W] sxor;
+    sxor = s_xor#(W=W)(x1, x2);
+    y    = s_not#(W=W)(sxor);
 }
