@@ -213,6 +213,13 @@ fn stdlogic_demo() {
     run_golden("stdlogic_demo");
 }
 
+/// stdlogic のジェネリック幅 `#(W=4)`(issue #121): 全ゲートを 4 レーン化し、
+/// ビット単位の element-wise 演算(NOT/AND/OR/XOR/NAND/NOR/XNOR)を検証する。
+#[test]
+fn stdlogic_generic() {
+    run_golden("stdlogic_generic");
+}
+
 /// stdlogic を同じソース内で複数回 include しても重複定義エラーにならない(issue #55)。
 /// 2 度目以降の `#include "stdlogic"` は no-op になる。
 #[test]
@@ -1563,7 +1570,8 @@ fn nested_call_is_error() {
 }
 
 /// ネスト呼び出しの部分式は standalone 呼び出しと同一インスタンスを共有する(issue #97)。
-/// トレース(-t)のノード名に `s_and(x1,x2)` のインスタンスが 1 組だけ現れることで確認する。
+/// トレース(-t)のノード名に `s_and(W=1)(x1,x2)` のインスタンスが 1 組だけ現れることで確認する
+/// (stdlogic のジェネリック幅化(issue #121)以降、キーに既定 param `(W=1)` が付く)。
 #[test]
 fn nested_call_shares_subexpression_instance() {
     let src = "#include \"stdlogic\"\n\
@@ -1573,10 +1581,10 @@ fn nested_call_shares_subexpression_instance() {
                \x20\x20\x20\x20#init ?monitor(\"t=%2 y=%2\\n\", t, y); #1 } }";
     let (code, stderr) = run_source_args("nested_share", src, &["-t"]);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
-    // 共有されていれば、ネスト側の s_and は standalone と同じキー `s_and(x1,x2)` の
+    // 共有されていれば、ネスト側の s_and は standalone と同じキー `s_and(W=1)(x1,x2)` の
     // インスタンスを使うので、別インスタンス(例: `s_or(...)` 内部の s_and)は現れない。
     assert!(
-        stderr.contains("s_and(x1,x2).y"),
+        stderr.contains("s_and(W=1)(x1,x2).y"),
         "missing shared instance node, stderr:\n{stderr}"
     );
     assert!(

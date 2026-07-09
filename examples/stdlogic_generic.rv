@@ -1,0 +1,31 @@
+/* stdlogic のジェネリック幅 #(W=…)(issue #121):
+ * 全ゲート(s_not / s_and / s_or / s_xor / s_nand / s_nor / s_xnor)が
+ * W レーンのバスポートを持ち、レーンごとの element-wise(ビット単位)演算になる。
+ * 既定 W=1 はスカラ互換(examples/stdlogic_demo.rv がそのまま動く)。
+ * 各ゲートの伝搬遅延は src/stdlib/stdlogic.rv のヘッダコメントを参照。 */
+
+#include "stdlogic"
+
+module test_stdlogic_generic {
+    var[4] x1, x2;
+    var[4] ny, ay, oy, xy, ndy, nry, xny;
+    sim {
+        x1 = 0; x2 = 0;
+        ny  = s_not#(W=4)(x1);
+        ay  = s_and#(W=4)(x1, x2);
+        oy  = s_or#(W=4)(x1, x2);
+        xy  = s_xor#(W=4)(x1, x2);
+        ndy = s_nand#(W=4)(x1, x2);
+        nry = s_nor#(W=4)(x1, x2);
+        xny = s_xnor#(W=4)(x1, x2);
+        #init
+        ?monitor("x1=%x x2=%x | NOT=%x AND=%x OR=%x XOR=%x NAND=%x NOR=%x XNOR=%x\n",
+                 x1, x2, ny, ay, oy, xy, ndy, nry, xny);
+
+        x1[0] = 15; x1[1] = 15;      // x1 = 00ff(ビットパターン 0011)
+        x2[0] = 15; x2[2] = 15;      // x2 = 0f0f(ビットパターン 0101)
+        #init
+        x1 = 15;                     // スカラ broadcast で全レーン 15(x1 = ffff)
+        #init
+    }
+}
