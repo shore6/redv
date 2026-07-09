@@ -386,8 +386,9 @@ impl Parser {
 
     /// `(t1, t2, ...)` — 多出力束縛 / インスタンス化の **target タプル**を解析。
     /// 文頭 `(` の直後から `)` までを消費する。各 target は名前 + 任意のレーン / スライス添字
-    /// (`sum[0]` / `sum[3:1]`、issue #118)で、`.side` は不可。字面が同じ target の重複は
-    /// ここでエラー(解決後レーンの重複は interp が検査)。空タプル `()` もエラー。
+    /// (`sum[0]` / `sum[3:1]`、issue #118)または連結 `{c, s[3:0]}`(issue #123)で、
+    /// `.side` は不可。字面が同じ参照の重複はここでエラー(解決後レーンの重複は interp が
+    /// 検査)。空タプル `()` もエラー。
     /// `kind` は診断用ラベル(例: "logic instance output (reg/port name)")。
     fn parse_target_tuple(&mut self, kind: &str) -> RvResult<Vec<BindTarget>> {
         let ln = self.cur().line;
@@ -401,31 +402,44 @@ impl Parser {
         let mut out: Vec<BindTarget> = Vec::new();
         loop {
             let name_ln = self.cur().line;
-            let name = self.expect_ident(kind)?;
-            let sel = self.parse_sel()?;
-            if self.is_punct(".") {
-                return fail(
-                    name_ln,
-                    format!(
-                        "'.side' is not a valid logic-output binding target ('{}')",
-                        name
-                    ),
-                );
-            }
-            // 字面重複の早期検査(リテラル添字のみ。式添字や部分重複は interp が
-            // 解決後レーンで検査する)。
-            if let Some(key) = Self::target_key(&name, &sel) {
-                if out
-                    .iter()
-                    .any(|t| Self::target_key(&t.name, &t.sel).as_deref() == Some(key.as_str()))
-                {
+            let t = if self.is_punct("{") {
+                BindTarget::Concat(self.parse_concat_refs()?)
+            } else {
+                let name = self.expect_ident(kind)?;
+                let sel = self.parse_sel()?;
+                if self.is_punct(".") {
                     return fail(
                         name_ln,
-                        format!("duplicate target '{}' in logic-instance binding tuple", key),
+                        format!(
+                            "'.side' is not a valid logic-output binding target ('{}')",
+                            name
+                        ),
                     );
                 }
+                BindTarget::Ref(BindRef { name, sel })
+            };
+            // 字面重複の早期検査(リテラル添字のみ。式添字や部分重複は interp が
+            // 解決後レーンで検査する)。連結は要素単位で比較し、連結内部の重複
+            // (`{a, a}`)も同時に拾う。
+            for (ri, r) in t.refs().iter().enumerate() {
+                if let Some(key) = Self::target_key(&r.name, &r.sel) {
+                    let dup_in_self = t.refs()[..ri].iter().any(|pr| {
+                        Self::target_key(&pr.name, &pr.sel).as_deref() == Some(key.as_str())
+                    });
+                    let dup_in_prev = out.iter().any(|prev| {
+                        prev.refs().iter().any(|pr| {
+                            Self::target_key(&pr.name, &pr.sel).as_deref() == Some(key.as_str())
+                        })
+                    });
+                    if dup_in_self || dup_in_prev {
+                        return fail(
+                            name_ln,
+                            format!("duplicate target '{}' in logic-instance binding tuple", key),
+                        );
+                    }
+                }
             }
-            out.push(BindTarget { name, sel });
+            out.push(t);
             if self.is_punct(",") {
                 self.i += 1;
                 continue;
@@ -460,15 +474,64 @@ impl Parser {
         Ok((callee, call_params, args))
     }
 
+    /// 連結 `{e1, e2, ...}` を単純参照(名前 + レーン選択)の列として読む
+    /// (logic 呼び出しの引数 / 束縛 target 用、issue #123)。文頭の `{` から `}` まで消費する。
+    /// 要素の制約はチェーン端点の連結(§6.3)と同じ: `.side`・ネスト連結は不可。
+    /// 加えて引数 / target 位置固有のネスト呼び出しも不可。
+    fn parse_concat_refs(&mut self) -> RvResult<Vec<BindRef>> {
+        let ln = self.cur().line;
+        self.expect_punct("{")?;
+        if self.is_punct("}") {
+            return fail(ln, "empty concatenation '{}' is not allowed");
+        }
+        let mut parts = Vec::new();
+        loop {
+            if self.is_punct("{") {
+                return fail(self.cur().line, "nested concatenation '{...}' is not allowed");
+            }
+            let name = self.expect_ident("concatenation element (reg/port/var name)")?;
+            if self.is_punct("(") || self.is_punct("#") {
+                return fail(
+                    self.cur().line,
+                    "a nested logic call cannot appear inside a concatenation '{...}'",
+                );
+            }
+            let sel = self.parse_sel()?;
+            if self.is_punct(".") {
+                return fail(
+                    self.cur().line,
+                    "'.side' cannot appear inside a concatenation '{...}'",
+                );
+            }
+            parts.push(BindRef { name, sel });
+            if self.is_punct(",") {
+                self.i += 1;
+                continue;
+            }
+            break;
+        }
+        self.expect_punct("}")?;
+        Ok(parts)
+    }
+
     /// logic 呼び出しの引数列(`(` の直後から `)` の手前まで)を消費する。
     /// 各引数は名前(レーン `x[k]` / スライス `x[hi:lo]` 添字つき可、issue #118。
-    /// 添字は §6.3.1 の定数式)か、`h(x)` / `h#(W=4)(x)` 形の **ネスト呼び出し**(issue #97。
-    /// 引数位置の `ident (` / `ident #` / `ident [` は従来エラーだったトークン列への純加算)。
+    /// 添字は §6.3.1 の定数式)か、連結 `{a, b[2]}`(issue #123)か、
+    /// `h(x)` / `h#(W=4)(x)` 形の **ネスト呼び出し**(issue #97。
+    /// 引数位置の `ident (` / `ident #` / `ident [` / `{` は従来エラーだったトークン列への純加算)。
     fn parse_inst_args(&mut self) -> RvResult<Vec<InstArg>> {
         let mut args = Vec::new();
         if !self.is_punct(")") {
             loop {
                 let ln = self.cur().line;
+                if self.is_punct("{") {
+                    args.push(InstArg::Concat(self.parse_concat_refs()?));
+                    if self.is_punct(",") {
+                        self.i += 1;
+                        continue;
+                    }
+                    break;
+                }
                 let an = self.expect_ident("logic input (reg/port/var name)")?;
                 if self.is_punct("(") || self.is_punct("#") {
                     let params = self.parse_logic_call_params()?;
@@ -761,17 +824,26 @@ impl Parser {
             });
             return Ok(());
         }
-        // チェーンでない: head は代入 / インスタンス化の target。レーン / スライス添字は
-        // logic 呼び出しの束縛 target(issue #118)としてのみ許し、素子代入では不可。
-        let (tname, tsel) = match head {
+        // チェーンでない: head は代入 / インスタンス化の target。レーン / スライス添字と
+        // 連結 `{...}`(issue #123)は logic 呼び出しの束縛 target(issue #118)として
+        // のみ許し、素子代入では不可。
+        let bind_target = match head {
             Endpoint::Ref { name, side, sel } => {
                 if side {
                     return fail(ln, "'.side' is only valid as a chain endpoint");
                 }
-                (name, sel)
+                BindTarget::Ref(BindRef { name, sel })
             }
-            Endpoint::Concat(_) => {
-                return fail(ln, "a concatenation '{...}' is only valid as a chain endpoint")
+            Endpoint::Concat(elems) => {
+                // 連結要素は parse_ref(false) 経由なので常に `.side` なしの Ref。
+                let parts = elems
+                    .into_iter()
+                    .filter_map(|e| match e {
+                        Endpoint::Ref { name, sel, .. } => Some(BindRef { name, sel }),
+                        Endpoint::Concat(_) => None,
+                    })
+                    .collect();
+                BindTarget::Concat(parts)
             }
         };
         self.expect_punct("=")?;
@@ -786,17 +858,24 @@ impl Parser {
             self.expect_punct(";")?;
             stmts.push(LogicStmt::Instance {
                 line: ln,
-                outputs: vec![BindTarget {
-                    name: tname,
-                    sel: tsel,
-                }],
+                outputs: vec![bind_target],
                 callee,
                 args,
                 params: call_params,
             });
             return Ok(());
         }
-        // 以降は素子代入 / wire 素子列定義。target に添字は付けられない。
+        // 以降は素子代入 / wire 素子列定義。target は裸の名前のみ(添字・連結は不可)。
+        let (tname, tsel) = match bind_target {
+            BindTarget::Ref(r) => (r.name, r.sel),
+            BindTarget::Concat(_) => {
+                return fail(
+                    ln,
+                    "a concatenation '{...}' target must bind a logic call \
+                     (e.g. '{c, s} = g(x);')",
+                )
+            }
+        };
         let target = match tsel {
             Sel::All => tname,
             Sel::Lane(_) => {
@@ -1149,6 +1228,14 @@ impl Parser {
             });
         }
 
+        // 連結 target の 1 出力束縛: `{c, s[3:0]} = callee#(...)(args...);`(issue #123)。
+        // 文頭 `{` は従来エラーだったので純加算。
+        if self.is_punct("{") {
+            let parts = self.parse_concat_refs()?;
+            self.expect_punct("=")?;
+            return self.parse_call_bind_rest(ln, BindTarget::Concat(parts));
+        }
+
         if self.is_ident("if") {
             self.i += 1;
             self.expect_punct("(")?;
@@ -1240,7 +1327,7 @@ impl Parser {
                         );
                     }
                     let sel = Sel::Slice(self.idx_expr_of(idx, ln)?, self.idx_expr_of(lo, ln)?);
-                    return self.parse_call_bind_rest(ln, BindTarget { name, sel });
+                    return self.parse_call_bind_rest(ln, BindTarget::Ref(BindRef { name, sel }));
                 }
                 self.expect_punct("]")?;
                 self.expect_punct("=")?;
@@ -1248,7 +1335,7 @@ impl Parser {
                 // (実行時 var 添字が使える通常のレーン代入と違う点)。
                 if self.at_callee_invocation() {
                     let sel = Sel::Lane(self.idx_expr_of(idx, ln)?);
-                    return self.parse_call_bind_rest(ln, BindTarget { name, sel });
+                    return self.parse_call_bind_rest(ln, BindTarget::Ref(BindRef { name, sel }));
                 }
                 let value = self.parse_expr()?;
                 let pulse = if self.is_punct("~") {
@@ -1274,10 +1361,10 @@ impl Parser {
                 if self.at_callee_invocation() {
                     return self.parse_call_bind_rest(
                         ln,
-                        BindTarget {
+                        BindTarget::Ref(BindRef {
                             name,
                             sel: Sel::All,
-                        },
+                        }),
                     );
                 }
                 // plain Assign(`~ width` を付けるとパルス代入)

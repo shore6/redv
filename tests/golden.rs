@@ -313,6 +313,13 @@ fn bus_lane_call() {
     run_golden("bus_lane_call");
 }
 
+/// 連結 `{a, b, c}` を logic 呼び出しの引数と束縛 target に直接書く(issue #123):
+/// sim / logic 本体の連結引数と、単一形の連結 target `{rest, msb} = g(...)` を検証する。
+#[test]
+fn concat_call() {
+    run_golden("concat_call");
+}
+
 /// バスのスライス `a[hi:lo]`(ビット反転)と連結 `{a, b}`(左ローテート)(issue #43)。
 #[test]
 fn bus_slice_concat() {

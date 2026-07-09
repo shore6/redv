@@ -1,0 +1,3 @@
+a= 0 b= 0 c=00 | nx=ffff rest=000 msb= 0 | nr=0000
+a=15 b= 0 c=f0 | nx=0ff0 rest=00f msb=15 | nr=00ff
+a=15 b=15 c=00 | nx=ff00 rest=0ff msb= 0 | nr=0ff0

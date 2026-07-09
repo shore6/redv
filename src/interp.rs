@@ -659,9 +659,23 @@ fn sel_suffix(sel: &Sel) -> String {
     }
 }
 
-/// 束縛 target を診断メッセージ用の文字列に整形する(`p` / `sum[0]` / `sum[3:1]`)。
+/// 単純参照を診断メッセージ用の文字列に整形する(`p` / `sum[0]` / `sum[3:1]`)。
+fn bind_ref_desc(r: &BindRef) -> String {
+    format!("{}{}", r.name, sel_suffix(&r.sel))
+}
+
+/// 連結を診断メッセージ用の文字列に整形する(`{c, s[3:0]}`)。
+fn concat_desc(parts: &[BindRef]) -> String {
+    let inner: Vec<String> = parts.iter().map(bind_ref_desc).collect();
+    format!("{{{}}}", inner.join(", "))
+}
+
+/// 束縛 target を診断メッセージ用の文字列に整形する(`p` / `sum[0]` / `{c, s[3:0]}`)。
 fn bind_target_desc(t: &BindTarget) -> String {
-    format!("{}{}", t.name, sel_suffix(&t.sel))
+    match t {
+        BindTarget::Ref(r) => bind_ref_desc(r),
+        BindTarget::Concat(parts) => concat_desc(parts),
+    }
 }
 
 /// 端点を診断メッセージ用の文字列に整形する(`p` / `p[3:0]` / `{a, b}` 等)。
@@ -861,11 +875,24 @@ fn check_binding_arity(callee: &str, n_out: usize, n_targets: usize, line: i32) 
 
 /// 同じ点(レーン)を束縛タプルで 2 回以上束縛するのはエラー(同じ点へ複数出力を
 /// ぶつけるのは意図と違う)。字面が違っても解決後のレーンが重なれば検出する
-/// (`(sum[1:0], sum[1])` / `(sum, sum[0])` 等、issue #118)。
+/// (`(sum[1:0], sum[1])` / `(sum, sum[0])` 等、issue #118)。連結 target の内部で
+/// 同じレーンが重なる形(`{a, a}` 等、issue #123)も検出する。
 /// logic 本体側はノード id、sim 側は var レーンキーで比較する(issue #100 の共通ヘルパー)。
 /// `descs` は診断用の target 字面で、`lanes` と位置対応。
 fn check_target_overlap<T: PartialEq>(descs: &[String], lanes: &[Vec<T>], line: i32) -> RvResult<()> {
     for i in 0..lanes.len() {
+        for a in 0..lanes[i].len() {
+            if lanes[i][a + 1..].contains(&lanes[i][a]) {
+                return fail(
+                    line,
+                    format!(
+                        "target '{}' in logic-instance binding binds the same lane \
+                         more than once",
+                        descs[i]
+                    ),
+                );
+            }
+        }
         for j in (i + 1)..lanes.len() {
             if lanes[i].iter().any(|a| lanes[j].contains(a)) {
                 return fail(
@@ -1166,6 +1193,36 @@ impl<'p> Elaborator<'_, 'p> {
                     );
                 }
                 resolve_parent_ref(a, sel, scope, buses, wire_names, param_env, self.defines, line)
+            }
+            // 連結引数(issue #123): 各要素のレーン列を並び順に連接した
+            // 幅 = 要素和のバスとして渡す(チェーン端点の連結と同じ規則)。
+            InstArg::Concat(parts) => {
+                let mut lanes = Vec::new();
+                for r in parts {
+                    if wire_names.contains(r.name.as_str()) {
+                        return fail(
+                            line,
+                            format!(
+                                "logic instance argument '{}' must be a reg/port, not a wire",
+                                r.name
+                            ),
+                        );
+                    }
+                    lanes.extend(
+                        resolve_parent_ref(
+                            &r.name,
+                            &r.sel,
+                            scope,
+                            buses,
+                            wire_names,
+                            param_env,
+                            self.defines,
+                            line,
+                        )?
+                        .lanes(),
+                    );
+                }
+                Ok(PortShape::Bus(lanes))
             }
             InstArg::Call {
                 line: cl,
@@ -1780,25 +1837,50 @@ impl<'p> Elaborator<'_, 'p> {
             let sub = lookup_logic(self.logics, callee, *line)?;
             let mut out_refs: Vec<PortShape> = Vec::with_capacity(outputs.len());
             for output in outputs {
-                if wire_names.contains(&output.name) {
-                    return fail(
-                        *line,
-                        format!(
-                            "logic instance output '{}' must be a reg/port, not a wire",
-                            output.name
-                        ),
-                    );
+                for r in output.refs() {
+                    if wire_names.contains(&r.name) {
+                        return fail(
+                            *line,
+                            format!(
+                                "logic instance output '{}' must be a reg/port, not a wire",
+                                r.name
+                            ),
+                        );
+                    }
                 }
-                out_refs.push(resolve_parent_ref(
-                    &output.name,
-                    &output.sel,
-                    &scope,
-                    &buses,
-                    &wire_names,
-                    &param_env,
-                    self.defines,
-                    *line,
-                )?);
+                out_refs.push(match output {
+                    BindTarget::Ref(r) => resolve_parent_ref(
+                        &r.name,
+                        &r.sel,
+                        &scope,
+                        &buses,
+                        &wire_names,
+                        &param_env,
+                        self.defines,
+                        *line,
+                    )?,
+                    // 連結 target(issue #123): 各要素のレーン列を並び順に連接した
+                    // バスとして受ける(チェーン端点の連結と同じ規則)。
+                    BindTarget::Concat(parts) => {
+                        let mut lanes = Vec::new();
+                        for r in parts {
+                            lanes.extend(
+                                resolve_parent_ref(
+                                    &r.name,
+                                    &r.sel,
+                                    &scope,
+                                    &buses,
+                                    &wire_names,
+                                    &param_env,
+                                    self.defines,
+                                    *line,
+                                )?
+                                .lanes(),
+                            );
+                        }
+                        PortShape::Bus(lanes)
+                    }
+                });
             }
             // 解決後レーンの重複検査(レーン / スライス target の部分重複も検出。issue #118)
             let out_descs: Vec<String> = outputs.iter().map(bind_target_desc).collect();
@@ -2673,17 +2755,22 @@ impl<'a> ModuleExec<'a> {
         if !bind_args.is_empty() {
             return fail(line, "scan() takes no arguments");
         }
-        // scan は logic 束縛ではないので、レーン / スライス添字は対象外(issue #118)。
-        if !matches!(target.sel, Sel::All) {
-            return fail(
-                line,
-                format!(
-                    "scan() cannot target a bus lane/slice '{}'; scan into a scalar var",
-                    bind_target_desc(target)
-                ),
-            );
-        }
-        let target = target.name.as_str();
+        // scan は logic 束縛ではないので、レーン / スライス添字(issue #118)や
+        // 連結(issue #123)は対象外。
+        let r = match target {
+            BindTarget::Ref(r) if matches!(r.sel, Sel::All) => r,
+            _ => {
+                return fail(
+                    line,
+                    format!(
+                        "scan() cannot target a bus lane/slice or concatenation '{}'; \
+                         scan into a scalar var",
+                        bind_target_desc(target)
+                    ),
+                );
+            }
+        };
+        let target = r.name.as_str();
         if self.var_buses.contains_key(target) {
             return fail(
                 line,
@@ -2737,6 +2824,20 @@ impl<'a> ModuleExec<'a> {
                 InstArg::Name { name: n, sel } => {
                     arg_keys.push(sim_arg_key(n, sel, &prog.defines, line)?)
                 }
+                // 連結引数(issue #123)は要素キーを `{...}` で束ねる。単一要素の
+                // `{x}` は `x` と等価な配線になるので裸の形へ正規化する
+                // (`x[k:k]` -> `x[k]` と同じ流儀。`g({x})` は `g(x)` と同一インスタンス)。
+                InstArg::Concat(parts) => {
+                    let mut ks: Vec<String> = Vec::with_capacity(parts.len());
+                    for r in parts {
+                        ks.push(sim_arg_key(&r.name, &r.sel, &prog.defines, line)?);
+                    }
+                    arg_keys.push(if ks.len() == 1 {
+                        ks.pop().unwrap()
+                    } else {
+                        format!("{{{}}}", ks.join(","))
+                    });
+                }
                 InstArg::Call {
                     line: cl,
                     callee: sub,
@@ -2755,7 +2856,14 @@ impl<'a> ModuleExec<'a> {
             return Ok(key);
         }
         for a in bind_args {
-            if let InstArg::Name { name: n, sel } = a {
+            let refs: Vec<(&str, &Sel)> = match a {
+                InstArg::Name { name: n, sel } => vec![(n.as_str(), sel)],
+                InstArg::Concat(parts) => {
+                    parts.iter().map(|r| (r.name.as_str(), &r.sel)).collect()
+                }
+                InstArg::Call { .. } => Vec::new(),
+            };
+            for (n, sel) in refs {
                 if !self.vars.contains_key(n) && !self.var_buses.contains_key(n) {
                     return fail(line, format!("undeclared variable passed to logic: {}", n));
                 }
@@ -2834,6 +2942,46 @@ impl<'a> ModuleExec<'a> {
                         in_nodes.push(lanes[0]);
                     }
                 },
+                // 連結引数(issue #123): 各要素のレーンキー列を並び順に連接し、
+                // ポートの昇順レーンと対応させる(チェーン端点の連結と同じ規則)。
+                InstArg::Concat(parts) => {
+                    let mut keys: Vec<String> = Vec::new();
+                    for r in parts {
+                        match self.bus_width(&r.name) {
+                            Some(w) => {
+                                let idxs = sel_lane_indices(
+                                    &r.sel,
+                                    w as usize,
+                                    &r.name,
+                                    &prog.defines,
+                                    line,
+                                )?;
+                                keys.extend(
+                                    idxs.into_iter().map(|k| Self::lane_key(&r.name, k as i64)),
+                                );
+                            }
+                            // スカラ var(添字が付かないことは検査済み)
+                            None => keys.push(r.name.clone()),
+                        }
+                    }
+                    if lanes.len() != keys.len() {
+                        return fail(
+                            line,
+                            format!(
+                                "argument '{}' (width {}) does not match {} input port '{}' (width {})",
+                                concat_desc(parts),
+                                keys.len(),
+                                callee,
+                                pname,
+                                lanes.len()
+                            ),
+                        );
+                    }
+                    for (node, k) in lanes.iter().zip(keys.iter()) {
+                        in_vars.push(k.clone());
+                        in_nodes.push(*node);
+                    }
+                }
                 InstArg::Call {
                     line: cl,
                     callee: sub,
@@ -2888,21 +3036,19 @@ impl<'a> ModuleExec<'a> {
             if out_lanes.len() != keys.len() {
                 return fail(
                     line,
-                    if self.bus_width(&t.name).is_none() {
-                        format!(
+                    match t {
+                        BindTarget::Ref(r) if self.bus_width(&r.name).is_none() => format!(
                             "{} has a bus output (width {}); bind it to a bus var (e.g. 'var[{}] {};')",
-                            callee, out_lanes.len(), out_lanes.len(), t.name
-                        )
-                    } else if matches!(t.sel, Sel::All) {
-                        format!(
+                            callee, out_lanes.len(), out_lanes.len(), r.name
+                        ),
+                        BindTarget::Ref(r) if matches!(r.sel, Sel::All) => format!(
                             "output of {} (width {}) does not match bus var '{}' (width {})",
-                            callee, out_lanes.len(), t.name, keys.len()
-                        )
-                    } else {
-                        format!(
+                            callee, out_lanes.len(), r.name, keys.len()
+                        ),
+                        _ => format!(
                             "output of {} (width {}) does not match target '{}' (width {})",
                             callee, out_lanes.len(), bind_target_desc(t), keys.len()
-                        )
+                        ),
                     },
                 );
             }
@@ -2918,29 +3064,31 @@ impl<'a> ModuleExec<'a> {
     /// 束縛 target をレーンキー列(out_bind / vars のキー、束縛順)へ解決する。
     /// スカラ var は自身のキー 1 個、バス var はレーン選択に応じたレーンキー列
     /// (All は昇順 [0..w)、レーン / スライスは §6.3 の並び順。issue #118)。
+    /// 連結 target(issue #123)は各要素のレーンキー列を並び順に連接する。
     fn bind_target_keys(&self, t: &BindTarget, line: i32) -> RvResult<Vec<String>> {
-        match self.bus_width(&t.name) {
-            Some(w) => {
-                let idxs =
-                    sel_lane_indices(&t.sel, w as usize, &t.name, &self.prog.defines, line)?;
-                Ok(idxs
-                    .into_iter()
-                    .map(|k| Self::lane_key(&t.name, k as i64))
-                    .collect())
-            }
-            None => {
-                if !self.vars.contains_key(&t.name) {
-                    return fail(line, format!("undeclared variable: {}", t.name));
+        let mut keys: Vec<String> = Vec::new();
+        for r in t.refs() {
+            match self.bus_width(&r.name) {
+                Some(w) => {
+                    let idxs =
+                        sel_lane_indices(&r.sel, w as usize, &r.name, &self.prog.defines, line)?;
+                    keys.extend(idxs.into_iter().map(|k| Self::lane_key(&r.name, k as i64)));
                 }
-                if !matches!(t.sel, Sel::All) {
-                    return fail(
-                        line,
-                        format!("'{}' is not a bus var; cannot index it", t.name),
-                    );
+                None => {
+                    if !self.vars.contains_key(&r.name) {
+                        return fail(line, format!("undeclared variable: {}", r.name));
+                    }
+                    if !matches!(r.sel, Sel::All) {
+                        return fail(
+                            line,
+                            format!("'{}' is not a bus var; cannot index it", r.name),
+                        );
+                    }
+                    keys.push(r.name.clone());
                 }
-                Ok(vec![t.name.clone()])
             }
         }
+        Ok(keys)
     }
 
     fn exec_list(&mut self, body: &'a [SimStmt]) -> RvResult<()> {
