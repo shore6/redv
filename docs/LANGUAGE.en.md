@@ -952,7 +952,7 @@ You do not need to ship the file separately or write a relative path; the same s
 
 | Name | Contents |
 |---|---|
-| `stdlogic` | Basic logic gates (`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`). All are scalar 1–2 input / 1 output |
+| `stdlogic` | Basic logic gates (`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`). All gates take a generic width `#(W=1)` |
 | `stdmem` | Latches and registers (`s_rslatch` / `s_dlatch` / `s_dff` / `s_register`). All but `s_rslatch` take a generic width `#(W=1)`. Nests `stdlogic` internally |
 
 Repeating `#include` of the same bundled name within one source is a no-op after the first occurrence (no duplicate-definition error).
@@ -972,6 +972,15 @@ logic EQUAL(input x1, input x2, output y) {
 
 `s_xor` / `s_xnor` are layered on top of `s_not` / `s_and` / `s_or`, so they take 4–5 ticks total.
 Per-gate propagation delays are listed in the header comment of `examples/stdlogic_demo.rv`.
+
+Every gate takes a generic width `#(W=…)` (§8.4), turning all of its ports into W-lane bus ports.
+The operation is element-wise (bitwise) per lane.
+The default `W=1` is scalar-compatible: scalar vars / regs bind directly, as in the example above.
+
+```rv
+var[4] a, b, y;
+y = s_xor#(W=4)(a, b);         // 4-bit bitwise XOR
+```
 
 `stdmem` provides four latch/register components.
 
@@ -1334,6 +1343,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/monitor_format.rv` | Radix formats `%b` / `%x` / `%o` for monitor / scan, zero padding `%04b`, `-` prefix for negatives, `scan("%x")`, etc. (§7.4.1, §7.8) |
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane packs into a 4-bit nibble for display (§7.4.1) |
 | `examples/stdlogic_demo.rv` | The bundled standard library: `#include "stdlogic"` pulls in 7 basic gates (NOT / AND / OR / XOR / NAND / NOR / XNOR) and the demo sweeps them (§8.2.1) |
+| `examples/stdlogic_generic.rv` | Generic widths in stdlogic: every gate widened to 4 bits with `#(W=4)`, verifying the bitwise operations (§8.2.1) |
 | `examples/stdmem_demo.rv` | The bundled standard library `#include "stdmem"`: drives the 4 latch/register components (RS latch / D latch / D-FF / register) (§8.2.1) |
 | `examples/stdmem_generic.rv` | Generic widths in stdmem: `s_dlatch` / `s_dff` / `s_register` at `#(W=4)` for 4-bit data paths (§8.2.1) |
 

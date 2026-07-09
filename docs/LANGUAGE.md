@@ -994,7 +994,7 @@ EOF(入力切れ)や非数値はエラーとなる。
 
 | 名前 | 内容 |
 |---|---|
-| `stdlogic` | 基本論理ゲート(`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`)。すべてスカラ 1〜2 入力・1 出力 |
+| `stdlogic` | 基本論理ゲート(`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`)。全ゲートがジェネリック幅 `#(W=1)` |
 | `stdmem` | ラッチ・レジスタ(`s_rslatch` / `s_dlatch` / `s_dff` / `s_register`)。`s_rslatch` 以外はジェネリック幅 `#(W=1)`。内部で `stdlogic` をネストして取り込む |
 
 同じバンドル名を 1 ソース中で複数回 `#include` しても、2 度目以降は no-op になる(重複定義エラーにはならない)。
@@ -1014,6 +1014,15 @@ logic EQUAL(input x1, input x2, output y) {
 
 `s_xor` / `s_xnor` は内部で `s_not` / `s_and` / `s_or` を呼ぶ階層構造で、合計 4〜5 tick の遅延を持つ。
 ゲートごとの伝搬遅延は `examples/stdlogic_demo.rv` のヘッダコメントを参照。
+
+全ゲートはジェネリック幅 `#(W=…)`(§8.4)を持ち、全ポートが W レーンのバスポートになる。
+演算はレーンごとの element-wise(ビット単位)である。
+既定の `W=1` はスカラ互換で、上の例のようにスカラ var / reg をそのまま結線できる。
+
+```rv
+var[4] a, b, y;
+y = s_xor#(W=4)(a, b);         // 4 ビットのビット単位 XOR
+```
 
 `stdmem` はラッチ・レジスタの 4 素子を提供する。
 
@@ -1379,6 +1388,7 @@ fan-in や fan-out(§6.4)はこの有向モデル上で「複数点を 1 点へ 
 | `examples/monitor_format.rv` | monitor / scan の基数書式 `%b` / `%x` / `%o`、ゼロ埋め `%04b`、負値の `-` 接頭、`scan("%x")` 等(§7.4.1, §7.8) |
 | `examples/monitor_bus.rv` | バス var を 1 引数で monitor に渡し、各レーン強度を 4 bit ニブルとしてパッキングして 1 行で表示(§7.4.1) |
 | `examples/stdlogic_demo.rv` | バンドル済み標準ライブラリ `#include "stdlogic"` で基本ゲート 7 種(NOT / AND / OR / XOR / NAND / NOR / XNOR)を取り込んで sweep する(§8.2.1) |
+| `examples/stdlogic_generic.rv` | stdlogic のジェネリック幅:全ゲートを `#(W=4)` で 4 ビット化し、ビット単位の演算を検証する(§8.2.1) |
 | `examples/stdmem_demo.rv` | バンドル済み標準ライブラリ `#include "stdmem"` でラッチ・レジスタ 4 種(RS ラッチ / D ラッチ / D-FF / レジスタ)を取り込んで駆動する(§8.2.1) |
 | `examples/stdmem_generic.rv` | stdmem のジェネリック幅:`s_dlatch` / `s_dff` / `s_register` を `#(W=4)` で 4 ビット化する(§8.2.1) |
 
