@@ -1004,7 +1004,7 @@ EOF(入力切れ)や非数値はエラーとなる。
 
 | 名前 | 内容 |
 |---|---|
-| `stdlogic` | 基本論理ゲート(`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`)。全ゲートがジェネリック幅 `#(W=1)` |
+| `stdlogic` | 基本論理ゲート(`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`)とリダクションゲート(`s_rand` / `s_rnand` / `s_ror` / `s_rnor`)。全ゲートがジェネリック幅 `#(W=…)` |
 | `stdmem` | ラッチ・レジスタ(`s_rslatch` / `s_dlatch` / `s_dff` / `s_register`)。`s_rslatch` 以外はジェネリック幅 `#(W=1)`。内部で `stdlogic` をネストして取り込む |
 
 同じバンドル名を 1 ソース中で複数回 `#include` しても、2 度目以降は no-op になる(重複定義エラーにはならない)。
@@ -1025,7 +1025,7 @@ logic EQUAL(input x1, input x2, output y) {
 `s_xor` / `s_xnor` は内部で `s_not` / `s_and` / `s_or` を呼ぶ階層構造で、合計 4〜5 tick の遅延を持つ。
 ゲートごとの伝搬遅延は `examples/stdlogic_demo.rv` のヘッダコメントを参照。
 
-全ゲートはジェネリック幅 `#(W=…)`(§8.4)を持ち、全ポートが W レーンのバスポートになる。
+基本ゲート 7 種はジェネリック幅 `#(W=…)`(§8.4)を持ち、全ポートが W レーンのバスポートになる。
 演算はレーンごとの element-wise(ビット単位)である。
 既定の `W=1` はスカラ互換で、上の例のようにスカラ var / reg をそのまま結線できる。
 
@@ -1033,6 +1033,28 @@ logic EQUAL(input x1, input x2, output y) {
 var[4] a, b, y;
 y = s_xor#(W=4)(a, b);         // 4 ビットのビット単位 XOR
 ```
+
+**リダクションゲート** 4 種は、W レーンのバス 1 本をスカラ 1 出力へ畳み込む。
+
+| logic | ポート | 動作 | 遅延 |
+|---|---|---|---|
+| `s_rand` | `#(W=2)` `(input[W] x) -> y` | 全レーンの AND(全ビット 1 検出) | 2 tick |
+| `s_rnand` | `#(W=2)` `(input[W] x) -> y` | 全レーンの NAND | 1 tick |
+| `s_ror` | `#(W=2)` `(input[W] x) -> y` | 全レーンの OR(非ゼロ検出) | 1 tick |
+| `s_rnor` | `#(W=2)` `(input[W] x) -> y` | 全レーンの NOR(ゼロ検出) | 2 tick |
+
+実装は fan-in(§6.4)による 1 点への MAX 合流なので、遅延は幅 W によらず一定である。
+入力数別のゲート族(AND3 / AND4 のような arity 違い)は提供せず、幅 `#(W=…)` を変えた 1 定義で任意の入力数を賄う。
+連結を引数に書けば(§5.4)、スカラ多入力のゲートとしても使える。
+
+```rv
+var[8] x;  var a, b, c, z, all3;
+z    = s_rnor#(W=8)(x);            // x == 0 の検出(TD4 の Z フラグなど)
+all3 = s_rand#(W=3)({a, b, c});    // スカラ 3 入力の AND
+```
+
+XOR / XNOR のリダクション(パリティ)は提供しない。
+パリティは MAX 合流に還元できず `s_xor` の木が必要になるが、redv には generate 相当の構文がなく、木を幅ジェネリックに書けないためである。
 
 `stdmem` はラッチ・レジスタの 4 素子を提供する。
 
@@ -1400,6 +1422,7 @@ fan-in や fan-out(§6.4)はこの有向モデル上で「複数点を 1 点へ 
 | `examples/monitor_bus.rv` | バス var を 1 引数で monitor に渡し、各レーン強度を 4 bit ニブルとしてパッキングして 1 行で表示(§7.4.1) |
 | `examples/stdlogic_demo.rv` | バンドル済み標準ライブラリ `#include "stdlogic"` で基本ゲート 7 種(NOT / AND / OR / XOR / NAND / NOR / XNOR)を取り込んで sweep する(§8.2.1) |
 | `examples/stdlogic_generic.rv` | stdlogic のジェネリック幅:全ゲートを `#(W=4)` で 4 ビット化し、ビット単位の演算を検証する(§8.2.1) |
+| `examples/stdlogic_reduction.rv` | stdlogic のリダクションゲート:`s_rand` / `s_rnand` / `s_ror` / `s_rnor` がバス 1 本をスカラ 1 出力へ畳み込む。連結 `{a, b, c}` によるスカラ 3 入力 AND も(§8.2.1) |
 | `examples/stdmem_demo.rv` | バンドル済み標準ライブラリ `#include "stdmem"` でラッチ・レジスタ 4 種(RS ラッチ / D ラッチ / D-FF / レジスタ)を取り込んで駆動する(§8.2.1) |
 | `examples/stdmem_generic.rv` | stdmem のジェネリック幅:`s_dlatch` / `s_dff` / `s_register` を `#(W=4)` で 4 ビット化する(§8.2.1) |
 

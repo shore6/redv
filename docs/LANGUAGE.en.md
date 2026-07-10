@@ -962,7 +962,7 @@ You do not need to ship the file separately or write a relative path; the same s
 
 | Name | Contents |
 |---|---|
-| `stdlogic` | Basic logic gates (`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`). All gates take a generic width `#(W=1)` |
+| `stdlogic` | Basic logic gates (`s_not` / `s_and` / `s_or` / `s_xor` / `s_nand` / `s_nor` / `s_xnor`) and reduction gates (`s_rand` / `s_rnand` / `s_ror` / `s_rnor`). All gates take a generic width `#(W=…)` |
 | `stdmem` | Latches and registers (`s_rslatch` / `s_dlatch` / `s_dff` / `s_register`). All but `s_rslatch` take a generic width `#(W=1)`. Nests `stdlogic` internally |
 
 Repeating `#include` of the same bundled name within one source is a no-op after the first occurrence (no duplicate-definition error).
@@ -983,7 +983,7 @@ logic EQUAL(input x1, input x2, output y) {
 `s_xor` / `s_xnor` are layered on top of `s_not` / `s_and` / `s_or`, so they take 4–5 ticks total.
 Per-gate propagation delays are listed in the header comment of `examples/stdlogic_demo.rv`.
 
-Every gate takes a generic width `#(W=…)` (§8.4), turning all of its ports into W-lane bus ports.
+The seven basic gates take a generic width `#(W=…)` (§8.4), turning all of their ports into W-lane bus ports.
 The operation is element-wise (bitwise) per lane.
 The default `W=1` is scalar-compatible: scalar vars / regs bind directly, as in the example above.
 
@@ -991,6 +991,28 @@ The default `W=1` is scalar-compatible: scalar vars / regs bind directly, as in 
 var[4] a, b, y;
 y = s_xor#(W=4)(a, b);         // 4-bit bitwise XOR
 ```
+
+The four **reduction gates** fold one W-lane bus into a single scalar output.
+
+| logic | Ports | Behavior | Delay |
+|---|---|---|---|
+| `s_rand` | `#(W=2)` `(input[W] x) -> y` | AND of all lanes (all-ones detect) | 2 ticks |
+| `s_rnand` | `#(W=2)` `(input[W] x) -> y` | NAND of all lanes | 1 tick |
+| `s_ror` | `#(W=2)` `(input[W] x) -> y` | OR of all lanes (non-zero detect) | 1 tick |
+| `s_rnor` | `#(W=2)` `(input[W] x) -> y` | NOR of all lanes (zero detect) | 2 ticks |
+
+The implementation is a fan-in (§6.4), a MAX merge into a single point, so the delay is constant regardless of the width W.
+There is no family of gates by input count (arity variants like AND3 / AND4); a single definition covers any number of inputs by changing the width `#(W=…)`.
+Writing a concatenation as the argument (§5.4) turns them into scalar multi-input gates.
+
+```rv
+var[8] x;  var a, b, c, z, all3;
+z    = s_rnor#(W=8)(x);            // detect x == 0 (e.g. the Z flag of a TD4)
+all3 = s_rand#(W=3)({a, b, c});    // 3-input scalar AND
+```
+
+XOR / XNOR reductions (parity) are not provided.
+Parity does not reduce to a MAX merge and would need a tree of `s_xor`, but redv has no generate-like construct, so the tree cannot be written width-generically.
 
 `stdmem` provides four latch/register components.
 
@@ -1355,6 +1377,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane packs into a 4-bit nibble for display (§7.4.1) |
 | `examples/stdlogic_demo.rv` | The bundled standard library: `#include "stdlogic"` pulls in 7 basic gates (NOT / AND / OR / XOR / NAND / NOR / XNOR) and the demo sweeps them (§8.2.1) |
 | `examples/stdlogic_generic.rv` | Generic widths in stdlogic: every gate widened to 4 bits with `#(W=4)`, verifying the bitwise operations (§8.2.1) |
+| `examples/stdlogic_reduction.rv` | Reduction gates in stdlogic: `s_rand` / `s_rnand` / `s_ror` / `s_rnor` fold one bus into a single scalar output, plus a 3-input scalar AND via the concatenation `{a, b, c}` (§8.2.1) |
 | `examples/stdmem_demo.rv` | The bundled standard library `#include "stdmem"`: drives the 4 latch/register components (RS latch / D latch / D-FF / register) (§8.2.1) |
 | `examples/stdmem_generic.rv` | Generic widths in stdmem: `s_dlatch` / `s_dff` / `s_register` at `#(W=4)` for 4-bit data paths (§8.2.1) |
 

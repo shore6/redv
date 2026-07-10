@@ -220,6 +220,14 @@ fn stdlogic_generic() {
     run_golden("stdlogic_generic");
 }
 
+/// stdlogic のリダクションゲート(issue #124): s_rand / s_rnand / s_ror / s_rnor が
+/// バス 1 本を fan-in(MAX 合流)で畳み込み、スカラ 1 出力を返す。全 0 / 一部 1 / 全 1 の
+/// 各パターンと、連結 {a,b,c} によるスカラ 3 入力 AND を検証する。
+#[test]
+fn stdlogic_reduction() {
+    run_golden("stdlogic_reduction");
+}
+
 /// stdlogic を同じソース内で複数回 include しても重複定義エラーにならない(issue #55)。
 /// 2 度目以降の `#include "stdlogic"` は no-op になる。
 #[test]

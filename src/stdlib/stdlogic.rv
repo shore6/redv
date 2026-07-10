@@ -12,9 +12,18 @@
  *   s_xor  (XOR)   #(W=1)  input[W] x1, x2 -> output[W] y   delay: 4
  *   s_xnor (XNOR)  #(W=1)  input[W] x1, x2 -> output[W] y   delay: 5
  *
- * 全ゲートはジェネリック幅 #(W=…) を持つ(issue #121)。全ポートが W レーンで、
- * 演算はレーンごとの element-wise(ビット単位)になる。既定 W=1 はスカラと互換で、
- * 従来どおりスカラ var/reg をそのまま結線できる。
+ * リダクションゲート(issue #124。バス 1 本 → スカラ 1 出力):
+ *   s_rand  (全ビット AND)  #(W=2)  input[W] x -> output y   delay: 2
+ *   s_rnand (全ビット NAND) #(W=2)  input[W] x -> output y   delay: 1
+ *   s_ror   (全ビット OR)   #(W=2)  input[W] x -> output y   delay: 1
+ *   s_rnor  (全ビット NOR)  #(W=2)  input[W] x -> output y   delay: 2
+ *
+ * 全ゲートはジェネリック幅 #(W=…) を持つ(issue #121)。2 入力ゲートは全ポートが
+ * W レーンで、演算はレーンごとの element-wise(ビット単位)になる。既定 W=1 は
+ * スカラと互換で、従来どおりスカラ var/reg をそのまま結線できる。
+ * リダクションゲートは W レーンの入力 1 本を 1 点への MAX 合流(fan-in、§6.4)で
+ * 畳み込むため、遅延は W によらず一定。XOR / XNOR のリダクション(パリティ)は
+ * MAX 合流に還元できないため提供しない。
  *
  * 入力は 0/15 の論理レベルを想定する(中間強度は丸めず素子の特性に従う)。
  */
@@ -64,4 +73,28 @@ logic s_xnor #(W=1)(input[W] x1, input[W] x2, output[W] y) {
     reg[W] sxor;
     sxor = s_xor#(W=W)(x1, x2);
     y    = s_not#(W=W)(sxor);
+}
+
+logic s_rand #(W=2)(input[W] x, output y) {
+    reg s;
+    x - t - s;      // W レーンぶんのトーチが 1 点へ MAX 合流(= NAND)
+    s - t - y;      // 反転して AND
+}
+
+logic s_rnand #(W=2)(input[W] x, output y) {
+    reg s;
+    x - t - s;
+    s - y;
+}
+
+logic s_ror #(W=2)(input[W] x, output y) {
+    reg s;
+    x - r - s;      // W レーンぶんのリピーターが 1 点へ MAX 合流(= OR)
+    s - y;
+}
+
+logic s_rnor #(W=2)(input[W] x, output y) {
+    reg s;
+    x - r - s;
+    s - t - y;      // 反転して NOR
 }
