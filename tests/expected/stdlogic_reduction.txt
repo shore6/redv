@@ -1,0 +1,4 @@
+x=0000 abc=000 | rAND=0 rNAND=f rOR=0 rNOR=f and3=0
+x=00f0 abc=ff0 | rAND=0 rNAND=f rOR=f rNOR=0 and3=0
+x=ffff abc=fff | rAND=f rNAND=0 rOR=f rNOR=0 and3=f
+x=000f abc=f0f | rAND=0 rNAND=f rOR=f rNOR=0 and3=0

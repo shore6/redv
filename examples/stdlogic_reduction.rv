@@ -1,0 +1,37 @@
+/* stdlogic のリダクションゲート(issue #124):
+ * バス 1 本を 1 点への MAX 合流(fan-in、§6.4)で畳み込み、スカラ 1 出力を返す。
+ *   s_rand  (全ビット AND)  #(W=2)  input[W] x -> output y   delay: 2
+ *   s_rnand (全ビット NAND) #(W=2)  input[W] x -> output y   delay: 1
+ *   s_ror   (全ビット OR)   #(W=2)  input[W] x -> output y   delay: 1
+ *   s_rnor  (全ビット NOR)  #(W=2)  input[W] x -> output y   delay: 2
+ * 遅延は幅 W によらず一定。用途は全ビット 1 検出(s_rand)、非ゼロ検出(s_ror)、
+ * ゼロ検出(s_rnor)など。連結 {…} を引数に書けば(issue #123)スカラ多入力にもなる。 */
+
+#include "stdlogic"
+
+module test_stdlogic_reduction {
+    var[4] x;
+    var a, b, c;
+    var all1, nall1, nz, z, and3;
+    sim {
+        x = 0; a = 0; b = 0; c = 0;
+        all1  = s_rand#(W=4)(x);            // 全ビット 1 検出
+        nall1 = s_rnand#(W=4)(x);
+        nz    = s_ror#(W=4)(x);             // 非ゼロ検出
+        z     = s_rnor#(W=4)(x);            // ゼロ検出
+        and3  = s_rand#(W=3)({a, b, c});    // 連結でスカラ 3 入力 AND
+        #init
+        ?monitor("x=%04x abc=%x%x%x | rAND=%x rNAND=%x rOR=%x rNOR=%x and3=%x\n",
+                 x, a, b, c, all1, nall1, nz, z, and3);
+
+        x[1] = 15;                          // 一部だけ 1(非ゼロだが全 1 ではない)
+        a = 15; b = 15;                     // 3 入力のうち 2 つだけ 1
+        #init
+        x = 15;                             // broadcast で全ビット 1
+        c = 15;                             // 3 入力すべて 1
+        #init
+        x = 0; x[0] = 15;                   // 最下位ビットだけ 1
+        b = 0;
+        #init
+    }
+}
