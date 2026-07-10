@@ -98,6 +98,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/monitor_bus.rv` | Pass a bus var directly to monitor; each lane is packed as a 4-bit nibble (lane[0] is the lowest) |
 | `examples/stdlogic_demo.rv` | `#include "stdlogic"` pulls in the basic gate library (NOT / AND / OR / XOR / NAND / NOR / XNOR) |
 | `examples/stdlogic_generic.rv` | Generic widths in stdlogic: `s_xor#(W=4)` and friends widen the basic gates to 4 bits |
+| `examples/stdlogic_reduction.rv` | Reduction gates in stdlogic: `s_rand#(W=4)` and friends fold one bus into a single scalar output |
 | `examples/stdmem_demo.rv` | `#include "stdmem"` pulls in the latch/register library (RS latch / D latch / D-FF / register) |
 | `examples/stdmem_generic.rv` | Generic widths in stdmem: `s_register#(W=4)` and friends widen the data path to 4 bits |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
