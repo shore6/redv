@@ -818,6 +818,43 @@ fn connect_ports(
     Ok(())
 }
 
+/// 呼び出しの引数(`src`)を入力ポート(`dst`)へレーン対応で減衰なし結線する。
+/// 幅 1 の引数はバスポートの全レーンへブロードキャストする(fan-out。issue #127)。
+/// チェーン §6.4 と違い fan-in(バス引数 -> スカラポート)は許さない:暗黙の max 合流は
+/// 幅ミスを隠しやすく、明示チェーン `x - y;` やリダクションゲートで書ける。
+fn connect_arg(
+    c: &mut Circuit,
+    src: &PortShape,
+    dst: &PortShape,
+    ctx: &str,
+    line: i32,
+) -> RvResult<()> {
+    let s = src.lanes();
+    if s.len() == 1 && dst.width() > 1 {
+        for d in dst.lanes() {
+            c.add_edge(s[0], d, 0);
+        }
+        return Ok(());
+    }
+    if src.width() != dst.width() {
+        return fail(
+            line,
+            format!(
+                "{}: width mismatch ({} vs {} lane(s); widths must be equal, \
+                 or the argument must be width 1 to broadcast)",
+                ctx,
+                src.width(),
+                dst.width()
+            ),
+        );
+    }
+    let d = dst.lanes();
+    for i in 0..s.len() {
+        c.add_edge(s[i], d[i], 0);
+    }
+    Ok(())
+}
+
 // ---- 束縛の共通検査(issue #100)------------------------------------------
 // logic 呼び出しの束縛は logic 本体側(§4.5 の instances ループ / resolve_inst_arg)と
 // sim 側(ensure_instance / do_call_bind)の 2 経路にあるが、callee 解決・出力ポート
@@ -1240,7 +1277,7 @@ impl<'p> Elaborator<'_, 'p> {
                         a, scope, buses, wire_names, param_env, prefix, *cl,
                     )?;
                     let ctx = format!("{} input port '{}'", callee, pname);
-                    connect_ports(self.c, &ar, pshape, &ctx, *cl)?;
+                    connect_arg(self.c, &ar, pshape, &ctx, *cl)?;
                 }
                 Ok(sub_out.into_iter().next().unwrap().1)
             }
@@ -1897,10 +1934,10 @@ impl<'p> Elaborator<'_, 'p> {
                 self.instantiate_sub(sub, call_params, &param_env, prefix, *line, args.len())?;
             require_output_ports(callee, sub_out.len(), *line)?;
             check_binding_arity(callee, sub_out.len(), outputs.len(), *line)?;
-            // 親引数 -> サブ入力ポート(レーン対応で減衰なし直結)
+            // 親引数 -> サブ入力ポート(レーン対応で減衰なし直結。幅 1 は broadcast)
             for (arg_ref, (pname, pshape)) in arg_refs.iter().zip(sub_in.iter()) {
                 let ctx = format!("{} input port '{}'", callee, pname);
-                connect_ports(self.c, arg_ref, pshape, &ctx, *line)?;
+                connect_arg(self.c, arg_ref, pshape, &ctx, *line)?;
             }
             // 各サブ出力ポート -> 対応する親の出力先(レーン対応)
             for (i, ((out_name, sub_shape), out_ref)) in
@@ -2903,8 +2940,9 @@ impl<'a> ModuleExec<'a> {
                     Some(w) => {
                         // レーン選択をレーン番号列へ解決し(All は昇順 [0..w)、issue #118)、
                         // ポートの昇順レーンと並び順で対応させる(チェーン端点と同じ規則)。
+                        // 幅 1(単一レーン / 幅 1 スライス)は全レーンへ broadcast(issue #127)。
                         let idxs = sel_lane_indices(sel, w as usize, n, &prog.defines, line)?;
-                        if lanes.len() != idxs.len() {
+                        if lanes.len() != idxs.len() && idxs.len() != 1 {
                             let what = if matches!(sel, Sel::All) {
                                 format!("argument '{}' (bus var width {})", n, w)
                             } else {
@@ -2918,28 +2956,25 @@ impl<'a> ModuleExec<'a> {
                             return fail(
                                 line,
                                 format!(
-                                    "{} does not match {} input port '{}' (width {})",
+                                    "{} does not match {} input port '{}' (width {}); \
+                                     widths must be equal, or the argument must be width 1 \
+                                     to broadcast",
                                     what, callee, pname, lanes.len()
                                 ),
                             );
                         }
-                        for (node, k) in lanes.iter().zip(idxs.iter()) {
-                            in_vars.push(Self::lane_key(n, *k as i64));
+                        for (j, node) in lanes.iter().enumerate() {
+                            let k = idxs[if idxs.len() == 1 { 0 } else { j }];
+                            in_vars.push(Self::lane_key(n, k as i64));
                             in_nodes.push(*node);
                         }
                     }
+                    // スカラ var。ポートがバスなら全レーンへ broadcast(issue #127)。
                     None => {
-                        if lanes.len() != 1 {
-                            return fail(
-                                line,
-                                format!(
-                                    "argument '{}' is a scalar var but {} input port '{}' is a bus (width {})",
-                                    n, callee, pname, lanes.len()
-                                ),
-                            );
+                        for node in lanes.iter() {
+                            in_vars.push(n.clone());
+                            in_nodes.push(*node);
                         }
-                        in_vars.push(n.clone());
-                        in_nodes.push(lanes[0]);
                     }
                 },
                 // 連結引数(issue #123): 各要素のレーンキー列を並び順に連接し、
@@ -2964,11 +2999,14 @@ impl<'a> ModuleExec<'a> {
                             None => keys.push(r.name.clone()),
                         }
                     }
-                    if lanes.len() != keys.len() {
+                    // 幅 1 の連結は全レーンへ broadcast(issue #127)。
+                    if lanes.len() != keys.len() && keys.len() != 1 {
                         return fail(
                             line,
                             format!(
-                                "argument '{}' (width {}) does not match {} input port '{}' (width {})",
+                                "argument '{}' (width {}) does not match {} input port '{}' \
+                                 (width {}); widths must be equal, or the argument must be \
+                                 width 1 to broadcast",
                                 concat_desc(parts),
                                 keys.len(),
                                 callee,
@@ -2977,7 +3015,8 @@ impl<'a> ModuleExec<'a> {
                             ),
                         );
                     }
-                    for (node, k) in lanes.iter().zip(keys.iter()) {
+                    for (j, node) in lanes.iter().enumerate() {
+                        let k = &keys[if keys.len() == 1 { 0 } else { j }];
                         in_vars.push(k.clone());
                         in_nodes.push(*node);
                     }
@@ -2990,11 +3029,11 @@ impl<'a> ModuleExec<'a> {
                     let sub_out = self.insts.get(&arg_keys[i]).unwrap().out_ports.clone();
                     require_single_output(sub, sub_out.len(), *cl)?;
                     // `Input` ノードはエッジ寄与を max 合流する(issue #99)ので、logic 本体側の
-                    // ネストと同じく connect_ports で部分インスタンス出力から直結するだけでよい
-                    // (var 駆動なし = base 0)。幅検査とエラー文も connect_ports に一本化。
+                    // ネストと同じく connect_arg で部分インスタンス出力から直結するだけでよい
+                    // (var 駆動なし = base 0)。幅検査・broadcast・エラー文も connect_arg に一本化。
                     let src = PortShape::Bus(sub_out[0].clone());
                     let ctx = format!("{} input port '{}'", callee, pname);
-                    connect_ports(&mut self.c, &src, pshape, &ctx, *cl)?;
+                    connect_arg(&mut self.c, &src, pshape, &ctx, *cl)?;
                 }
             }
         }

@@ -1,0 +1,27 @@
+/* 幅 1 の引数をバス入力ポートへ broadcast する(issue #127):
+ * logic 呼び出しの引数が幅 1(スカラ var / 単一レーン / 幅 1 スライス・連結)で
+ * 入力ポートが幅 N のとき、全レーンへ fan-out する(チェーン §6.4 と同じ規則)。
+ * 逆方向の fan-in(バス引数 -> スカラポート)は対象外でエラーのまま。 */
+
+#include "stdlogic"
+
+logic MASK #(W=4)(input[W] x, input en, output[W] y) {
+    y = s_and#(W=W)(x, en);          // en を W レーンへ broadcast
+}
+
+module test_call_arg_broadcast {
+    var[4] a;
+    var en;
+    var[2] s;
+    var[4] m, g;
+    sim {
+        a = 0; en = 0; s = 0;
+        m = MASK(a, en);             // logic 本体内の broadcast(上の s_and)
+        g = s_or#(W=4)(a, s[1]);     // sim 側でも幅 1 の引数(単一レーン)を broadcast
+        #init
+        ?monitor("a=%x en=%2 s=%x | m=%x g=%x\n", a, en, s, m, g);
+        a[3] = 15; a[1] = 15; #init  // en=0: マスクで m=0000
+        en = 15; #init               // en=15: m=a
+        s[1] = 15; #init             // s[1]=15: g は全レーン High
+    }
+}
