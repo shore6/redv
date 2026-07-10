@@ -328,6 +328,14 @@ fn concat_call() {
     run_golden("concat_call");
 }
 
+/// 幅 1 の引数をバス入力ポートの全レーンへ broadcast する(issue #127):
+/// logic 本体内(スカラポート -> サブ logic のバスポート)と sim 側
+/// (スカラ var / 単一レーン -> バスポート)の両経路を検証する。
+#[test]
+fn call_arg_broadcast() {
+    run_golden("call_arg_broadcast");
+}
+
 /// バスのスライス `a[hi:lo]`(ビット反転)と連結 `{a, b}`(左ローテート)(issue #43)。
 #[test]
 fn bus_slice_concat() {
@@ -1050,12 +1058,12 @@ fn bus_ports_misuse_is_error() {
              module m{ var[2] x; var y; sim{ x=0; y=g(x); #init } }",
             "does not match",
         ),
-        // スカラ var をバス入力ポートへ
+        // バス var をスカラ入力ポートへ(fan-in は broadcast 対象外。issue #127)
         (
-            "scalar_to_bus_port",
-            "logic g(input[4] a, output y){ a[0]-t-y; }\n\
-             module m{ var x; var y; sim{ x=0; y=g(x); #init } }",
-            "is a scalar var but",
+            "bus_to_scalar_port",
+            "logic g(input a, output y){ a-t-y; }\n\
+             module m{ var[4] x; var y; sim{ x=0; y=g(x); #init } }",
+            "does not match g input port 'a' (width 1)",
         ),
         // バス出力ポートをスカラ var へ束縛
         (
@@ -1569,12 +1577,13 @@ fn nested_call_is_error() {
             "recursive logic instantiation",
         ),
         // ネスト出力の幅不一致(バス出力 -> スカラ入力)。幅検査は logic 本体側と
-        // 共通の connect_ports に一本化されている(issue #100)。
+        // 共通の connect_arg に一本化されている(issue #100)。バス -> スカラの
+        // fan-in は broadcast 対象外でエラーのまま(issue #127)。
         (
             "width_mismatch",
             "logic inv #(W=4)(input[W] x, output[W] y){ x - t - y; }\n\
              module m{ var[4] a; var y; sim{ a=0; y = OR2(inv(a), a); #init } }",
-            "OR2 input port 'x1': port width mismatch (4 vs 1 lane(s)",
+            "OR2 input port 'x1': width mismatch (4 vs 1 lane(s)",
         ),
     ] {
         let src = format!("{header}{body}");

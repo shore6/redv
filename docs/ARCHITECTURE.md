@@ -276,7 +276,10 @@ reg cmp = cd;  →  back ノード ─┐
 出力 1 個の `out = callee(...)` は parser で `outputs = vec![out]` に正規化する(`Instance.outputs: Vec<BindTarget>`、LANGUAGE.md §5.5)。
 
 - サブ logic を `top_level = false` で再帰エラボレート(入力ポートは `Input` でなく `Plain` ノードになる)。
-- 親の引数ノード → サブ入力ポート、各サブ出力ポート → 親の対応する出力先を `connect_ports`(減衰なし直結 = エッジ decay 0)で結ぶ。
+- 親の引数ノード → サブ入力ポートを `connect_arg`、各サブ出力ポート → 親の対応する出力先を
+  `connect_ports` で結ぶ(どちらも減衰なし直結 = エッジ decay 0)。`connect_arg` は幅 1 の引数を
+  バス入力ポートの全レーンへ broadcast し(issue #127)、`connect_ports` は幅厳格一致。fan-in
+  (バス引数 → スカラポート)はどちらもエラー。
 - 引数と target の親側端点は `resolve_parent_ref` が `PortShape` へ解決する。レーン / スライス添字
   (`BindRef.sel` / `InstArg::Name.sel`、issue #118)はチェーン端点と同じ `Sel` を流用し、
   `bus_lane` / `bus_slice` でレーン列を切り出すだけ(circuit 側は無変更)。連結(issue #123)は
@@ -294,7 +297,8 @@ reg cmp = cd;  →  back ノード ─┐
 - **束縛の検査は sim 側と共通のヘルパーに一本化している**(issue #100)。callee 解決
   (`lookup_logic`)、出力ポート非空(`require_output_ports`)、ネストの単一出力
   (`require_single_output`)、target 数の厳格一致(`check_binding_arity`)、target 重複
-  (`check_target_overlap`)、引数/出力の幅整合と結線(`connect_ports`)がそれで、
+  (`check_target_overlap`)、引数/出力の幅整合と結線(引数は `connect_arg`、出力は
+  `connect_ports`)がそれで、
   片方だけ直して logic 本体と sim で挙動が食い違う事故を防ぐ。これらの検査を経路側に
   複製しない。サブ logic の「param_env 構築 → 非表示プレフィックスでエラボレート」は
   logic 本体側 2 経路(この instances ループ / `resolve_inst_arg`)共通の `instantiate_sub`。
@@ -411,7 +415,7 @@ const = 宣言値を源に、リピータ / オブザーバは `後ろ上界 > 0
 - **ネスト呼び出し引数**(issue #97)は `ensure_instance` が部分インスタンスを先に再帰確定し、
   その正規化キーを引数キーに使う(キー例: `s_or(s_and(x1,x2),x3)`)。部分式は standalone
   呼び出しと同一インスタンスを共有する。ネストで駆動される入力ポートへは、部分インスタンスの
-  出力ポートを `connect_ports` で直結するだけでよい(`in_vars` には載せない)。`Input` ノードは
+  出力ポートを `connect_arg` で直結するだけでよい(`in_vars` には載せない)。`Input` ノードは
   エッジ寄与を max 合流する(§6.1、issue #99)ので、かつて必要だった `Plain` への降格は無い。
 - **束縛の検査は logic 本体側(§4.5)と共通のヘルパーに一本化している**(issue #100)。
   callee 解決・出力ポート非空・ネストの単一出力・target 数・target 重複・ネスト引数の幅整合と
@@ -424,6 +428,9 @@ const = 宣言値を源に、リピータ / オブザーバは `後ろ上界 > 0
 - バス var ↔ バスポートはレーン対応で束縛する。レーン / スライス引数は `sel_lane_indices` で
   レーン番号列(§6.3 の並び順)へ解決し、ポートの昇順レーンと対応させて `in_vars` に載せる。
   連結引数は各要素のレーンキー列を並び順に連接して同じ形で `in_vars` に載せる(issue #123)。
+  幅 1 の引数(スカラ var / 単一レーン / 幅 1 連結)は、同じ var キーをポートの全レーンへ
+  重ねて `in_vars` に載せることで broadcast する(issue #127。`apply_inputs` は (var, node)
+  ペア単位なので重複キーはそのまま動く)。
 - 入力反映時、回路へ束縛した var は **0–15 にクランプ**(範囲外は変数ごとに 1 回だけ警告)。
 
 `scan()` も `CallBind` 経由(`do_scan`)。stdin から整数 1 個を読む(EOF・非数値はエラー)。

@@ -90,6 +90,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/bus_reg_side.rv` | Bus regs with component assignments `reg[4] m = r;`, wiring `.side` via broadcast / lane / slice |
 | `examples/bus_lane_call.rv` | A ripple-carry adder writing lanes / slices directly in logic call arguments and tuple-binding targets |
 | `examples/concat_call.rv` | Concatenations directly in calls: bundle scalars with `g({a, b, c})`, distribute an output with `{rest, msb} = g(x)` |
+| `examples/call_arg_broadcast.rv` | Broadcast a width-1 argument to a bus input port: mask a bus with a single enable line |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at multiple widths |
 | `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices: splitting a generic-width bus with `x[W-1:W/2]` |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`) for strengths, widths, `#define`, sim assignments, and more |

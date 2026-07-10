@@ -442,6 +442,18 @@ A lane binds to a scalar input port; a slice binds to a bus input port of the sa
 A concatenation becomes a bus argument whose width is the sum of its parts and binds to a bus input port of that width (several scalars can be bundled into one bus port).
 Concatenation elements follow the same restrictions as chain endpoints (§6.3); additionally, nested calls (§5.6) cannot appear as elements.
 
+A width-1 argument (a scalar, a single lane, or a width-1 slice / concatenation) can also be passed to a bus input port of width N.
+As with chain fan-out (§6.4), it broadcasts to all lanes.
+
+```rv
+logic MASK(input[4] x, input en, output[4] y) {
+    y = s_and#(W=4)(x, en);        // broadcast en to 4 lanes (bus masking)
+}
+```
+
+The opposite direction, fan-in (passing a bus argument of width >1 to a scalar input port), is not an implicit merge; it is an error.
+To merge, write it explicitly with a chain `x - p;` (§6.4) or a reduction gate (§8.2.1).
+
 The lane list of a slice or a concatenation keeps its §6.3 order and pairs element-wise with the port's ascending lanes `[0..W)`.
 This is the same rule as chaining to a whole bus name: the identity pass is the ascending `x[0:3]` (a partial version of the whole bus `x`), while the descending `x[3:0]` is a bit reversal.
 In a concatenation, the first element corresponds to port lane 0.
@@ -529,7 +541,7 @@ Rules:
 - Only a logic with **exactly one output port** can be nested (receive a multi-output logic with a tuple binding first, then pass the target)
 - Nesting depth is unlimited. The recursion ban (§5.4) is enforced through nested calls as well
 - Generic arguments `#(...)` (§8.4) are allowed on nested calls (`g(h#(W=8)(x))`)
-- The output port and the input port must agree in shape (scalar vs. bus) and width
+- The output port and the input port must agree in shape (scalar vs. bus) and width, except that a scalar output broadcasts to a bus input port of width N (§5.4)
 - `scan()` (§7.8) is not a logic and cannot be nested
 
 The intermediate point has no name, so it cannot be observed with the trace (`-t`) or `monitor`.
@@ -588,7 +600,8 @@ logic AND2(input[4] x1, input[4] x2, output[4] y) {
 
 A bus output port is a homogeneous multi-output (N lanes).
 In `out = g(args...)`, if `out` is a bus var, the binding is lane-correspondent (§7.3).
-Arguments and output destinations must match the port in shape (scalar vs bus) and width; otherwise it is an error.
+Output destinations must match the port in shape (scalar vs bus) and width; otherwise it is an error.
+Arguments must match in width too, except that a width-1 argument broadcasts to a bus input port (§5.4).
 
 ### 6.3 Slice `x[hi:lo]` and Concatenation `{x, y}`
 
@@ -661,6 +674,9 @@ The scalar side may be a scalar point, a single lane `a[k]`, or a width-1 slice 
 The other side may be a whole bus, a slice, or a concatenation (broadcasting kicks in whenever one side has width 1).
 If both sides have width > 1 and they disagree, the connection is an error (`bus[4] - bus[2]`, etc.).
 To wire one specific lane, index it as `name[k]` to make it a scalar.
+
+Call arguments fan out the same way: a width-1 argument passed to a bus input port broadcasts to all lanes (§5.4).
+The fan-in direction (a bus argument into a scalar input port), however, is never implicit in a call; it is an error.
 
 ### 6.5 Bus `reg` with a Component Assignment (Comparator / Repeater)
 
@@ -753,7 +769,7 @@ The binding rules are:
 - The same `(logic-name, argument list)` pair shares a single instance (the target list is not part of the cache key)
 - Argument indices and concatenations are part of the key: `g(x[0])` and `g(x[1])` are distinct instances, and a second call of `g(x[0])` shares the first one (`x[k:k]` is normalized to the same key as `x[k]`, and a single-element concatenation `{x}` to the same key as `x`)
 - Input variables stay bound; output variables are updated every tick
-- Bus ports (§6.2) take a whole bus var of matching shape and width
+- Bus ports (§6.2) take a whole bus var of matching shape and width, or a width-1 argument that broadcasts (§5.4)
 
 Example with bus vars:
 
@@ -763,7 +779,8 @@ y = AND2(x, x);                // Bind a whole bus var to bus ports
 y[0] = NOT(x[3]);              // Bind lanes directly as arg / target
 ```
 
-Scalar ports require scalar vars, bus ports require bus vars; shape or width mismatches are errors.
+A bus port takes a bus var of equal width, or a width-1 argument (a scalar var, a single lane, etc.) that broadcasts to all lanes (§5.4).
+Other width mismatches, and passing a bus var of width >1 to a scalar port (fan-in), are errors.
 Arguments and targets may also be bus var lanes `x[k]` / slices `x[hi:lo]`, or concatenations `{a, b, c[1:0]}` (same rules as §5.4 / §5.5).
 With a concatenation, several scalar vars can be bundled into one bus port (`y = g({a, b, c});`), and a bus output can be distributed over several vars (`{rest, msb} = g(x);`).
 Because the binding is fixed statically before the sim runs, the indices are limited to constant expressions per §6.3.1 (unlike the ordinary lane assignment `x[i] = v`, a runtime var index cannot be used).
@@ -1366,6 +1383,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/bus_slice_concat.rv` | Slice `a[hi:lo]` (bit reversal) and concatenation `{a, b}` (left rotate) |
 | `examples/bus_lane_call.rv` | Lanes / slices directly in logic call arguments and tuple-binding targets (§5.4 / §5.5): a ripple-carry adder in one line per stage |
 | `examples/concat_call.rv` | Concatenations directly in call arguments and bind targets: bundle scalars with `g({a, b, c})`, distribute an output with `{rest, msb} = g(x)` (§5.4 / §7.3) |
+| `examples/call_arg_broadcast.rv` | Broadcast a width-1 argument to a bus input port: mask a bus with a single enable line (§5.4 / §7.3) |
 | `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices (§6.3.1): splitting a bus with `x[W-1:W/2]`, plus `a[N+1]` |
 | `examples/bus_scalar.rv` | Bus-to-scalar wiring: fan-in (MAX merge) and fan-out (broadcast) |
 | `examples/bus_reg_side.rv` | Bus regs with component assignments `reg[4] m = r;` / `reg[4] c = cd;`: wiring `.side` via broadcast / element-wise / lane / slice (§6.5) |

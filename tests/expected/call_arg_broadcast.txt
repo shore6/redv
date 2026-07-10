@@ -1,0 +1,4 @@
+a=0000 en= 0 s=00 | m=0000 g=0000
+a=f0f0 en= 0 s=00 | m=0000 g=f0f0
+a=f0f0 en=15 s=00 | m=f0f0 g=f0f0
+a=f0f0 en=15 s=f0 | m=f0f0 g=ffff
