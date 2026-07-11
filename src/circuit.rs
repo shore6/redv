@@ -127,10 +127,10 @@ pub enum SeqKind {
 #[derive(Debug, Clone)]
 pub struct CSeq {
     pub kind: SeqKind,
-    pub delay: i32,
     pub in_: usize,
     pub out: usize,
-    /// サンプルした(後ろ)入力。front = 最古
+    /// サンプルした(後ろ)入力。front = 最古。遅延段数はこの長さで表現する
+    /// (構築時に段数ぶん 0 を詰める)ので、別途 delay フィールドは持たない。
     pub hist: VecDeque<i32>,
     /// コンパレータの横入力ノード。None なら横入力なし(= side 0)
     pub side_in: Option<usize>,
@@ -328,7 +328,6 @@ impl Circuit {
         }
         self.seqs.push(CSeq {
             kind,
-            delay,
             in_,
             out,
             hist,
@@ -375,7 +374,6 @@ impl Circuit {
         }
         self.seqs.push(CSeq {
             kind,
-            delay: 1,
             in_,
             out,
             hist,
@@ -418,7 +416,6 @@ impl Circuit {
         side_hist.push_back(0);
         self.seqs.push(CSeq {
             kind: SeqKind::Rep,
-            delay,
             in_,
             out,
             hist,
