@@ -366,7 +366,6 @@ pub struct ModuleDef {
 #[derive(Debug, Default)]
 pub struct Program {
     pub defines: HashMap<String, i64>,
-    pub str_defines: HashMap<String, String>,
     pub logics: HashMap<String, LogicDef>,
     pub modules: Vec<ModuleDef>,
     /// 既に取り込んだバンドル stdlib 名(`#include "stdlogic"` の重複取り込み防止用)。

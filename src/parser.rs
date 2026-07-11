@@ -4,7 +4,7 @@
 //! `Program` は各メソッドに `&mut` 引数として渡す(構造体に保持しない)。
 
 use crate::ast::*;
-use crate::diag::{fail, fail_at, warn, RvResult};
+use crate::diag::{fail, fail_at, RvResult};
 use crate::lexer::{Lexer, Tk, Token};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -162,36 +162,11 @@ impl Parser {
         let d = self.expect_ident("directive name after '#'")?;
         if d == "define" {
             let name = self.expect_ident("define name")?;
-            if name == "MODE" {
-                // MODE は将来のモード切替え用の予約名で、識別子のみ受理する。
-                let v = match self.cur().k {
-                    Tk::Ident => {
-                        let s = self.cur().s.clone();
-                        self.i += 1;
-                        s
-                    }
-                    _ => {
-                        return fail(
-                            ln,
-                            "#define MODE expects an identifier (e.g. 'element')",
-                        );
-                    }
-                };
-                if v != "element" {
-                    warn(
-                        ln,
-                        format!("MODE '{}' is not implemented yet; using element mode", v),
-                    );
-                } else {
-                    prog.str_defines.insert(name, v);
-                }
-            } else {
-                // 値は定数式(リテラル・他の数値 define / param ・`+ - * / %`・単項・括弧)。
-                let e = self.parse_expr()?;
-                let v = self.eval_const(&e)?;
-                self.consts.insert(name.clone(), v);
-                prog.defines.insert(name, v);
-            }
+            // 値は定数式(リテラル・他の数値 define / param ・`+ - * / %`・単項・括弧)。
+            let e = self.parse_expr()?;
+            let v = self.eval_const(&e)?;
+            self.consts.insert(name.clone(), v);
+            prog.defines.insert(name, v);
         } else if d == "include" {
             let fn_;
             match self.cur().k {

@@ -1328,19 +1328,20 @@ fn define_expr_unknown_const_is_error() {
     assert!(stderr.contains("unknown constant"), "unexpected stderr:\n{stderr}");
 }
 
-/// `#define MODE` は引き続き ident のみ受理する(将来のモード切替え用予約名, issue #49)。
+/// `MODE` の予約は廃止され、通常の数値 define 名として扱う(issue #129)。
 #[test]
-fn define_mode_keeps_ident_path() {
-    // 'element' は受理、'logic' は警告だが続行
-    let src = "#define MODE element\nmodule m{ var a; sim{ a=0; } }";
-    let (code, stderr) = run_source("define_mode_ok", src);
+fn define_mode_is_ordinary_name() {
+    // 数値定数として合法
+    let src = "#define MODE 3\nmodule m{ var a; sim{ a=MODE; ?monitor(\"%\", a); #1 } }";
+    let (code, stderr) = run_source("define_mode_num", src);
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
     assert!(stderr.is_empty(), "no warning expected, stderr:\n{stderr}");
 
-    let src = "#define MODE logic\nmodule m{ var a; sim{ a=0; } }";
-    let (code, stderr) = run_source("define_mode_warn", src);
-    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
-    assert!(stderr.contains("MODE 'logic'"), "unexpected stderr:\n{stderr}");
+    // 旧記法 `#define MODE element` は未定義参照の一般エラーに落ちる
+    let src = "#define MODE element\nmodule m{ var a; sim{ a=0; } }";
+    let (code, stderr) = run_source("define_mode_old", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(stderr.contains("unknown constant"), "unexpected stderr:\n{stderr}");
 }
 
 /// `--json` モード(issue #49): monitor を JSONL `{"time":N,"values":[...],"fmt":"..."}`
