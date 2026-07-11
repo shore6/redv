@@ -578,7 +578,8 @@ phase 1(出力)と phase 4(期待出力 = 据え置き)の **両方** で `rep_l
   (回帰ゼロ)を先にマージし、後者の破壊的差分を小さく保つ。`closes #N` は最終 Phase の PR に付ける。
 - **妥当性判定は parser でなく interp に寄せる**(§3.2)。新記法が parser を触らず interp の分岐追加で
   済むことが多い。
-- **clippy はグリーンを保つ。** 自分の変更が増やした警告を出さない(CI は `-D warnings` 無し)。
+- **clippy はグリーンを保つ。** CI が `cargo clippy --all-targets -- -D warnings` で警告をエラー扱い
+  するため(issue #108)、警告が 1 つでもあるとマージできない。
   AST の未使用 `line` は「全ノードがソース行を持つ」規約として `#[allow(dead_code)]` で保持する
   (issue #68。未使用の `has_sim` は削除済み)。冗長だった `CSeq.delay` は削除済みで、
   遅延段数は `hist` の長さで表現する(issue #69)。

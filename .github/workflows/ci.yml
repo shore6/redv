@@ -31,7 +31,5 @@ jobs:
       - name: Test
         run: cargo test --verbose
 
-      # 既存の警告(dead_code / type_complexity)があるため -D warnings は付けない。
-      # 回帰の砦は cargo test。clippy はあくまで参考情報として出力する。
       - name: Clippy
-        run: cargo clippy --verbose
+        run: cargo clippy --all-targets --verbose -- -D warnings
