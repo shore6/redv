@@ -100,7 +100,6 @@ For details, see §3 (qualifiers and initialization), §4 (component notation), 
 | `reg` | A point. A single component can be assigned to it (§3) |
 | `reg[N] a;` | A bus (N parallel lanes, §6) |
 | `const reg n = 15;` | A fixed-strength constant (initialization with a number 0–15 is required, §3) |
-| `mutable reg n = d;` | The component is fixed; the value changes as the circuit runs (§3) |
 | `var` | An integer variable for testbenches; usable only in `sim`, not embeddable in a circuit |
 | `param NAME = <const-expr>;` | A top-level integer constant (§8.3) |
 
@@ -128,7 +127,8 @@ A `var` lives in a separate namespace from chains, so this constraint does not a
 ## 3. Qualifiers and Initialization
 
 A `reg` declaration accepts a qualifier and an initializer.
-The three combinations differ in how much of "the component and the value" is fixed.
+There are two forms, plain (no qualifier) and `const`, differing in how much of "the component and the value" is fixed.
+There used to be a `mutable` qualifier that fixed only the component, but it behaved identically to plain and was removed (issue #142).
 
 ### 3.1 plain (no qualifier)
 
@@ -153,20 +153,12 @@ A `const reg` is a fixed-strength constant whose value never changes.
 Initialization with a number from 0 to 15 is required, and values outside that range are errors (§10).
 The old forms with an element token after the number (`15b` / `3d`) were removed together with the block element (issue #75).
 
-### 3.3 mutable
-
-```rv
-mutable reg n = d;     // Component is fixed (dust), value follows the circuit
-```
-
-A `mutable reg` fixes the component while still letting the value follow the circuit's drive.
-
-### 3.4 Constraints on Comparator and Repeater `reg`
+### 3.3 Constraints on Comparator and Repeater `reg`
 
 `reg cmp = cd;` and `reg m = r;` are special declarations that create a *named point* for a comparator or a lockable repeater (§5.3).
 This form carries the following restrictions.
 
-- Only the plain qualifier is allowed (`const` / `mutable` are not)
+- Only the plain qualifier is allowed (`const` is not)
 - A strength literal cannot be attached
 - It must be initialized at declaration time (`reg cmp; cmp = cd;` after-the-fact assignment is not allowed)
 
@@ -403,8 +395,8 @@ Side inputs of comparator and repeater regs share the following constraints.
 
 - Using `.side` at the chain's start (as a signal source) is an error (side is input-only)
 - Attaching `.side` to a reg that is neither a comparator nor a repeater is an error
-- Only the plain qualifier is allowed; strength literals, `const`, and `mutable` are not (§3.4)
-- Initialization at declaration is required (`reg cmp; cmp = cd;` after-the-fact assignment is not allowed, §3.4)
+- Only the plain qualifier is allowed; strength literals and `const` are not (§3.3)
+- Initialization at declaration is required (`reg cmp; cmp = cd;` after-the-fact assignment is not allowed, §3.3)
 
 In the bus declaration `reg[W] m = r;`, these three endpoints are expanded per lane (§6.5).
 
@@ -702,14 +694,14 @@ Chain endpoints are interpreted exactly as for a scalar named point: an unadorne
 This makes W parallel repeaters sharing one lock line (the storage of a W-bit register) or a lane-wise bus subtraction (`reg[W] c = cd;` plus an equal-width side) a single declaration.
 Lanes whose side is left unconnected behave as side = 0, just like the scalar form (repeaters stay unlocked; comparators pass through).
 
-The restrictions are the same as for scalar named points (§3.4, §5.3.3):
+The restrictions are the same as for scalar named points (§3.3, §5.3.3):
 plain only, initialization at declaration only, and `r0`, strength literals, and components other than comparators / repeaters are rejected.
 
 ### 6.6 Currently Unsupported Items
 
 The following are kept for future extension and are errors or unsupported at present.
 
-- `const` / `mutable` bus declarations, and initializers other than the component assignment of §6.5
+- `const` bus declarations, and initializers other than the component assignment of §6.5
 - Component assignments on a bus reg beyond the forms of §6.5 (post-declaration `s = d;`, components other than comparators / repeaters, strength literals)
 - Buses in wire sequences, the `wire[N]` syntax
 
@@ -1255,7 +1247,7 @@ Unrecoverable conditions raise errors and halt; recoverable conditions print war
 | Argument count mismatch | Caught at logic instantiation |
 | `c` alone, `r5` or higher | Validity of component notation |
 | Name collides with a component name | `r` / `cd` / `td`, etc. (§2.2) |
-| After-the-fact assignment to a repeater or comparator reg | `reg m; m = r;` (must initialize at declaration; §3.4) |
+| After-the-fact assignment to a repeater or comparator reg | `reg m; m = r;` (must initialize at declaration; §3.3) |
 | `.side` on an unsupported reg or at a source end | Side is input-only; only cmp / r* support it |
 | `#init` exceeds `INIT_TIMEOUT` | Oscillation, or a never-satisfied condition |
 | `#until(cond)` exceeds the timeout | Same |

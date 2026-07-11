@@ -1464,7 +1464,7 @@ impl<'p> Elaborator<'_, 'p> {
                         if *qual != Qual::Plain {
                             return fail(
                                 *line,
-                                "a bus reg must be plain (const/mutable not supported yet)",
+                                "a bus reg must be plain (const not supported yet)",
                             );
                         }
                         let w = resolve_width(we, &param_env, self.defines, *line)?;
@@ -1578,7 +1578,7 @@ impl<'p> Elaborator<'_, 'p> {
                         if *qual != Qual::Plain {
                             return fail(
                                 *line,
-                                "comparator reg must be plain (const/mutable not allowed)",
+                                "comparator reg must be plain (const not allowed)",
                             );
                         }
                         if ri.strength >= 0 {
@@ -1607,7 +1607,7 @@ impl<'p> Elaborator<'_, 'p> {
                         if *qual != Qual::Plain {
                             return fail(
                                 *line,
-                                "repeater reg must be plain (const/mutable not allowed)",
+                                "repeater reg must be plain (const not allowed)",
                             );
                         }
                         if ri.strength >= 0 {

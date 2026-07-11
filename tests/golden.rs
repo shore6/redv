@@ -661,29 +661,42 @@ fn seq_reg_declaration_init_is_accepted() {
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
-/// 裸数値初期化は const 専用(issue #75, Phase 1)。plain / mutable reg に
+/// 裸数値初期化は const 専用(issue #75, Phase 1)。plain reg に
 /// 数値だけを与えると素子接尾字形と同じメッセージで停止する。
 #[test]
 fn bare_strength_on_non_const_is_error() {
-    for (tag, src) in [
-        (
-            "bare_plain",
-            "logic g(input a, output y){ reg n = 15; a-t-y; }\n\
-             module t{ var u,v; sim{ u=0; v=g(u); #init } }",
-        ),
-        (
-            "bare_mutable",
-            "logic g(input a, output y){ mutable reg n = 15; a-t-y; }\n\
-             module t{ var u,v; sim{ u=0; v=g(u); #init } }",
-        ),
-    ] {
-        let (code, stderr) = run_source(tag, src);
-        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
-        assert!(
-            stderr.contains("signal-strength literals are only allowed on const reg"),
-            "{tag}: unexpected stderr:\n{stderr}"
-        );
-    }
+    let src = "logic g(input a, output y){ reg n = 15; a-t-y; }\n\
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("bare_plain", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("signal-strength literals are only allowed on const reg"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
+/// `mutable` 修飾子は廃止(issue #142)。`mutable reg` は plain への移行を
+/// 案内するエラーで停止する。
+#[test]
+fn mutable_reg_is_removed_with_guidance() {
+    let src = "logic g(input a, output y){ mutable reg n = d; a-n-y; }\n\
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("mutable_removed", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("'mutable' was removed; a plain reg behaves the same"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
+/// `mutable` は修飾子の廃止(issue #142)で予約が解け、通常の識別子として
+/// reg 宣言・チェーン端点に使える(素子削除で予約名が解放された #75 と同じ構図)。
+#[test]
+fn mutable_is_usable_as_identifier() {
+    let src = "logic g(input a, output y){ reg mutable; a - mutable; mutable - t - y; }\n\
+               module t{ var u,v; sim{ u=0; v=g(u); #init } }";
+    let (code, stderr) = run_source("mutable_ident", src);
+    assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
 /// 裸数値初期化も強度の範囲(0-15)を検査する(issue #75, Phase 1)。
