@@ -47,12 +47,11 @@ pub struct RegInit {
     pub tok: Option<String>,
 }
 
-/// 修飾子: plain / const / mutable
+/// 修飾子: plain / const(`mutable` は plain と等価だったため廃止。issue #142)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Qual {
     Plain,
     Const,
-    Mutable,
 }
 
 /// レーン / スライスの添字。`Lit(k)` は parse 時に解決済みのリテラル(既存挙動)。

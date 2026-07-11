@@ -718,9 +718,17 @@ impl Parser {
         if self.is_ident("const") {
             qual = Qual::Const;
             self.i += 1;
-        } else if self.is_ident("mutable") {
-            qual = Qual::Mutable;
-            self.i += 1;
+        } else if self.is_ident("mutable")
+            && self.peek(1).k == Tk::Ident
+            && self.peek(1).s == "reg"
+        {
+            // `mutable` 修飾子は plain と等価だったため廃止(issue #142)。
+            // `mutable reg` の並びに限って移行先を案内する。単独の `mutable` は
+            // 通常の識別子(reg/wire 名やチェーン端点)として扱う。
+            return fail(
+                ln,
+                "'mutable' was removed; a plain reg behaves the same (write 'reg n = d;')",
+            );
         }
 
         if self.is_ident("reg") {
@@ -751,7 +759,7 @@ impl Parser {
                     init = Some(RegInit { strength, tok });
                 }
                 if width.is_some() && qual != Qual::Plain {
-                    return fail(ln, "a bus reg must be plain (const/mutable not supported yet)");
+                    return fail(ln, "a bus reg must be plain (const not supported yet)");
                 }
                 stmts.push(LogicStmt::DeclReg {
                     line: ln,
@@ -771,7 +779,7 @@ impl Parser {
         }
 
         if qual != Qual::Plain {
-            return fail(ln, "'const'/'mutable' must be followed by 'reg'");
+            return fail(ln, "'const' must be followed by 'reg'");
         }
 
         // 先頭の端点を読む(スカラ / バス全体 / レーン / スライス / 連結)。
