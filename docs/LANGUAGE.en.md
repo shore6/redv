@@ -1119,6 +1119,10 @@ Declaration and call rules:
 - Actual arguments are evaluated in the caller scope and may reference top-level `param` / numeric `#define`, **plus** the caller logic's own generic params (so values pass through hierarchies)
 - It is an error to instantiate a param that has neither a default nor an actual argument
 
+The `#(...)` notation shares the symbol `#` with the time controls `#init` / `#n` (§7.2), but there is no syntactic ambiguity.
+A time control `#` stands alone at the head of a sim statement, while a generic `#(` immediately follows an identifier, so the position always tells them apart.
+This dual use follows Verilog, which likewise uses `#` for both delay control (`#10`) and parameter override (`#(...)`) (issue #135).
+
 Inside the logic body, declared params can be used in width expressions such as `input[W]` or `reg[W+1]`, and in lane / slice indices such as `x[W-1]` or `x[W-1:W/2]` (§6.3.1).
 Expressions that reference a generic param are deferred to instantiation time and resolved per instance.
 Width expressions that do not reference any generic param (`input[4]`, `reg[5]`) are still resolved at parse time and behave exactly as before.
