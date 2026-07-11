@@ -210,6 +210,9 @@ pub enum LogicStmt {
 #[derive(Debug, Clone)]
 pub struct LogicDef {
     pub name: String,
+    /// 定義行。診断ではまだ未使用だが「全ノードがソース行を持つ」規約として保持
+    /// (`Elem.line` も未使用期間を経て診断で使われるようになった。issue #68)。
+    #[allow(dead_code)]
     pub line: i32,
     pub ports: Vec<Port>,
     pub stmts: Vec<LogicStmt>,
@@ -311,6 +314,8 @@ pub enum SimStmt {
         fmt: Option<String>,
     },
     WaitTicks {
+        /// 「全ノードがソース行を持つ」規約として保持(issue #68。`LogicDef::line` 参照)。
+        #[allow(dead_code)]
         line: i32,
         ticks: i64,
     },
@@ -333,6 +338,8 @@ pub enum SimStmt {
         call: CallData,
     },
     If {
+        /// 「全ノードがソース行を持つ」規約として保持(issue #68。`LogicDef::line` 参照)。
+        #[allow(dead_code)]
         line: i32,
         cond: Expr,
         body: Vec<SimStmt>,
@@ -355,12 +362,13 @@ pub enum SimStmt {
 #[derive(Debug, Clone)]
 pub struct ModuleDef {
     pub name: String,
+    /// 「全ノードがソース行を持つ」規約として保持(issue #68。`LogicDef::line` 参照)。
+    #[allow(dead_code)]
     pub line: i32,
     /// sim 外の var 宣言
     pub pre: Vec<SimStmt>,
     /// sim ブロック本体(複数ブロックは連結)
     pub sim: Vec<SimStmt>,
-    pub has_sim: bool,
 }
 
 #[derive(Debug, Default)]
