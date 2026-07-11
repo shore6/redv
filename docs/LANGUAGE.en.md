@@ -949,7 +949,6 @@ In tests, fixing the input with `redv foo.rv < input.txt` gives a deterministic,
 #define BURNOUT_LIMIT 8        // Torch burnout: max toggles within the window (default 8)
 #define BURNOUT_WINDOW 30      // ...the window (default 30 ticks)
 #define BURNOUT_COOLDOWN 30    // ...the forced-OFF period (default 30 ticks)
-#define MODE element           // Component-level mode (logic-level mode is future work)
 ```
 
 Numeric `#define`s share a single table with `param` (§8.3) and can be referenced by name in bus widths and sim expressions.
@@ -963,7 +962,6 @@ The value accepts the same constant expression as `param`: literals, earlier `#d
 #define ONES (0b1111)          // Mixed with binary / hex literals (§1.3)
 ```
 
-Only `MODE` is reserved for future mode switching and still takes an identifier value (anything other than `element` warns).
 Referencing an undefined name or dividing by zero is an error.
 
 ### 8.2 `#include`

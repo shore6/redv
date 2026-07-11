@@ -990,7 +990,6 @@ EOF(入力切れ)や非数値はエラーとなる。
 #define BURNOUT_LIMIT 8        // トーチ焼き切れ:窓内トグル回数(既定 8)
 #define BURNOUT_WINDOW 30      // 同:監視窓(既定 30 tick)
 #define BURNOUT_COOLDOWN 30    // 同:強制 OFF 期間(既定 30 tick)
-#define MODE element           // 素子レベルモード(logic モードは将来対応)
 ```
 
 数値の `#define` はバス幅や sim 式から名前で参照できる(`param` と同じ表に入る、§8.3)。
@@ -1005,7 +1004,6 @@ EOF(入力切れ)や非数値はエラーとなる。
 #define ONES (0b1111)          // 2 進 / 16 進リテラルとの混在(§1.3)
 ```
 
-`MODE` のみは将来のモード切替え用の予約名で、識別子値だけを受理する(`element` 以外は警告)。
 未定義の名前を参照したり、ゼロ除算するとエラーとなる。
 
 ### 8.2 `#include`
