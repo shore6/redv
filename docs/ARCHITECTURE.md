@@ -578,8 +578,10 @@ phase 1(出力)と phase 4(期待出力 = 据え置き)の **両方** で `rep_l
   (回帰ゼロ)を先にマージし、後者の破壊的差分を小さく保つ。`closes #N` は最終 Phase の PR に付ける。
 - **妥当性判定は parser でなく interp に寄せる**(§3.2)。新記法が parser を触らず interp の分岐追加で
   済むことが多い。
-- **既存の警告は追わない。** `dead_code`(未使用 `line`/`delay`/`has_sim` フィールド)や `type_complexity`
+- **既存の警告は追わない。** `dead_code`(未使用 `CSeq.delay` フィールド)や `type_complexity`
   (`elaborate` の戻り値型)は既存のもの。自分の変更が増やした警告だけ気にする(CI も `-D warnings` 無し)。
+  AST の未使用 `line` は「全ノードがソース行を持つ」規約として `#[allow(dead_code)]` で保持する
+  (issue #68。未使用の `has_sim` は削除済み)。
 - **ゲームの固有名はコード・ドキュメントに書かない**(公式とは無関係)。必要なら「ゲーム」と表記する。
   ゲームとの差異(0tick リピータ・ロック条件の緩さ等)は LANGUAGE.md に「ゲームとの差異」として残す。
 

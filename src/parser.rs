@@ -1054,7 +1054,6 @@ impl Parser {
         self.expect_punct("{")?;
         let mut pre = Vec::new();
         let mut sim = Vec::new();
-        let mut has_sim = false;
         while !self.is_punct("}") {
             if self.is_ident("var") {
                 pre.push(self.parse_var_decl()?);
@@ -1065,19 +1064,12 @@ impl Parser {
                     sim.push(self.parse_sim_stmt()?);
                 }
                 self.expect_punct("}")?;
-                has_sim = true;
             } else {
                 return self.err_cur("expected 'var' or 'sim' in module body");
             }
         }
         self.expect_punct("}")?;
-        prog.modules.push(ModuleDef {
-            name,
-            line,
-            pre,
-            sim,
-            has_sim,
-        });
+        prog.modules.push(ModuleDef { name, line, pre, sim });
         Ok(())
     }
 
