@@ -276,6 +276,19 @@ fn unknown_stdlib_is_file_error() {
     );
 }
 
+/// 引用符なしの `#include stdlogic` は受理しない(issue #111)。
+/// 引用符付きの形を案内するエラーで停止する。
+#[test]
+fn unquoted_include_is_error() {
+    let src = "#include stdlogic\nmodule m{ var a; sim{ a=0; } }";
+    let (code, stderr) = run_source("unquoted_include", src);
+    assert_eq!(code, Some(1), "expected failure, stderr:\n{stderr}");
+    assert!(
+        stderr.contains("#include expects a quoted file name: #include \"stdlogic\""),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
 /// チェーン文で 2 経路を同じ点に合流(max)。
 #[test]
 fn chain_mixed() {

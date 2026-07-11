@@ -170,11 +170,23 @@ impl Parser {
         } else if d == "include" {
             let fn_;
             match self.cur().k {
-                Tk::Str | Tk::Ident => {
+                Tk::Str => {
                     fn_ = self.cur().s.clone();
                     self.i += 1;
                 }
-                _ => return fail(ln, "#include expects a file name"),
+                // 引用符なしの Ident(`#include stdlogic`)は受理しない。識別子の
+                // 字句規則に合う名前しか書けず、書ける名前の境界を仕様が背負うことに
+                // なるため、1.0 で仕様面を最小にする方針に合わせ Str に限定した(issue #111)。
+                Tk::Ident => {
+                    return fail(
+                        ln,
+                        format!(
+                            "#include expects a quoted file name: #include \"{}\"",
+                            self.cur().s
+                        ),
+                    )
+                }
+                _ => return fail(ln, "#include expects a quoted file name"),
             }
             // バンドル済み stdlib (`stdlogic` 等) は埋め込みソースから読む。
             // 同じ stdlib を 2 度 include しても 2 度目以降は no-op で重複定義エラーを避ける。

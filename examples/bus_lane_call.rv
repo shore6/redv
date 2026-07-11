@@ -8,7 +8,7 @@
  *  - sim 側でも同じ記法が使える。インスタンス共有キーは添字を含む
  *    (s_or(a[0], b[0]) と s_or(a[1], b[1]) は別インスタンス)。
  */
-#include stdlogic
+#include "stdlogic"
 
 logic HALF_ADDER(input a, input b, output sum, output carry)
 {
