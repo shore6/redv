@@ -710,9 +710,8 @@ plain only, initialization at declaration only, and `r0`, strength literals, and
 The following are kept for future extension and are errors or unsupported at present.
 
 - `const` / `mutable` bus declarations, and initializers other than the component assignment of §6.5
-- Buses on the left or right side of a component assignment (`a = 15r` etc.)
+- Component assignments on a bus reg beyond the forms of §6.5 (post-declaration `s = d;`, components other than comparators / repeaters, strength literals)
 - Buses in wire sequences, the `wire[N]` syntax
-- Tuple binding of heterogeneous multi-outputs
 
 ---
 
@@ -911,6 +910,9 @@ x = 10 ~ 3;                    // Hold x = 10 for 3 ticks, then x = 0
 `w` is an integer ≥ 1 (an expression is fine; it is evaluated at assignment time).
 The tick count covers any ticks the sim executes (`#n` / `wait(n)` / `#init`).
 
+The target must be a scalar var or a lane of a bus var (`x[0] = v ~ w;`).
+A pulse assignment to a whole bus var is an error.
+
 A regular assignment to the same var before the deadline cancels the pending pulse.
 A new pulse assignment replaces the previous deadline with the new width.
 
@@ -935,6 +937,23 @@ Duty ratio and initial phase are future extensions (`examples/clock_sugar.rv`).
 `v = scan()` reads one integer (separated by whitespace or newline) from stdin and assigns it to `v`.
 EOF (input exhaustion) or a non-numeric token is an error.
 Variables bound to the circuit are clamped to 0–15 after reading.
+
+The target must be a scalar var.
+Targeting a whole bus var, a lane / slice, or a concatenation (`{x, y}`) is an error.
+`scan()` also cannot be nested as an argument of a logic call.
+
+Passing a format string selects the input radix (symmetric with monitor's output formats).
+The format must be exactly one `%[bxo]?`; literal characters and width specifiers are not accepted.
+
+| Form | Input radix |
+|---|---|
+| `scan()` / `scan("%")` | Decimal |
+| `scan("%b")` | Binary |
+| `scan("%x")` | Hexadecimal (`a`–`f` / `A`–`F` both OK) |
+| `scan("%o")` | Octal |
+
+In every radix, a leading `-` or `+` is read as a sign.
+The token ends at the first character that does not belong to the radix (`scan("%x")` reading `ff\n` returns `255` and leaves the newline for the next `scan`).
 
 In tests, fixing the input with `redv foo.rv < input.txt` gives a deterministic, reproducible run.
 
@@ -1224,6 +1243,7 @@ Unrecoverable conditions raise errors and halt; recoverable conditions print war
 | An out-of-range var was passed as a circuit input | Rounded to 0 or 15; warned once per variable |
 | Reassignment of a wire or reg element | Last assignment is taken; a warning is emitted |
 | Torch burnout | Toggle count in the window exceeded; forced OFF for the cooldown |
+| No module in the program | `no module to run`; exits normally without running anything |
 
 ### 10.2 Errors (execution halts)
 
@@ -1314,11 +1334,11 @@ This favors textual-description simplicity over the source-component check.
 
 The game has no true 0-tick repeater (a delay of 1 is the minimum).
 redv provides `r0` as an extension for "building higher-performance circuits in text" (issue #37).
-0-tick variants of torch or comparator are non-monotone (inversion or subtraction), so they would require a combinational-loop detector and an extension to the engine; they are tracked separately.
+redv has no 0-tick torch or comparator (§11.7).
 
 ### 11.5 Observer Watches Input Signal Changes
 
-The game's observer fires on block-state updates and has spatial properties (orientation, QC quasi-wiring, output face).
+The game's observer fires on block-state updates and has spatial properties (orientation, quasi-connectivity (QC), output face).
 redv works at the component level and watches only input-signal changes (no orientation, no QC).
 
 Also, the game's observer comes in a single kind that detects every change; it has no edge-condition variants.
@@ -1329,6 +1349,24 @@ Also, the game's observer comes in a single kind that detects every change; it h
 In the game, a block is a conductor that passes power while distinguishing weak from strong power, and it plays spatial roles such as mounting torches and carrying signals through walls.
 redv has no spatial dimension in its "connect any two points with a component sequence" abstraction, so these roles are covered by writing the connections themselves.
 redv used to provide `b` as a binarizing component (15 when input `> 0`), but the 0-tick repeater `r0` (§4.3) computes the same combinational function, so the block component was removed (issue #75).
+
+### 11.7 No Time Finer than a Tick
+
+The smallest unit of time is one redstone tick (§9.1).
+The game runs game ticks at twice that resolution inside it, and there are techniques that exploit component update phases to create pulses shorter than one redstone tick; redv supports neither game-tick components nor sub-tick pulses.
+Switching to an engine that follows the game's tick granularity is future work (issue #8).
+
+Among 0-tick components, only the repeater exists, as an extension (§11.4).
+0-tick torches and comparators are not provided: inversion and subtraction are non-monotone in their input, so they would require an engine extension with combinational-loop detection (issue #38).
+
+### 11.8 No Behavior Derived from Space
+
+A redv circuit is a graph of points and connections; it has no spatial notions such as block placement, orientation, or adjacency.
+Consequently, game behaviors that stem from spatial placement, such as quasi-connectivity (QC) and block-update propagation, are not modeled (issue #8).
+The absence of dust shapes (§11.1), observer orientation and output faces (§11.5), and block conduction (§11.6) are individual instances of the same reason.
+
+The comparator side input likewise does not distinguish the left and right faces; it is a single side point with MAX merging.
+The game also takes the max of the left and right sides, so the observable result is the same (§5.3.1).
 
 ---
 
