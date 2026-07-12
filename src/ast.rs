@@ -40,10 +40,13 @@ pub enum WidthExpr {
 }
 
 /// reg 宣言の初期化子。`strength == -1` は信号強度未指定。
-/// `tok == None` は素子トークンを伴わない裸数値初期化(`const reg n = 15;`)。
+/// `tok == None` は素子トークンを伴わない裸数値初期化(`const reg n = 15;`、
+/// バスなら `const reg[W] n = 0x3808;` のニブル分解、issue #140)。
+/// `i64` なのは、バス幅 16(64 bit)までの裸数値をそのまま保持するため
+/// (スカラは 0-15 の範囲チェックが別途入るので i32 で足りるが、フィールドは共有)。
 #[derive(Debug, Clone)]
 pub struct RegInit {
-    pub strength: i32,
+    pub strength: i64,
     pub tok: Option<String>,
 }
 

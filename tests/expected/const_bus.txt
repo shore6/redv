@@ -1,0 +1,3 @@
+lit_y=87654321 (round-trip of 0x87654321)
+x=0000 thr_y=0000
+x=ffff thr_y=77f7

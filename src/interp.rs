@@ -982,7 +982,7 @@ impl<'p> Elaborator<'_, 'p> {
         node_id: usize,
         name: &str,
         tok: &str,
-        strength: i32,
+        strength: i64,
         qual: Qual,
         line: i32,
     ) -> RvResult<()> {
@@ -1066,7 +1066,7 @@ impl<'p> Elaborator<'_, 'p> {
     fn apply_bare_strength(
         &mut self,
         node_id: usize,
-        strength: i32,
+        strength: i64,
         qual: Qual,
         line: i32,
     ) -> RvResult<()> {
@@ -1082,7 +1082,7 @@ impl<'p> Elaborator<'_, 'p> {
         let root = self.c.find(node_id);
         let nd = &mut self.c.nodes[root];
         nd.kind = NodeKind::Const;
-        nd.base = strength;
+        nd.base = strength as i32;
         nd.is_const_qual = true;
         nd.elem_assigned = true;
         Ok(())
@@ -1461,96 +1461,150 @@ impl<'p> Elaborator<'_, 'p> {
                     // バス reg(`reg[n] a;`): n 本の plain レーン a[0]..a[n-1] を展開する。
                     // バスは純粋な糖衣で、各レーンは独立したスカラ点(circuit 意味論は不変)。
                     if let Some(we) = width {
-                        if *qual != Qual::Plain {
-                            return fail(
-                                *line,
-                                "a bus reg must be plain (const not supported yet)",
-                            );
-                        }
                         let w = resolve_width(we, &param_env, self.defines, *line)?;
-                        // 素子代入つきバス reg(`reg[W] m = r;` / `cc` / `cd`、issue #95):
-                        // レーンごとに back/side/out の 3 ノード束を展開し、バス named point
-                        // として登録する(out レーンは buses、(backs, sides) は bus_side_regs)。
+                        // qual と初期化子の組み合わせは種類ごとに interp が判定する
+                        // (parser は汎用的に受理するだけ):
+                        //   - 素子代入(`= r` / `= cc` / `= cd`)は plain 限定(issue #95)。
+                        //   - 裸数値初期化(`= 0x3808` 等)は const 限定、ニブル分解で
+                        //     レーンごとの const reg を展開する(issue #140)。
                         if let Some(ri) = init {
-                            if ri.strength >= 0 {
-                                return fail(
-                                    *line,
-                                    "a bus reg cannot take a signal strength; only a comparator/\
-                                     repeater element assignment is allowed (e.g. `reg[4] m = r;`)",
-                                );
-                            }
-                            let tok = ri.tok.as_deref().unwrap(); // strength < 0 なら必ず Some
-                            let comp_kind = comparator_mode(tok, *line)?;
-                            let rep_delay = if comp_kind.is_none() {
-                                repeater_delay(tok, *line)?
+                            if let Some(tok) = ri.tok.as_deref() {
+                                // 素子代入つきバス reg(`reg[W] m = r;` / `cc` / `cd`、issue #95):
+                                // レーンごとに back/side/out の 3 ノード束を展開し、バス named
+                                // point として登録する(out レーンは buses、(backs, sides) は
+                                // bus_side_regs)。
+                                if *qual != Qual::Plain {
+                                    return fail(
+                                        *line,
+                                        "a bus reg initializer with a comparator/repeater element \
+                                         must be plain (e.g. `reg[4] m = r;`); for a const bus use \
+                                         a bare literal (e.g. `const reg[4] n = 0x3808;`)",
+                                    );
+                                }
+                                let comp_kind = comparator_mode(tok, *line)?;
+                                let rep_delay = if comp_kind.is_none() {
+                                    repeater_delay(tok, *line)?
+                                } else {
+                                    None
+                                };
+                                if comp_kind.is_none() && rep_delay.is_none() {
+                                    return fail(
+                                        *line,
+                                        format!(
+                                            "a bus reg initializer must be a comparator or repeater \
+                                             element (cc/cd/r/r1-r4): \"{}\"",
+                                            tok
+                                        ),
+                                    );
+                                }
+                                if rep_delay == Some(0) {
+                                    return fail(
+                                        *line,
+                                        format!(
+                                            "a 0-tick repeater (r0) cannot be a lockable reg; place \
+                                             it inline in a chain (e.g. 'x - r0 - {};')",
+                                            name
+                                        ),
+                                    );
+                                }
+                                let mut backs = Vec::with_capacity(w as usize);
+                                let mut sides = Vec::with_capacity(w as usize);
+                                let mut outs = Vec::with_capacity(w as usize);
+                                for i in 0..w {
+                                    let back = self.c.new_node(
+                                        format!("{}.{}[{}]#back", prefix, name, i),
+                                        NodeKind::Plain,
+                                    );
+                                    let side = self.c.new_node(
+                                        format!("{}.{}[{}]#side", prefix, name, i),
+                                        NodeKind::Plain,
+                                    );
+                                    let out = self.c.new_node(
+                                        format!("{}.{}[{}]", prefix, name, i),
+                                        NodeKind::Plain,
+                                    );
+                                    let label = format!("{}.{}[{}]", prefix, name, i);
+                                    if let Some(ck) = comp_kind {
+                                        self.c.add_comp(ck, back, Some(side), out, label, *line);
+                                    } else {
+                                        self.c.add_rep_lock(
+                                            rep_delay.unwrap(),
+                                            back,
+                                            side,
+                                            out,
+                                            label,
+                                            *line,
+                                        );
+                                    }
+                                    backs.push(back);
+                                    sides.push(side);
+                                    outs.push(out);
+                                }
+                                buses.insert(name.clone(), outs);
+                                bus_side_regs.insert(name.clone(), (backs, sides));
                             } else {
-                                None
-                            };
-                            if comp_kind.is_none() && rep_delay.is_none() {
-                                return fail(
-                                    *line,
-                                    format!(
-                                        "a bus reg initializer must be a comparator or repeater \
-                                         element (cc/cd/r/r1-r4): \"{}\"",
-                                        tok
-                                    ),
-                                );
+                                // 裸数値初期化(ニブル分解、issue #140): const バス限定。
+                                // monitor のバス→整数パッキング(lane[0] が最下位ニブル、
+                                // §7.4.1)の逆演算として、1 レーン = 1 nibble(0-15)に分解する。
+                                if *qual != Qual::Const {
+                                    return fail(
+                                        *line,
+                                        "a bus reg cannot take a signal strength; only a \
+                                         comparator/repeater element assignment is allowed on a \
+                                         plain bus reg (e.g. `reg[4] m = r;`), or declare it const \
+                                         for a literal initializer (e.g. `const reg[4] n = \
+                                         0x3808;`)",
+                                    );
+                                }
+                                if w > 16 {
+                                    return fail(
+                                        *line,
+                                        format!(
+                                            "const bus reg width {} exceeds 16; a single integer \
+                                             literal can address at most 16 nibble lanes",
+                                            w
+                                        ),
+                                    );
+                                }
+                                let bits = ri.strength as u64;
+                                if w < 16 && (bits >> (4 * w as u32)) != 0 {
+                                    return fail(
+                                        *line,
+                                        format!(
+                                            "const bus reg initializer {} does not fit in {} lanes \
+                                             (0-15 per lane, max {:#x})",
+                                            ri.strength,
+                                            w,
+                                            (1u64 << (4 * w as u32)) - 1
+                                        ),
+                                    );
+                                }
+                                let mut lanes = Vec::with_capacity(w as usize);
+                                for i in 0..w {
+                                    let nibble = ((bits >> (4 * i as u32)) & 0xF) as i64;
+                                    let id = self.c.new_node(
+                                        format!("{}.{}[{}]", prefix, name, i),
+                                        NodeKind::Plain,
+                                    );
+                                    self.apply_bare_strength(id, nibble, *qual, *line)?;
+                                    lanes.push(id);
+                                }
+                                buses.insert(name.clone(), lanes);
                             }
-                            if rep_delay == Some(0) {
-                                return fail(
-                                    *line,
-                                    format!(
-                                        "a 0-tick repeater (r0) cannot be a lockable reg; place it \
-                                         inline in a chain (e.g. 'x - r0 - {};')",
-                                        name
-                                    ),
-                                );
+                        } else {
+                            if *qual == Qual::Const {
+                                return fail(*line, "const reg requires an initializer");
                             }
-                            let mut backs = Vec::with_capacity(w as usize);
-                            let mut sides = Vec::with_capacity(w as usize);
-                            let mut outs = Vec::with_capacity(w as usize);
+                            let mut lanes = Vec::with_capacity(w as usize);
                             for i in 0..w {
-                                let back = self.c.new_node(
-                                    format!("{}.{}[{}]#back", prefix, name, i),
-                                    NodeKind::Plain,
-                                );
-                                let side = self.c.new_node(
-                                    format!("{}.{}[{}]#side", prefix, name, i),
-                                    NodeKind::Plain,
-                                );
-                                let out = self.c.new_node(
+                                let id = self.c.new_node(
                                     format!("{}.{}[{}]", prefix, name, i),
                                     NodeKind::Plain,
                                 );
-                                let label = format!("{}.{}[{}]", prefix, name, i);
-                                if let Some(ck) = comp_kind {
-                                    self.c.add_comp(ck, back, Some(side), out, label, *line);
-                                } else {
-                                    self.c.add_rep_lock(
-                                        rep_delay.unwrap(),
-                                        back,
-                                        side,
-                                        out,
-                                        label,
-                                        *line,
-                                    );
-                                }
-                                backs.push(back);
-                                sides.push(side);
-                                outs.push(out);
+                                lanes.push(id);
                             }
-                            buses.insert(name.clone(), outs);
-                            bus_side_regs.insert(name.clone(), (backs, sides));
-                            continue;
+                            buses.insert(name.clone(), lanes);
                         }
-                        let mut lanes = Vec::with_capacity(w as usize);
-                        for i in 0..w {
-                            let id = self
-                                .c
-                                .new_node(format!("{}.{}[{}]", prefix, name, i), NodeKind::Plain);
-                            lanes.push(id);
-                        }
-                        buses.insert(name.clone(), lanes);
                         continue;
                     }
                     // コンパレータ reg(`reg r = cd;` / `cc`)は back/side/out の 3 ノード束。
@@ -1726,7 +1780,7 @@ impl<'p> Elaborator<'_, 'p> {
                         self.c.merge(tnode, scope[rhs], *line)?; // alias
                     } else {
                         let q = qual_of.get(target).copied().unwrap_or(Qual::Plain);
-                        self.apply_elem(tnode, target, rhs, *strength, q, *line)?;
+                        self.apply_elem(tnode, target, rhs, *strength as i64, q, *line)?;
                     }
                 }
                 LogicStmt::AssignChain {

@@ -153,6 +153,8 @@ A `const reg` is a fixed-strength constant whose value never changes.
 Initialization with a number from 0 to 15 is required, and values outside that range are errors (§10).
 The old forms with an element token after the number (`15b` / `3d`) were removed together with the block element (issue #75).
 
+The bus form `const reg[W] n = <literal>;` lets a single literal give each lane its own fixed strength (§6.6).
+
 ### 3.3 Constraints on Comparator and Repeater `reg`
 
 `reg cmp = cd;` and `reg m = r;` are special declarations that create a *named point* for a comparator or a lockable repeater (§5.3).
@@ -697,11 +699,40 @@ Lanes whose side is left unconnected behave as side = 0, just like the scalar fo
 The restrictions are the same as for scalar named points (§3.3, §5.3.3):
 plain only, initialization at declaration only, and `r0`, strength literals, and components other than comparators / repeaters are rejected.
 
-### 6.6 Currently Unsupported Items
+### 6.6 Bare-Number Initialization of a `const` Bus `reg` (Nibble Decomposition)
+
+`const reg[W] n = <literal>;` splits the value into 4-bit "nibbles" from the low end and declares W lanes' worth of const points in one go (each lane is the same scalar const as §3.2).
+
+```rv
+const reg[4] n = 0x3808;       // lane0=8, lane1=0, lane2=8, lane3=3
+n - y;                         // y[0]=8, y[1]=0, y[2]=8, y[3]=3
+```
+
+`lane[0]` is the least-significant nibble.
+This is exactly the inverse of monitor's bus-to-integer packing (§7.4.1), so a literal written this way reads back unchanged through monitor's `%x`.
+
+A nibble (0–15) matches the signal-strength range exactly.
+A constant that needs a different intermediate strength per lane — a comparator threshold (`.side`, §6.5), for instance — used to require assigning each lane individually in the sim block on every tick; now a single literal is enough.
+
+```rv
+reg[4] c = cd;
+const reg[4] thr = 0x8808;     // per-lane threshold (lane0=8, lane1=0, lane2=8, lane3=8)
+x - c;
+thr - c.side;
+c - y;
+```
+
+The restrictions are as follows.
+
+- The qualifier must be `const`. A plain bus cannot take a bare-number initializer (`reg[4] n = 5;` is an error); a plain bus's initializer is limited to a component assignment (§6.5)
+- The bus width can be at most 16, since a single integer literal can address at most 16 nibble lanes; wider buses are errors
+- The literal must fit within the target width's lane count (a set high bit beyond that range is an error)
+- Initialization is allowed only at declaration (a `const` still requires an initializer, as in §3.2)
+
+### 6.7 Currently Unsupported Items
 
 The following are kept for future extension and are errors or unsupported at present.
 
-- `const` bus declarations, and initializers other than the component assignment of §6.5
 - Component assignments on a bus reg beyond the forms of §6.5 (post-declaration `s = d;`, components other than comparators / repeaters, strength literals)
 - Buses in wire sequences, the `wire[N]` syntax
 
@@ -1419,6 +1450,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/slice_const_expr.rv` | Constant expressions in slice / lane indices (§6.3.1): splitting a bus with `x[W-1:W/2]`, plus `a[N+1]` |
 | `examples/bus_scalar.rv` | Bus-to-scalar wiring: fan-in (MAX merge) and fan-out (broadcast) |
 | `examples/bus_reg_side.rv` | Bus regs with component assignments `reg[4] m = r;` / `reg[4] c = cd;`: wiring `.side` via broadcast / element-wise / lane / slice (§6.5) |
+| `examples/const_bus.rv` | Bare-number initialization of a `const` bus reg, `const reg[W] n = <literal>;`: round-trip via nibble decomposition, and a comparator threshold fixed per lane (§6.6) |
 | `examples/param_notN.rv` | N-bit NOT with width parameterized by a `param` constant |
 | `examples/generic_logic_width.rv` | Per-logic generic widths `#(W=4)`: instantiating one definition at 4 and 8 bits as separate instances |
 | `examples/numeric_literals.rv` | Binary / hex integer literals (`0b1010` / `0xff`): usable in strengths, bus widths, `param`, `#define`, sim assignments, and tick counts (§1.3) |

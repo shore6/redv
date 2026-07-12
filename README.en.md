@@ -88,6 +88,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/nested_call.rv` | Nested calls `y = s_or(s_and(x1,x2), s_xor(x3,x4));` and a one-line MUX |
 | `examples/bus_and4.rv` | Bus ports + bus vars: bitwise AND of two 4-bit buses |
 | `examples/bus_reg_side.rv` | Bus regs with component assignments `reg[4] m = r;`, wiring `.side` via broadcast / lane / slice |
+| `examples/const_bus.rv` | Bare-number initialization of a `const` bus reg, `const reg[W] n = <literal>;`: nibble decomposition expresses a per-lane comparator threshold as a single constant |
 | `examples/bus_lane_call.rv` | A ripple-carry adder writing lanes / slices directly in logic call arguments and tuple-binding targets |
 | `examples/concat_call.rv` | Concatenations directly in calls: bundle scalars with `g({a, b, c})`, distribute an output with `{rest, msb} = g(x)` |
 | `examples/call_arg_broadcast.rv` | Broadcast a width-1 argument to a bus input port: mask a bus with a single enable line |

@@ -744,23 +744,31 @@ impl Parser {
                     // バス reg の初期化子はコンパレータ / リピーターの素子代入
                     // (`reg[W] m = r;` 等)に限る。妥当性判定は interp が行う(issue #95)。
                     self.i += 1;
-                    let mut strength = -1;
+                    let mut strength: i64 = -1;
+                    // strength の符号は「数値の有無」の判定に使えない: width-16 の
+                    // ニブル分解(issue #140)は上位ビットが立つ 64 bit リテラル
+                    // (`0x8...`〜`0xf...`)を i64 のビットパターンとして保持するため、
+                    // 正当な数値が -1 と同じビット列(全ビット 1)になりうる。
+                    // 数値有無は別フラグ has_num で明示的に持つ。
+                    let mut has_num = false;
                     if self.cur().k == Tk::Num {
-                        strength = self.cur().num as i32;
+                        strength = self.cur().num;
+                        has_num = true;
                         self.i += 1;
                     }
                     // 数値の後に素子トークンが続かなければ裸数値初期化
-                    // (`const reg n = 15;`)。数値なしなら素子トークン必須。
-                    let tok = if strength >= 0 && self.cur().k != Tk::Ident {
+                    // (`const reg n = 15;` / バスなら `const reg[W] n = 0x3808;`)。
+                    // 数値なしなら素子トークン必須。
+                    let tok = if has_num && self.cur().k != Tk::Ident {
                         None
                     } else {
                         Some(self.expect_ident("element")?)
                     };
                     init = Some(RegInit { strength, tok });
                 }
-                if width.is_some() && qual != Qual::Plain {
-                    return fail(ln, "a bus reg must be plain (const not supported yet)");
-                }
+                // qual と素子代入(cc/cd/r)の組み合わせ妥当性は interp.rs が判定する
+                // (issue #140: 裸数値初期化のバス const を追加したため、ここでの
+                // 早期拒否は「バス + non-plain は全部エラー」という単純な形が使えなくなった)。
                 stmts.push(LogicStmt::DeclReg {
                     line: ln,
                     name,

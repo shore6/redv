@@ -125,7 +125,11 @@ impl Lexer {
                                 _ => break,
                             }
                         };
-                        acc = acc * r as i64 + d;
+                        // 2 進 / 16 進はビットパターンとして扱うため、64 bit 上限
+                        // (`0xffffffffffffffff` など、width-16 const バスのニブル分解
+                        // で全レーン 15 を表すのに必要)は wrapping で桁を保持する。
+                        // checked にして弾くと正当なビットパターン表現ができなくなる。
+                        acc = acc.wrapping_mul(r as i64).wrapping_add(d);
                         self.p += 1;
                     }
                     // 2 進リテラル直後の `2`–`9` は typo の可能性が高いので明示的に弾く。
