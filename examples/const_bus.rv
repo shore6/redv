@@ -1,0 +1,40 @@
+/* バス const reg の裸数値初期化(issue #140):
+ *   const reg[W] n = <リテラル>;
+ * 値を「4 bit のニブル」として下位レーンから順に分解し、各レーンへ独立した
+ * const 点(0-15)を割り当てる(lane[0] が最下位ニブル)。monitor のバス→整数
+ * パッキング(§7.4.1)をちょうど逆にした関係になっており、書いたリテラルが
+ * そのまま monitor の "%x" で読み返せる(下の LIT8 で確認する)。
+ * ニブル(0-15)は信号強度の値域と一致するため、比較器の閾値のようにレーン
+ * ごとに異なる中間強度を持つ定数を、1 個のリテラルだけで表せる(THRESH4)。
+ */
+
+logic LIT8(output[8] y) {
+    const reg[8] n = 0x87654321;
+    n - y;
+}
+
+logic THRESH4(input[4] x, output[4] y) {
+    // 減算コンパレータの閾値を (lane3,lane2,lane1,lane0) = (8,0,8,8) に固定する。
+    // 以前は sim 側で s[0]=8; s[2]=8; s[3]=8; のように毎 tick 与える必要があった
+    // (examples/bus_reg_side.rv の SUB4)。閾値が定数なら const バス 1 個で書ける。
+    reg[4] c = cd;
+    const reg[4] thr = 0x8808;
+    x - c;
+    thr - c.side;
+    c - y;
+}
+
+module test_const_bus {
+    var[8] lit_y;
+    var[4] x, thr_y;
+    sim {
+        x = 0;
+        lit_y = LIT8();
+        thr_y = THRESH4(x);
+        #init
+        monitor("lit_y=%x (round-trip of 0x87654321)\n", lit_y);
+        monitor("x=%x thr_y=%x\n", x, thr_y);
+        x = 15; #3
+        monitor("x=%x thr_y=%x\n", x, thr_y);
+    }
+}

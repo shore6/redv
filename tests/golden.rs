@@ -363,6 +363,15 @@ fn bus_reg_side() {
     run_golden("bus_reg_side");
 }
 
+/// バス const reg の裸数値初期化(issue #140): `const reg[W] n = <リテラル>;` を
+/// ニブル分解(1 レーン = 4 bit、monitor のバス→整数パッキングの逆演算)で展開する。
+/// リテラルの round-trip(LIT8)と、比較器閾値をレーンごとに固定する実用例(THRESH4)
+/// の両方を確認する。
+#[test]
+fn const_bus() {
+    run_golden("const_bus");
+}
+
 /// スライス / レーン添字の定数式化(issue #89):
 /// `x[W-1:W/2]` のようなジェネリック param 式(インスタンス化時に評価)と、
 /// `a[N+1]` のような param 参照(パース時に即時解決)の両方。
@@ -989,7 +998,7 @@ fn bus_side_reg_misuse_is_error() {
         (
             "const_bus_reg",
             "const reg[4] m = r; a-m; m[0]-y;",
-            "a bus reg must be plain",
+            "a bus reg initializer with a comparator/repeater element must be plain",
         ),
         (
             "side_on_plain_bus",
@@ -1019,6 +1028,42 @@ fn bus_side_reg_misuse_is_error() {
     ] {
         let src = format!("logic g(input a, output y){{ {body} }}\n{call}");
         let (code, stderr) = run_source(&format!("busreg_{tag}"), &src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
+    }
+}
+
+/// バス const reg の裸数値初期化(issue #140)の誤用は **エラー**。範囲外・幅超過
+/// (16 nibble lane まで)・plain との組み合わせ・初期化子なしを検査する。
+#[test]
+fn const_bus_misuse_is_error() {
+    for (tag, src, want) in [
+        (
+            "out_of_range",
+            "logic g(output[2] y){ const reg[2] n = 0x300; n-y; }\n\
+             module m{ var[2] v; sim{ v=g(); #init } }",
+            "does not fit in 2 lanes",
+        ),
+        (
+            "width_over_16",
+            "logic g(output[17] y){ const reg[17] n = 5; n-y; }\n\
+             module m{ var[17] v; sim{ v=g(); #init } }",
+            "exceeds 16",
+        ),
+        (
+            "plain_bare_literal",
+            "logic g(output[4] y){ reg[4] n = 5; n-y; }\n\
+             module m{ var[4] v; sim{ v=g(); #init } }",
+            "a bus reg cannot take a signal strength",
+        ),
+        (
+            "no_initializer",
+            "logic g(output[4] y){ const reg[4] n; n-y; }\n\
+             module m{ var[4] v; sim{ v=g(); #init } }",
+            "const reg requires an initializer",
+        ),
+    ] {
+        let (code, stderr) = run_source(&format!("constbus_{tag}"), src);
         assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
         assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }
