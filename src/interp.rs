@@ -3249,20 +3249,9 @@ impl<'a> ModuleExec<'a> {
                         vec![Self::lane_key(target, k)]
                     }
                     None => match self.bus_width(target) {
-                        // バス全体への代入は全レーンへブロードキャスト。
-                        Some(w) => {
-                            if pulse.is_some() {
-                                return fail(
-                                    *line,
-                                    format!(
-                                        "pulse assignment is not supported on a whole bus var '{}'; \
-                                         index a lane (e.g. '{}[0] = v ~ w;')",
-                                        target, target
-                                    ),
-                                );
-                            }
-                            (0..w).map(|k| Self::lane_key(target, k as i64)).collect()
-                        }
+                        // バス全体への代入は全レーンへブロードキャスト。パルス代入も同じ
+                        // キー列に乗せる(値 v・幅 w を一度評価して全レーンへ同値で予約)。
+                        Some(w) => (0..w).map(|k| Self::lane_key(target, k as i64)).collect(),
                         None => {
                             if !self.vars.contains_key(target) {
                                 return fail(

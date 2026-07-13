@@ -933,8 +933,10 @@ x = 10 ~ 3;                    // Hold x = 10 for 3 ticks, then x = 0
 `w` is an integer ≥ 1 (an expression is fine; it is evaluated at assignment time).
 The tick count covers any ticks the sim executes (`#n` / `wait(n)` / `#init`).
 
-The target must be a scalar var or a lane of a bus var (`x[0] = v ~ w;`).
-A pulse assignment to a whole bus var is an error.
+The target is a scalar var, a lane of a bus var (`x[0] = v ~ w;`), or a whole bus var.
+A pulse assignment to a whole bus var assigns the value to every lane and schedules "reset to 0 after `w` ticks" on each lane, following the same rule as the regular-assignment broadcast (§7.6).
+The value and the width are evaluated once; every lane receives the same value and the same width.
+The reservations are held per lane, so a regular assignment to one lane cancels only that lane's reservation (`examples/bus_pulse.rv`).
 
 A regular assignment to the same var before the deadline cancels the pending pulse.
 A new pulse assignment replaces the previous deadline with the new width.
@@ -1435,6 +1437,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/scan_and.rv` | Reads two values from stdin with `scan()` and feeds them into an AND |
 | `examples/until_wait.rv` | `#until(cond)`: event-driven wait that advances ticks until the condition holds |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets a var to 0 after `w` ticks |
+| `examples/bus_pulse.rv` | Whole-bus pulse assignment: schedule all lanes at once, cancel per lane |
 | `examples/lint_demo.rv` | Fires all 5 design-rule-check (lint) warnings; `-W error` turns them into a non-zero exit (§10.4) |
 
 ### 12.4 Buses and `param`
