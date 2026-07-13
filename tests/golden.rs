@@ -88,6 +88,13 @@ fn pulse() {
     run_golden("pulse");
 }
 
+/// バス全体へのパルス代入: 全レーンへ v をブロードキャストし、各レーンに幅 w のリセットを
+/// 予約する。レーンへの通常代入はそのレーンの予約だけを解除する(issue #141 の前段)。
+#[test]
+fn bus_pulse() {
+    run_golden("bus_pulse");
+}
+
 /// 0tick リピータ(`r0`): 遅延ゼロの組合せ増幅器。r1 と反応タイミングが 1 tick ずれる(issue #37)。
 #[test]
 fn repeater_0tick() {
@@ -1117,7 +1124,7 @@ fn bus_ports_basic_is_accepted() {
     assert_eq!(code, Some(0), "expected success, stderr:\n{stderr}");
 }
 
-/// バスポート/バス var の不整合(幅・スカラ混在・出力先・添字・引数・scan・pulse)は
+/// バスポート/バス var の不整合(幅・スカラ混在・出力先・添字・引数・scan)は
 /// **エラー**(Phase 1b)。
 #[test]
 fn bus_ports_misuse_is_error() {
@@ -1175,12 +1182,6 @@ fn bus_ports_misuse_is_error() {
             "scan_to_bus",
             "module m{ var[2] x; sim{ x=scan(); } }",
             "cannot target a whole bus",
-        ),
-        // 全バスへのパルス代入
-        (
-            "pulse_on_bus",
-            "module m{ var[2] x; sim{ x = 5 ~ 2; } }",
-            "pulse assignment is not supported on a whole bus",
         ),
     ] {
         let (code, stderr) = run_source(&format!("busport_{tag}"), src);
