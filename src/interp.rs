@@ -2235,10 +2235,12 @@ impl<'p> Elaborator<'_, 'p> {
 
 // ---- module execution --------------------------------------------------
 
-/// `clock(var, N)` の周期トグル状態。各レベルを `hold` tick 保持し、`counter` が
-/// 0 に達するたびに `level` を 0 ↔ 15 で反転する(full period = 2*hold、50% デューティ)。
+/// `clock(var, N[, M[, P]])` の周期トグル状態。High を `hi` tick・Low を `lo` tick 保持し、
+/// `counter` が 0 に達するたびに `level` を 0 ↔ 15 で反転して次レベルの保持幅を積み直す
+/// (full period = hi + lo)。初期位相は `do_clock` が登録時の `level` / `counter` に畳み込む。
 struct ClockState {
-    hold: i64,
+    hi: i64,
+    lo: i64,
     counter: i64,
     level: i64,
 }
@@ -2255,7 +2257,8 @@ pub struct ModuleExec<'a> {
     sim_time: i64,
     /// パルス代入(`x = v ~ w`)で残り tick を持つ var → 0 で var を 0 に戻す。
     pulses: HashMap<String, i64>,
-    /// `clock(x, N)` で自動トグルする var → 周期状態。tick ごとに `tick_clocks` が更新する。
+    /// `clock(x, N[, M[, P]])` で自動トグルする var → 周期状態(キーはレーンキーも可)。
+    /// tick ごとに `tick_clocks` が更新する。
     clocks: HashMap<String, ClockState>,
     /// バス var(`var[N] x;`)の幅。レーンは vars に `x[0]`..`x[N-1]` のキーで格納する。
     var_buses: HashMap<String, i32>,
@@ -2507,7 +2510,7 @@ impl<'a> ModuleExec<'a> {
             st.counter -= 1;
             if st.counter <= 0 {
                 st.level = if st.level == 0 { 15 } else { 0 };
-                st.counter = st.hold;
+                st.counter = if st.level == 0 { st.lo } else { st.hi };
                 toggled.push((var.clone(), st.level));
             }
         }
@@ -2516,33 +2519,78 @@ impl<'a> ModuleExec<'a> {
         }
     }
 
-    /// `clock(var, N)` — var を「各レベル N tick 保持」で 0/15 に自動トグルさせる。
-    /// 呼び出し直後は Low(0)。clock() 自体は時刻を進めず、後続の `#n`/`wait`/`#until` が
+    /// `clock(var, N[, M[, P]])` — var を「High N tick / Low M tick 保持」(M 省略時は N)で
+    /// 0/15 に自動トグルさせる。周期の先頭は Low で、位相 P は「すでに P tick 経過した状態で
+    /// 開始」(周期で mod 正規化)。clock() 自体は時刻を進めず、後続の `#n`/`wait`/`#until` が
     /// tick を刻む間にトグルする(パルス代入と同型)。同じ var への通常代入で解除される。
+    /// 第 1 引数はスカラ var・バス var のレーン・バス var 全体(全レーンへブロードキャスト)。
     fn do_clock(&mut self, line: i32, call: &CallData) -> RvResult<()> {
-        if call.has_fmt || call.args.len() != 2 {
-            return fail(line, "clock(var, N) takes a var name and a period");
+        if call.has_fmt || call.args.len() < 2 || call.args.len() > 4 {
+            return fail(
+                line,
+                "clock(var, N[, M[, P]]) takes a var name, hold ticks (High [, Low]), \
+                 and an optional phase offset",
+            );
         }
-        let name = match &call.args[0] {
-            Expr::Var { name, index: None, .. } => name.clone(),
-            Expr::Var { .. } => {
-                return fail(line, "clock(var, N): first argument must be a scalar var, not a bus lane");
+        // 対象キー列を代入(SimStmt::Assign)と同じ規則で解決する:
+        // レーン指定 / バス全体ブロードキャスト / スカラ。
+        let keys: Vec<String> = match &call.args[0] {
+            Expr::Var { name, index: Some(e), .. } => {
+                let w = match self.bus_width(name) {
+                    Some(w) => w as i64,
+                    None => {
+                        return fail(
+                            line,
+                            format!("'{}' is not a bus var; cannot index it", name),
+                        )
+                    }
+                };
+                let k = self.eval_e(e)?;
+                if k < 0 || k >= w {
+                    return fail(
+                        line,
+                        format!("bus var index out of range: {}[{}] (width {})", name, k, w),
+                    );
+                }
+                vec![Self::lane_key(name, k)]
             }
-            _ => return fail(line, "clock(var, N): first argument must be a var name"),
+            Expr::Var { name, index: None, .. } => match self.bus_width(name) {
+                Some(w) => (0..w).map(|k| Self::lane_key(name, k as i64)).collect(),
+                None => {
+                    if !self.vars.contains_key(name) {
+                        return fail(line, format!("undeclared variable: {}", name));
+                    }
+                    vec![name.clone()]
+                }
+            },
+            _ => return fail(line, "clock(...): first argument must be a var name"),
         };
-        if self.var_buses.contains_key(&name) {
-            return fail(line, format!("clock on a bus var '{}' is not supported", name));
+        let hi = self.eval_e(&call.args[1])?;
+        let lo = match call.args.get(2) {
+            Some(e) => self.eval_e(e)?,
+            None => hi,
+        };
+        if hi < 1 || lo < 1 {
+            return fail(
+                line,
+                format!("clock hold ticks must be >= 1 (got High {}, Low {})", hi, lo),
+            );
         }
-        if !self.vars.contains_key(&name) {
-            return fail(line, format!("undeclared variable: {}", name));
+        let p = match call.args.get(3) {
+            Some(e) => self.eval_e(e)?,
+            None => 0,
+        };
+        if p < 0 {
+            return fail(line, format!("clock phase offset must be >= 0 (got {})", p));
         }
-        let n = self.eval_e(&call.args[1])?;
-        if n < 1 {
-            return fail(line, format!("clock period must be >= 1 (got {})", n));
+        // 周期の先頭(Low の開始)から pos tick 進んだ位置を初期状態にする。
+        let pos = p % (hi + lo);
+        let (level, counter) = if pos < lo { (0, lo - pos) } else { (15, hi - (pos - lo)) };
+        for key in keys {
+            self.vars.insert(key.clone(), level);
+            self.pulses.remove(&key);
+            self.clocks.insert(key, ClockState { hi, lo, counter, level });
         }
-        self.vars.insert(name.clone(), 0);
-        self.pulses.remove(&name);
-        self.clocks.insert(name, ClockState { hold: n, counter: n, level: 0 });
         Ok(())
     }
 
