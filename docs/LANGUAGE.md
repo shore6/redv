@@ -971,19 +971,28 @@ x = 10 ~ 3;                    // x = 10 を 3 tick 維持してから x = 0
 
 #### 7.7.2 クロック生成
 
-`clock(var, N)` はテスト用クロックを 1 行で生成するシュガーである。
-スカラ var を「各レベル N tick 保持」で 0 と 15 に自動トグルする(full period = 2N、50% デューティ)。
+`clock(var, N[, M[, P]])` はテスト用クロックを 1 行で生成するシュガーである。
+var を「High を N tick、Low を M tick 保持」で 0 と 15 に自動トグルする(full period = N + M)。
+`M` を省略すると `N` と同じ値になり、従来形 `clock(var, N)` は 50% デューティ(full period = 2N)として動く。
 
-- 呼び出し直後は Low(0)
-- 以降 N tick ごとに反転
+- 周期の先頭は Low で、呼び出し直後は Low(0)から始まる
+- 保持 tick が尽きるたびに反転し、次のレベルの保持幅(High なら N、Low なら M)を積み直す
 - `clock()` 自体は時刻を進めず、後続の `#n` / `wait` / `#init` / `#until` が tick を刻む間にトグルする
 
-同じ var への通常代入でクロックは解除される。
-`N` は 1 以上の整数(式可)である。
-`var` は宣言済みのスカラ var で、バス var は使えない。
+`P` は初期位相で、「周期の先頭からすでに P tick 経過した状態」で開始する(省略時は 0 = Low の開始)。
+`P` は 0 以上の整数(式可)で、周期 N + M 以上の値は mod で正規化する。
+`P = M` は High の先頭を指すので、High 開始のクロックになる。
 
-monitor で読む var の値は「次 tick に適用される値」を映すため、1 tick 先行して見える(パルス代入と同じ挙動)。
-デューティ比や初期位相の指定は将来拡張である(`examples/clock_sugar.rv`)。
+第 1 引数はスカラ var のほか、バス var のレーン(`clock(x[0], N)`)とバス var 全体(`clock(x, N)`)も取れる。
+バス var 全体はパルス代入と同じく全レーンへのブロードキャストで、各レーンに同じ周期・位相のクロックが掛かる。
+クロックはレーン単位に持つので、後からレーン単体の `clock(x[k], ...)` で掛け直せる。
+レーンごとに位相をずらせば多相クロックになる(`examples/clock_duty.rv`)。
+
+同じ var(レーン)への通常代入でクロックは解除される。
+バス var 全体への通常代入は、全レーンのクロックを解除する。
+`N`・`M` は 1 以上の整数(式可)である。
+
+monitor で読む var の値は「次 tick に適用される値」を映すため、1 tick 先行して見える(パルス代入と同じ挙動。`examples/clock_sugar.rv`)。
 
 ### 7.8 入力読み込み(`scan`)
 
@@ -1466,6 +1475,7 @@ fan-in や fan-out(§6.4)はこの有向モデル上で「複数点を 1 点へ 
 | `examples/assert_selfcheck.rv` | `assert` と `expect` で合否を終了コードに返す自己検証 |
 | `examples/clock.rv` | トーチ + リピータ 4 のクロック(周期 10)。`wait()` の使用例 |
 | `examples/clock_sugar.rv` | テスト用クロックのシュガー `clock(var, N)` |
+| `examples/clock_duty.rv` | clock() の拡張形:デューティ比 / 初期位相 / レーン対応の 4 相クロック |
 | `examples/scan_and.rv` | `scan()` で stdin から 2 値を読んで AND に通す |
 | `examples/until_wait.rv` | `#until(cond)`:条件成立まで tick を進めるイベント駆動待機 |
 | `examples/pulse.rv` | パルス代入(`a = v ~ w;`)で w tick 後に var を自動で 0 に戻す |

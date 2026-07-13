@@ -1,0 +1,24 @@
+/* clock() の拡張形(デューティ比・初期位相・レーン/バス対応):
+ *  - clock(v, N, M): High を N tick、Low を M tick 保持する(周期 N+M)。開始は従来どおり Low。
+ *    clock(v, N) は clock(v, N, N) と等価(50% デューティ)。
+ *  - clock(v, N, M, P): 初期位相 P — 「すでに P tick 経過した状態」から開始する
+ *    (周期で mod 正規化。P = M で High の先頭、つまり High 開始になる)。
+ *  - 第 1 引数はスカラ var のほか、バス var のレーン x[k] とバス全体 x も取れる
+ *    (バス全体は全レーンへのブロードキャスト。後からレーン単位で上書き・解除できる)。
+ * ここでは High 1 / Low 3 の非対称クロックと、4 レーンを 1 tick ずつずらした 4 相クロックを作る。
+ * monitor の値は「次 tick に適用される値」を映すため 1 tick 先行する(§7.7.2)。 */
+module test_clock_duty
+{
+    var d, i;
+    var[4] ph;
+    sim {
+        d = 0; ph = 0;
+        clock(d, 1, 3);                // High 1 tick / Low 3 tick(周期 4)。Low から開始
+        clock(ph, 2, 2);               // まずバス全体へ同相クロック(全レーンへブロードキャスト)
+        for (i = 1; i < 4; i = i + 1) {
+            clock(ph[i], 2, 2, i);     // レーン 1..3 を上書きし、位相を i tick ずつ進めた 4 相に
+        }
+        ?monitor("t=%2 | d=%2 | ph=%2 %2 %2 %2\n", $time, d, ph[0], ph[1], ph[2], ph[3]);
+        #1 #1 #1 #1 #1 #1 #1 #1
+    }
+}

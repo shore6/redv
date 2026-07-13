@@ -386,14 +386,15 @@ const = 宣言値を源に、リピータ / オブザーバは `後ろ上界 > 0
 | `insts` | `callee(args)` をキーにしたインスタンス表(同じ呼び出しは同一インスタンス) |
 | `out_bind` | 出力ノード → 束縛先 var(毎 tick 後に var へ書き戻す) |
 | `mons` | ホイストした `?monitor`(sim 開始時に収集) |
-| `pulses` | パルス代入(`x = v ~ w`)の残り tick |
+| `pulses` | パルス代入(`x = v ~ w`)の残り tick(キーはレーンキーも可) |
+| `clocks` | `clock(x, N[, M[, P]])` の周期トグル状態(High/Low の保持幅と残り tick。キーはレーンキーも可) |
 | `sim_time` | `#init` 完了時(未使用なら開始時)を 0 とした経過 tick |
 | `assert_total`/`assert_failed` | 自己検証の集計 |
 
 ### 5.2 時間の進め方
 
 `tick_once()` が 1 tick の最小単位: **入力反映(`apply_inputs`)→ `c.step()` → 出力反映
-(`apply_outputs`)→ パルス減算(`tick_pulses`)**。これを:
+(`apply_outputs`)→ パルス減算(`tick_pulses`)→ クロック更新(`tick_clocks`)**。これを:
 
 - `#n` / `wait(n)` … n 回。`#n` は `$time` を進めて monitor を発火、`wait(n)` は **進めず発火しない**(発振回路用)。
 - `#init` … `step()` が「変化なし」を返すまで(定常状態)。`INIT_TIMEOUT` 超過はエラー(発振の検出)。

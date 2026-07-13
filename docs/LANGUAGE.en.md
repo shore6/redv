@@ -943,19 +943,28 @@ A new pulse assignment replaces the previous deadline with the new width.
 
 #### 7.7.2 Clock Generation
 
-`clock(var, N)` is sugar for generating a test clock on one line.
-It auto-toggles a scalar var between 0 and 15, holding each level for N ticks (full period = 2N, 50% duty).
+`clock(var, N[, M[, P]])` is sugar for generating a test clock on one line.
+It auto-toggles the var between 0 and 15, holding High for N ticks and Low for M ticks (full period = N + M).
+Omitting `M` makes it equal to `N`, so the classic form `clock(var, N)` runs at 50% duty (full period = 2N).
 
-- Right after the call, the var is Low (0)
-- It flips every N ticks afterward
+- The cycle starts with Low, so the var starts Low (0) right after the call
+- When the hold ticks run out, the level flips and reloads the hold width of the next level (N for High, M for Low)
 - `clock()` itself does not advance time; the toggling happens while subsequent `#n` / `wait` / `#init` / `#until` accumulate ticks
 
-A regular assignment to the same var clears the clock.
-`N` is an integer ≥ 1 (expressions allowed).
-`var` must be a declared scalar var; bus vars are not supported.
+`P` is the initial phase: the clock starts "as if P ticks had already elapsed from the start of the cycle" (0 = the start of Low when omitted).
+`P` is an integer ≥ 0 (expressions allowed); values ≥ the period N + M are normalized by mod.
+`P = M` points at the start of High, giving a High-starting clock.
 
-The value of the var observed in `monitor` reflects "the value applied next tick", so it appears 1 tick ahead (the same behavior as pulse assignment).
-Duty ratio and initial phase are future extensions (`examples/clock_sugar.rv`).
+The first argument is a scalar var, a lane of a bus var (`clock(x[0], N)`), or a whole bus var (`clock(x, N)`).
+A whole bus var broadcasts to every lane, just like pulse assignment, putting a clock of the same period and phase on each lane.
+Clocks are held per lane, so a later single-lane `clock(x[k], ...)` re-clocks just that lane.
+Shifting the phase per lane yields a multi-phase clock (`examples/clock_duty.rv`).
+
+A regular assignment to the same var (lane) clears the clock.
+A regular assignment to a whole bus var clears the clocks on all lanes.
+`N` and `M` are integers ≥ 1 (expressions allowed).
+
+The value of the var observed in `monitor` reflects "the value applied next tick", so it appears 1 tick ahead (the same behavior as pulse assignment; `examples/clock_sugar.rv`).
 
 ### 7.8 Input Reading (`scan`)
 
@@ -1434,6 +1443,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/assert_selfcheck.rv` | Pass/fail via exit code using `assert` and `expect` |
 | `examples/clock.rv` | A torch + repeater-4 clock (period 10). Example of `wait()` |
 | `examples/clock_sugar.rv` | Sugar for test clocks: `clock(var, N)` |
+| `examples/clock_duty.rv` | Extended clock(): duty ratio / initial phase / a 4-phase clock on bus lanes |
 | `examples/scan_and.rv` | Reads two values from stdin with `scan()` and feeds them into an AND |
 | `examples/until_wait.rv` | `#until(cond)`: event-driven wait that advances ticks until the condition holds |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets a var to 0 after `w` ticks |

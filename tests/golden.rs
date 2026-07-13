@@ -126,6 +126,13 @@ fn clock_sugar() {
     run_golden("clock_sugar");
 }
 
+/// clock() の拡張形(issue #141): デューティ比 `clock(v, N, M)`(High N / Low M)、
+/// 初期位相 `clock(v, N, M, P)`(P tick 経過済みで開始)、レーン/バス全体ブロードキャスト。
+#[test]
+fn clock_duty() {
+    run_golden("clock_duty");
+}
+
 /// assert / expect による自己検証テストベンチ(全 assert が通れば exit 0)(issue #40)。
 #[test]
 fn assert_selfcheck() {
