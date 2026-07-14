@@ -95,6 +95,14 @@ fn bus_pulse() {
     run_golden("bus_pulse");
 }
 
+/// 整数⇔バス var のビット変換シュガー(issue #151): `x = unpack(v);` はビット展開
+/// (0/15)、式 `pack(x)` は「非ゼロ = 1」のブール合成。参照モデルとの全数突き合わせと
+/// monitor("%b", pack(x)) の 1 bit/レーン表示を確認する。
+#[test]
+fn pack_unpack() {
+    run_golden("pack_unpack");
+}
+
 /// 0tick リピータ(`r0`): 遅延ゼロの組合せ増幅器。r1 と反応タイミングが 1 tick ずれる(issue #37)。
 #[test]
 fn repeater_0tick() {
