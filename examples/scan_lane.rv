@@ -1,0 +1,26 @@
+/* stdin からバス var の各レーンへ 1 値ずつ読むデモ(issue #147)。
+   例:  echo "15 0 8 0" | ./target/release/redv examples/scan_lane.rv
+   x[k] = scan() はスカラへの scan と同じ 1 値読み。添字は実行時式でもよいので、
+   ループ変数で全レーンを順に読める。バス全体 x = scan() はエラー
+   (1 値のビット分解は v = scan(); x = unpack(v); と 2 文で書く。§7.9)。 */
+
+logic INV4(input[4] a, output[4] y)
+{
+    a - t - y;          // 各レーンを NOT(element-wise)
+}
+
+module scan_lane
+{
+    var[4] x, y;
+    var k;
+    sim {
+        x[0] = scan();                  // リテラル添字
+        x[1] = scan();
+        for (k = 2; k < 4; k = k + 1) {
+            x[k] = scan();              // ループ変数添字(実行時評価)
+        }
+        y = INV4(x);
+        #init
+        ?monitor("x=%04b -> y=%04b\n", pack(x), pack(y));
+    }
+}

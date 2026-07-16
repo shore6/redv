@@ -436,6 +436,11 @@ const = 宣言値を源に、リピータ / オブザーバは `後ろ上界 > 0
 
 `scan()` も `CallBind` 経由(`do_scan`)。stdin から整数 1 個を読む(EOF・非数値はエラー)。
 scan は出力を 1 個しか返さないので、`(t1, t2) = scan(...)` のタプル束縛はエラーにする。
+target はスカラ var かバス var の単一レーン(issue #147)。logic 束縛と違いインスタンス
+キーを持たないので、レーン添字は定数式に限らず実行時評価でよい(parser が callee 名 `scan`
+のときだけ `IdxExpr::Expr` のまま素通しし、`do_scan` が `eval_e` で評価する)。読み込み後は
+通常代入と同じ規則で、そのキーのクロックと保留中パルスを解除する。バス全体はエラーにして
+`v = scan(); x = unpack(v);` の 2 文形を案内する(解釈が割れるため暗黙に選ばない)。
 
 `x = unpack(v);`(§7.9、issue #151)は構文上は CallBind と同形だが、引数が InstArg でなく
 通常の整数式なので、parser(`parse_call_bind_rest`)が callee 名で分岐して専用の
