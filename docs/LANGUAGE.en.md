@@ -873,6 +873,9 @@ User-specified width acts as a lower bound on top of that.
 The composition only fires when the bus var appears at the top of a format argument; using it inside an expression (e.g. `bus + 1`) still errs with "index a lane".
 Buses wider than 16 lanes cannot be packed into a single i64 and are an error — monitor lanes individually instead.
 
+This nibble composition is a display-oriented conversion that keeps each lane's strength as-is.
+To read lanes as 0 / 1 and compose them at 1 bit per lane, use `pack(x)` (§7.9).
+
 #### 7.4.2 `assert` and `expect`
 
 `assert(cond)` records a failure on stderr when `cond` is false (`= 0`).
@@ -916,8 +919,9 @@ x = 0;                         // Broadcast to all lanes (one-shot clear)
 Bus var usage rules:
 
 - Per-lane read/write uses the form `x[k]` (the index is a runtime expression; `for`-loop variables are fine)
-- Using the bare name `x` in a scalar expression is an error (a lane must be specified)
+- Using the bare name `x` in a scalar expression is an error (a lane must be specified; to compose the lanes into one integer, use `pack(x)`, §7.9)
 - `x = expr;` broadcasts to all lanes (`x = 0;` clears them in one shot)
+- `x = unpack(v);` expands the integer `v` bit-by-bit onto the lanes (§7.9)
 
 ### 7.7 Pulse Assignment and Clock Generation
 
@@ -990,6 +994,36 @@ In every radix, a leading `-` or `+` is read as a sign.
 The token ends at the first character that does not belong to the radix (`scan("%x")` reading `ff\n` returns `255` and leaves the newline for the next `scan`).
 
 In tests, fixing the input with `redv foo.rv < input.txt` gives a deterministic, reproducible run.
+
+### 7.9 Integer ⇔ Bus Bit Conversion (`pack` / `unpack`)
+
+Testbenches keep repeating two conversions: expanding an integer bit-by-bit onto the lanes of a bus var, and reading the lanes back as 0 / 1 to compose an integer.
+`unpack` and `pack` write these conversions in one word (`examples/pack_unpack.rv`).
+
+```rv
+var[4] a;
+a = unpack(5);                 // a[0]=15, a[1]=0, a[2]=15, a[3]=0 (bit k → lane k)
+expect(pack(a), 5);            // reads each lane as 0/1 and returns the composed integer
+```
+
+**Expansion (`x = unpack(v);`)** is a statement.
+It writes bit k (0 / 1) of the integer expression `v` to lane `x[k]` as 0 / 15.
+The target must be a bare bus var name; scalar vars, lanes, and slices are not accepted.
+Like the broadcast of a regular assignment (§7.6), it cancels pending pulses (§7.7.1) and clocks (§7.7.2) on the lanes it writes.
+
+A negative `v`, or `v >= 2^W` (W = bus width), is an error.
+Silently truncating high bits would hide bugs in the reference model; to drop them intentionally, mask explicitly (e.g. `unpack(v % 16)`).
+
+**Composition (`pack(x)`)** is an expression.
+It reads each lane of the bus var `x` as "non-zero = 1" and returns the integer composed at bit k.
+The threshold is non-zero rather than 15 so that observation points behind dust decay (strength 1–14) still read as 1.
+Being an expression, it works in any expression position, such as `expect(pack(y), v)` or `pack(x) == pack(y)`.
+Using a bare bus var by itself in an expression is still an error (§7.6).
+
+`pack` returns a plain integer, so `monitor("%b\n", pack(x))` prints 1 bit per lane in binary.
+Passing a bus var directly to monitor composes nibbles instead (§7.4.1, 4 bits per lane) — a different conversion rule.
+
+Bus vars wider than 63 lanes do not fit in an i64 and are an error for both `pack` and `unpack`.
 
 ---
 
@@ -1448,6 +1482,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/until_wait.rv` | `#until(cond)`: event-driven wait that advances ticks until the condition holds |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets a var to 0 after `w` ticks |
 | `examples/bus_pulse.rv` | Whole-bus pulse assignment: schedule all lanes at once, cancel per lane |
+| `examples/pack_unpack.rv` | Integer ⇔ bus bit conversion (`x = unpack(v);` / `pack(x)`) for exhaustive checks against a reference model (§7.9) |
 | `examples/lint_demo.rv` | Fires all 5 design-rule-check (lint) warnings; `-W error` turns them into a non-zero exit (§10.4) |
 
 ### 12.4 Buses and `param`

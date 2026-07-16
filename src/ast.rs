@@ -252,6 +252,12 @@ pub enum Expr {
         op: String,
         a: Box<Expr>,
     },
+    /// `pack(name)` — バス var の全レーンを「非ゼロ = 1」で第 k ビットへ合成した整数
+    /// (§7.9)。引数は添字なしのバス var 名のみ(レーン / スライスは issue #148 の範囲)。
+    Pack {
+        line: i32,
+        name: String,
+    },
 }
 
 impl Expr {
@@ -263,7 +269,8 @@ impl Expr {
             | Expr::Var { line, .. }
             | Expr::Time { line }
             | Expr::Bin { line, .. }
-            | Expr::Un { line, .. } => *line,
+            | Expr::Un { line, .. }
+            | Expr::Pack { line, .. } => *line,
         }
     }
 }
@@ -297,6 +304,14 @@ pub enum SimStmt {
         index: Option<Box<Expr>>,
         value: Expr,
         pulse: Option<Expr>,
+    },
+    /// `target = unpack(value);` — 整数 value の第 k ビット(0/1)をバス var `target` の
+    /// レーン k へ 0/15 で展開する(§7.9)。通常代入と同じく対象レーンのパルス予約と
+    /// クロックを解除する。target は添字なしのバス var 名のみ。
+    Unpack {
+        line: i32,
+        target: String,
+        value: Expr,
     },
     /// `(t1, t2, ...) = callee#(P=v, ...)(args)` — sim から logic をインスタンス化する束縛。
     /// `targets` は出力ポートと位置対応の束縛先 var 列(スカラ var / バス var。バス var の

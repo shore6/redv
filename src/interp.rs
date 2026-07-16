@@ -194,6 +194,9 @@ fn eval_const_expr(
     match e {
         Expr::Num { num, .. } => Ok(*num),
         Expr::Time { line } => fail(*line, "$time is not allowed in a width / param expression"),
+        Expr::Pack { line, .. } => {
+            fail(*line, "pack(...) is not allowed in a width / param expression")
+        }
         Expr::Var { line, name, index } => {
             if index.is_some() {
                 return fail(
@@ -2351,7 +2354,11 @@ impl<'a> ModuleExec<'a> {
                     Some(v) => Ok(*v),
                     None if self.var_buses.contains_key(name) => fail(
                         *line,
-                        format!("'{}' is a bus var; index a lane (e.g. '{}[0]')", name, name),
+                        format!(
+                            "'{}' is a bus var; index a lane (e.g. '{}[0]') \
+                             or pack the lanes into one integer with 'pack({})'",
+                            name, name, name
+                        ),
                     ),
                     // var に無ければ param 定数(`param` / 数値 `#define`)を引く。
                     None => match self.prog.defines.get(name) {
@@ -2390,6 +2397,40 @@ impl<'a> ModuleExec<'a> {
                     "!" => (v == 0) as i64,
                     _ => v,
                 })
+            }
+            // `pack(x)` — 各レーンを「非ゼロ = 1」で第 k ビットへ合成する(§7.9)。
+            // ダスト減衰した観測点(強度 1–14)もそのまま 1 と読めるよう、しきい値は > 0。
+            Expr::Pack { line, name } => {
+                let w = match self.var_buses.get(name) {
+                    Some(&w) => w,
+                    None if self.vars.contains_key(name) => {
+                        return fail(
+                            *line,
+                            format!(
+                                "pack(...) takes a bus var; '{}' is a scalar var (use it directly)",
+                                name
+                            ),
+                        )
+                    }
+                    None => return fail(*line, format!("undeclared variable: {}", name)),
+                };
+                if w > 63 {
+                    return fail(
+                        *line,
+                        format!(
+                            "pack: bus var '{}' width {} > 63 does not fit in one integer",
+                            name, w
+                        ),
+                    );
+                }
+                let mut packed: i64 = 0;
+                for k in 0..w {
+                    let key = Self::lane_key(name, k as i64);
+                    if self.vars.get(&key).copied().unwrap_or(0) > 0 {
+                        packed |= 1 << k;
+                    }
+                }
+                Ok(packed)
             }
             Expr::Bin { line, op, a, b } => {
                 if op == "&&" {
@@ -2986,6 +3027,16 @@ impl<'a> ModuleExec<'a> {
                     if sub == "scan" {
                         return fail(*cl, "scan() cannot be nested in a logic call argument");
                     }
+                    if sub == "unpack" || sub == "pack" {
+                        return fail(
+                            *cl,
+                            format!(
+                                "{}() cannot be nested in a logic call argument; \
+                                 assign it to a var first",
+                                sub
+                            ),
+                        );
+                    }
                     arg_keys.push(self.ensure_instance(*cl, sub, args, params)?);
                 }
             }
@@ -3337,6 +3388,64 @@ impl<'a> ModuleExec<'a> {
                     }
                 }
             }
+            SimStmt::Unpack {
+                line,
+                target,
+                value,
+            } => {
+                let w = match self.bus_width(target) {
+                    Some(w) => w,
+                    None if self.vars.contains_key(target) => {
+                        return fail(
+                            *line,
+                            format!(
+                                "unpack(...) target must be a bus var; '{}' is a scalar var \
+                                 (assign the value directly)",
+                                target
+                            ),
+                        )
+                    }
+                    None => return fail(*line, format!("undeclared variable: {}", target)),
+                };
+                if w > 63 {
+                    return fail(
+                        *line,
+                        format!(
+                            "unpack: bus var '{}' width {} > 63 does not fit in one integer",
+                            target, w
+                        ),
+                    );
+                }
+                let v = self.eval_e(value)?;
+                if v < 0 {
+                    return fail(*line, format!("unpack: value must be >= 0 (got {})", v));
+                }
+                // あふれは黙って切り捨てず fail fast(参照モデルのバグを隠さない)。
+                // 上位ビットを意図的に落とすときは明示マスクを書く。w = 63 は i64 の
+                // 非負全域が収まるので検査不要(1 << 63 のあふれ回避を兼ねる)。
+                if w < 63 && v >= (1i64 << w) {
+                    return fail(
+                        *line,
+                        format!(
+                            "unpack: value {} does not fit in bus var '{}' (width {}); \
+                             mask it explicitly (e.g. 'unpack(v % {})')",
+                            v,
+                            target,
+                            w,
+                            1i64 << w
+                        ),
+                    );
+                }
+                // 通常代入のブロードキャストと同じく、書いたレーンのクロックと
+                // 保留中パルスを解除する(値だけレーン別で、規則は §7.6 に揃える)。
+                for k in 0..w {
+                    let key = Self::lane_key(target, k as i64);
+                    let bit = (v >> k) & 1;
+                    self.vars.insert(key.clone(), bit * 15);
+                    self.clocks.remove(&key);
+                    self.pulses.remove(&key);
+                }
+            }
             SimStmt::CallBind {
                 line,
                 targets,
@@ -3358,6 +3467,19 @@ impl<'a> ModuleExec<'a> {
                         );
                     }
                     self.do_scan(*line, &targets[0], bind_args, fmt.as_deref())?;
+                } else if callee == "unpack" {
+                    // 単一 target の unpack はパーサが SimStmt::Unpack にするので、
+                    // ここへ来るのはタプル束縛 `(a, b) = unpack(v);` だけ。
+                    return fail(
+                        *line,
+                        "unpack() writes one whole bus var; use 'x = unpack(v);' \
+                         not a tuple binding",
+                    );
+                } else if callee == "pack" {
+                    return fail(
+                        *line,
+                        "pack(...) is an expression; use it like 'v = pack(x);'",
+                    );
                 } else {
                     if fmt.is_some() {
                         return fail(*line, "format string is only allowed for scan()");
@@ -3470,6 +3592,7 @@ fn expr_to_string(e: &Expr) -> String {
         Expr::Bin { op, a, b, .. } => {
             format!("({} {} {})", expr_to_string(a), op, expr_to_string(b))
         }
+        Expr::Pack { name, .. } => format!("pack({})", name),
     }
 }
 

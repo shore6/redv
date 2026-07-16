@@ -275,6 +275,9 @@ impl Parser {
                     _ => fail(*line, format!("operator '{}' not allowed in a constant expression", op)),
                 }
             }
+            Expr::Pack { line, .. } => {
+                fail(*line, "pack(...) is not allowed in a constant expression")
+            }
             Expr::Bin { line, op, a, b } => {
                 let a = self.eval_const(a)?;
                 let b = self.eval_const(b)?;
@@ -353,7 +356,8 @@ impl Parser {
     /// 式 `e` が `params` 内の名前を参照しているか(再帰)。
     fn expr_refs_logic_param(e: &Expr, params: &HashSet<String>) -> bool {
         match e {
-            Expr::Num { .. } | Expr::Time { .. } => false,
+            // Pack はバス var 参照であって param 参照ではない(幅式では eval_const が拒否する)。
+            Expr::Num { .. } | Expr::Time { .. } | Expr::Pack { .. } => false,
             Expr::Var { name, index, .. } => {
                 if params.contains(name) {
                     return true;
@@ -1385,8 +1389,11 @@ impl Parser {
     }
 
     /// 現在位置が logic 呼び出し `callee (` / `callee #(...)` の先頭か(`=` の直後で使う)。
+    /// `pack` は式 builtin(§7.9)なので呼び出しとは見なさず、代入値の式解析に落とす
+    /// (`x = pack(y);` / `x[0] = pack(y);` を plain Assign として通すため)。
     fn at_callee_invocation(&self) -> bool {
         self.cur().k == Tk::Ident
+            && self.cur().s != "pack"
             && self.peek(1).k == Tk::Punct
             && (self.peek(1).s == "(" || self.peek(1).s == "#")
     }
@@ -1398,6 +1405,31 @@ impl Parser {
         self.i += 1; // skip callee
         let call_params = self.parse_logic_call_params()?; // `#(...)` があれば消費
         self.expect_punct("(")?;
+        // `x = unpack(v);`(§7.9)— 引数は InstArg でなく通常の整数式なのでここで分岐する。
+        // target はレーン / スライス / 連結を取らない(展開は常に全レーンへ書く)。
+        if callee == "unpack" {
+            if !call_params.is_empty() {
+                return fail(ln, "unpack() does not take generic '#(...)' parameters");
+            }
+            let value = self.parse_expr()?;
+            self.expect_punct(")")?;
+            self.expect_punct(";")?;
+            let r = match &target {
+                BindTarget::Ref(r) if matches!(r.sel, Sel::All) => r,
+                _ => {
+                    return fail(
+                        ln,
+                        "unpack(...) writes all lanes; target a whole bus var \
+                         (e.g. 'x = unpack(v);')",
+                    )
+                }
+            };
+            return Ok(SimStmt::Unpack {
+                line: ln,
+                target: r.name.clone(),
+                value,
+            });
+        }
         let mut bind_args = Vec::new();
         // `scan("%x")` のような書式文字列を受理する(scan のみ。
         // 他の callee は ident / ネスト呼び出しの引数列として読む)。
@@ -1562,6 +1594,39 @@ impl Parser {
                 return fail(ln, format!("unknown system variable: ${}", n));
             }
             return Ok(Expr::Time { line: ln });
+        }
+        // `pack(x)` — バス var のブール合成(§7.9)。`pack` 単独は従来どおり変数参照として
+        // 扱い、直後に '(' が続くトークン列(従来は構文エラー)にだけ新式を割り当てる。
+        if self.cur().k == Tk::Ident
+            && self.cur().s == "pack"
+            && self.peek(1).k == Tk::Punct
+            && self.peek(1).s == "("
+        {
+            self.i += 2; // pack (
+            let name = self.expect_ident("bus var name in pack(...)")?;
+            if self.is_punct("[") {
+                return fail(
+                    ln,
+                    format!(
+                        "pack(...) takes a whole bus var (e.g. 'pack({})'); \
+                         read a single lane directly with '{}[k]'",
+                        name, name
+                    ),
+                );
+            }
+            self.expect_punct(")")?;
+            return Ok(Expr::Pack { line: ln, name });
+        }
+        // `unpack(v)` は文(`x = unpack(v);`)専用。式の中では誘導付きで弾く。
+        if self.cur().k == Tk::Ident
+            && self.cur().s == "unpack"
+            && self.peek(1).k == Tk::Punct
+            && self.peek(1).s == "("
+        {
+            return fail(
+                ln,
+                "unpack(...) is a statement, not an expression; write 'x = unpack(v);'",
+            );
         }
         if self.cur().k == Tk::Ident {
             let name = self.cur().s.clone();
