@@ -1325,15 +1325,28 @@ impl Parser {
                              binding (e.g. 'y[3:0] = g(x);')",
                         );
                     }
-                    let sel = Sel::Slice(self.idx_expr_of(idx, ln)?, self.idx_expr_of(lo, ln)?);
+                    // scan のスライス target は interp が専用エラーを出す(issue #147)。
+                    // ここで定数畳み込みすると var 添字が先に「unknown constant」で落ちて
+                    // 本質(スライス不可)が伝わらないため、式のまま素通しする。
+                    let sel = if self.cur().s == "scan" {
+                        Sel::Slice(IdxExpr::Expr(idx), IdxExpr::Expr(lo))
+                    } else {
+                        Sel::Slice(self.idx_expr_of(idx, ln)?, self.idx_expr_of(lo, ln)?)
+                    };
                     return self.parse_call_bind_rest(ln, BindTarget::Ref(BindRef { name, sel }));
                 }
                 self.expect_punct("]")?;
                 self.expect_punct("=")?;
                 // レーンへの logic 束縛(issue #118)。束縛は静的なので添字は定数式に限る
                 // (実行時 var 添字が使える通常のレーン代入と違う点)。
+                // 例外は scan(issue #147): 束縛ではなく毎回の代入なので、通常の
+                // レーン代入と同じく実行時式のまま渡す(ループ変数添字を許す)。
                 if self.at_callee_invocation() {
-                    let sel = Sel::Lane(self.idx_expr_of(idx, ln)?);
+                    let sel = if self.cur().s == "scan" {
+                        Sel::Lane(IdxExpr::Expr(idx))
+                    } else {
+                        Sel::Lane(self.idx_expr_of(idx, ln)?)
+                    };
                     return self.parse_call_bind_rest(ln, BindTarget::Ref(BindRef { name, sel }));
                 }
                 let value = self.parse_expr()?;

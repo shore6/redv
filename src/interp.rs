@@ -2924,6 +2924,7 @@ impl<'a> ModuleExec<'a> {
 
     /// `x = scan();` または `x = scan("%b" | "%x" | "%o" | "%");` —
     /// stdin から空白/改行区切りの整数を 1 つ読み、変数に代入する。
+    /// 対象はスカラ var またはバス var の単一レーン(issue #147)。
     /// 書式を渡すと指定基数(2 / 16 / 8 / 10)で読む。EOF・非数値はエラー。
     fn do_scan(
         &mut self,
@@ -2935,34 +2936,86 @@ impl<'a> ModuleExec<'a> {
         if !bind_args.is_empty() {
             return fail(line, "scan() takes no arguments");
         }
-        // scan は logic 束縛ではないので、レーン / スライス添字(issue #118)や
-        // 連結(issue #123)は対象外。
+        // 1 回の読み込みは 1 値なので、書き先も 1 キー(スカラ / 単一レーン)に限る。
+        // スライス・連結は「1 値を複数レーンへ撒く」形になり、外部入力の取り込みと
+        // しては誤読のもとなのでエラーのまま(通常代入・clock() とも対象に無い)。
         let r = match target {
-            BindTarget::Ref(r) if matches!(r.sel, Sel::All) => r,
-            _ => {
+            BindTarget::Ref(r) => r,
+            BindTarget::Concat(_) => {
                 return fail(
                     line,
                     format!(
-                        "scan() cannot target a bus lane/slice or concatenation '{}'; \
-                         scan into a scalar var",
+                        "scan() cannot target a bus slice or concatenation '{}'; \
+                         scan into a scalar var or a single lane",
                         bind_target_desc(target)
                     ),
                 );
             }
         };
-        let target = r.name.as_str();
-        if self.var_buses.contains_key(target) {
-            return fail(
-                line,
-                format!("scan() cannot target a whole bus var '{}'; scan into a scalar var", target),
-            );
-        }
-        if !self.vars.contains_key(target) {
-            return fail(line, format!("undeclared variable: {}", target));
-        }
+        let key = match &r.sel {
+            Sel::All => match self.bus_width(&r.name) {
+                // バス全体は「W 回読む」「ビット分解」など解釈が割れて自明でない
+                // ため fail fast。ビット分解の意図は unpack(§7.9)で明示的に書ける。
+                Some(_) => {
+                    return fail(
+                        line,
+                        format!(
+                            "scan() cannot target a whole bus var '{}'; \
+                             scan into a scalar then unpack it: 'v = scan(); {} = unpack(v);'",
+                            r.name, r.name
+                        ),
+                    )
+                }
+                None => {
+                    if !self.vars.contains_key(&r.name) {
+                        return fail(line, format!("undeclared variable: {}", r.name));
+                    }
+                    r.name.clone()
+                }
+            },
+            Sel::Lane(ie) => {
+                let w = match self.bus_width(&r.name) {
+                    Some(w) => w as i64,
+                    None => {
+                        return fail(
+                            line,
+                            format!("'{}' is not a bus var; cannot index it", r.name),
+                        )
+                    }
+                };
+                // 添字はパルス代入 / clock() と同じく実行時評価(ループ変数可)。
+                // logic 束縛(bind_target_keys)は定数式規則だが、あれはインスタンス
+                // キーの同一性のための制約であり、インスタンスを持たない scan は不要。
+                let k = match ie {
+                    IdxExpr::Lit(n) => *n as i64,
+                    IdxExpr::Expr(e) => self.eval_e(e)?,
+                };
+                if k < 0 || k >= w {
+                    return fail(
+                        line,
+                        format!("bus var index out of range: {}[{}] (width {})", r.name, k, w),
+                    );
+                }
+                Self::lane_key(&r.name, k)
+            }
+            Sel::Slice(..) => {
+                return fail(
+                    line,
+                    format!(
+                        "scan() cannot target a bus slice or concatenation '{}'; \
+                         scan into a scalar var or a single lane",
+                        bind_target_desc(target)
+                    ),
+                );
+            }
+        };
         let base = parse_scan_fmt(line, fmt)?;
         let v = read_stdin_int(line, base)?;
-        self.vars.insert(target.to_string(), v);
+        // 通常代入と同じ規則で、書いたキーのクロックと保留中パルスを解除する
+        // (§7.7.1 / §7.7.2)。
+        self.vars.insert(key.clone(), v);
+        self.clocks.remove(&key);
+        self.pulses.remove(&key);
         Ok(())
     }
 

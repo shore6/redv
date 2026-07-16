@@ -976,8 +976,13 @@ The value of the var observed in `monitor` reflects "the value applied next tick
 EOF (input exhaustion) or a non-numeric token is an error.
 Variables bound to the circuit are clamped to 0–15 after reading.
 
-The target must be a scalar var.
-Targeting a whole bus var, a lane / slice, or a concatenation (`{x, y}`) is an error.
+The target is a scalar var or a single lane of a bus var (`x[k] = scan()`).
+The lane index is a runtime-evaluated integer expression, same as an ordinary lane assignment (§7.6), so a `for` loop variable can read every lane in turn (`examples/scan_lane.rv`).
+Since scan is a form of assignment, it cancels the clock and any pending pulse on the target var (lane) (§7.7).
+
+Targeting a whole bus var, a slice, or a concatenation (`{x, y}`) is an error.
+A whole bus would admit several interpretations (read once per lane, decompose one value into bits, ...), so instead of picking one implicitly the language requires the explicit form.
+To decompose one value into bits across a bus, write `v = scan(); x = unpack(v);` with unpack (§7.9) in between (the error message suggests this form).
 `scan()` also cannot be nested as an argument of a logic call.
 
 Passing a format string selects the input radix (symmetric with monitor's output formats).
@@ -1479,6 +1484,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/clock_sugar.rv` | Sugar for test clocks: `clock(var, N)` |
 | `examples/clock_duty.rv` | Extended clock(): duty ratio / initial phase / a 4-phase clock on bus lanes |
 | `examples/scan_and.rv` | Reads two values from stdin with `scan()` and feeds them into an AND |
+| `examples/scan_lane.rv` | Reads one value per lane of a bus var with `x[k] = scan()` (runtime index; §7.8) |
 | `examples/until_wait.rv` | `#until(cond)`: event-driven wait that advances ticks until the condition holds |
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets a var to 0 after `w` ticks |
 | `examples/bus_pulse.rv` | Whole-bus pulse assignment: schedule all lanes at once, cancel per lane |

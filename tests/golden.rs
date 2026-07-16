@@ -193,6 +193,13 @@ fn scan_and() {
     run_golden_stdin("scan_and", "15 0\n");
 }
 
+/// scan のレーン対応(issue #147): `x[k] = scan()` はリテラル添字でもループ変数
+/// 添字(実行時評価)でも 1 値をそのレーンへ読む。
+#[test]
+fn scan_lane() {
+    run_golden_stdin("scan_lane", "15 0 8 0\n");
+}
+
 /// monitor / scan の基数書式(issue #77):
 /// `%b` / `%x` / `%o` と `%Nb` / `%0Nb`(ゼロ埋め)・負値は `-` 接頭 + 絶対値で
 /// 基数表記。`scan("%b")` 等で入力側も基数指定できる。
