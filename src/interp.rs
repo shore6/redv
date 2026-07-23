@@ -197,6 +197,10 @@ fn eval_const_expr(
         Expr::Pack { line, .. } => {
             fail(*line, "pack(...) is not allowed in a width / param expression")
         }
+        Expr::Slice { line, name, .. } => fail(
+            *line,
+            format!("cannot slice '{}' in a width / param expression", name),
+        ),
         Expr::Var { line, name, index } => {
             if index.is_some() {
                 return fail(
@@ -255,6 +259,24 @@ fn eval_const_expr(
                     format!("operator '{}' not allowed in a width / param expression", op),
                 ),
             }
+        }
+    }
+}
+
+/// sim 代入系の対象選択(`sim_target_keys` 用)。`SimSel` の借用版で、`clock()` のように
+/// 対象が `Expr`(`Expr::Var` / `Expr::Slice`)で来る経路とも共用する。
+enum TargetSel<'e> {
+    All,
+    Lane(&'e Expr),
+    Slice(&'e Expr, &'e Expr),
+}
+
+impl<'e> From<&'e SimSel> for TargetSel<'e> {
+    fn from(s: &'e SimSel) -> Self {
+        match s {
+            SimSel::All => TargetSel::All,
+            SimSel::Lane(e) => TargetSel::Lane(e),
+            SimSel::Slice(hi, lo) => TargetSel::Slice(hi, lo),
         }
     }
 }
@@ -2319,6 +2341,66 @@ impl<'a> ModuleExec<'a> {
         self.var_buses.get(name).copied()
     }
 
+    /// 同上、ただし添字付き参照用にバスでなければエラー(i64 で返す)。
+    fn bus_width_i64(&self, line: i32, name: &str) -> RvResult<i64> {
+        match self.bus_width(name) {
+            Some(w) => Ok(w as i64),
+            None => fail(line, format!("'{}' is not a bus var; cannot index it", name)),
+        }
+    }
+
+    /// sim 代入系(通常 / パルス代入・`clock()`・`unpack`)と `pack` の対象キー列を
+    /// 解決する(#141 の「対象キー列へ展開してから一律に処理」の共通化)。
+    /// スカラ var / レーンは 1 キー、バス全体は全レーン昇順(全体 = 全レーンへの
+    /// ブロードキャスト)、スライスは §6.3 と同じ並び(hi >= lo で降順)のレーンキー列。
+    /// 並びが意味を持つのは pack / unpack のビット位置対応(位置 i = ビット i)だけで、
+    /// ブロードキャスト系は集合として使う。添字は実行時評価(ループ変数可)。
+    fn sim_target_keys(&self, line: i32, name: &str, sel: TargetSel) -> RvResult<Vec<String>> {
+        match sel {
+            TargetSel::All => match self.bus_width(name) {
+                Some(w) => Ok((0..w).map(|k| Self::lane_key(name, k as i64)).collect()),
+                None => {
+                    if !self.vars.contains_key(name) {
+                        return fail(line, format!("undeclared variable: {}", name));
+                    }
+                    Ok(vec![name.to_string()])
+                }
+            },
+            TargetSel::Lane(e) => {
+                let w = self.bus_width_i64(line, name)?;
+                let k = self.eval_e(e)?;
+                if k < 0 || k >= w {
+                    return fail(
+                        line,
+                        format!("bus var index out of range: {}[{}] (width {})", name, k, w),
+                    );
+                }
+                Ok(vec![Self::lane_key(name, k)])
+            }
+            TargetSel::Slice(hi, lo) => {
+                let w = self.bus_width_i64(line, name)?;
+                let hi = self.eval_e(hi)?;
+                let lo = self.eval_e(lo)?;
+                for k in [hi, lo] {
+                    if k < 0 || k >= w {
+                        return fail(
+                            line,
+                            format!(
+                                "bus var index out of range: {}[{}] (width {})",
+                                name, k, w
+                            ),
+                        );
+                    }
+                }
+                Ok(if hi >= lo {
+                    (lo..=hi).rev().map(|k| Self::lane_key(name, k)).collect()
+                } else {
+                    (hi..=lo).map(|k| Self::lane_key(name, k)).collect()
+                })
+            }
+        }
+    }
+
     pub fn run(&mut self) -> RvResult<()> {
         let m = self.m;
         self.exec_list(&m.pre)?;
@@ -2398,39 +2480,64 @@ impl<'a> ModuleExec<'a> {
                     _ => v,
                 })
             }
-            // `pack(x)` — 各レーンを「非ゼロ = 1」で第 k ビットへ合成する(§7.9)。
-            // ダスト減衰した観測点(強度 1–14)もそのまま 1 と読めるよう、しきい値は > 0。
-            Expr::Pack { line, name } => {
-                let w = match self.var_buses.get(name) {
-                    Some(&w) => w,
-                    None if self.vars.contains_key(name) => {
-                        return fail(
-                            *line,
-                            format!(
-                                "pack(...) takes a bus var; '{}' is a scalar var (use it directly)",
-                                name
-                            ),
-                        )
+            // `pack(x)` / `pack(x[hi:lo])` — レーン列を「非ゼロ = 1」で位置 i = ビット i に
+            // 合成する(§7.9)。全体はレーン k = ビット k、スライスは §6.3 の並び
+            // (降順はビット反転。issue #148)。ダスト減衰した観測点(強度 1–14)も
+            // そのまま 1 と読めるよう、しきい値は > 0。
+            Expr::Pack { line, name, slice } => {
+                let keys = match slice {
+                    Some((hi, lo)) => {
+                        self.sim_target_keys(*line, name, TargetSel::Slice(hi, lo))?
                     }
-                    None => return fail(*line, format!("undeclared variable: {}", name)),
+                    None => {
+                        // 全体形はバス var 限定(スカラ var は「直接読め」と誘導)。
+                        // スライス形の非バス / 未宣言は sim_target_keys が検査する。
+                        if !self.var_buses.contains_key(name) {
+                            return if self.vars.contains_key(name) {
+                                fail(
+                                    *line,
+                                    format!(
+                                        "pack(...) takes a bus var; '{}' is a scalar var \
+                                         (use it directly)",
+                                        name
+                                    ),
+                                )
+                            } else {
+                                fail(*line, format!("undeclared variable: {}", name))
+                            };
+                        }
+                        self.sim_target_keys(*line, name, TargetSel::All)?
+                    }
                 };
-                if w > 63 {
+                if keys.len() > 63 {
                     return fail(
                         *line,
                         format!(
                             "pack: bus var '{}' width {} > 63 does not fit in one integer",
-                            name, w
+                            name,
+                            keys.len()
                         ),
                     );
                 }
                 let mut packed: i64 = 0;
-                for k in 0..w {
-                    let key = Self::lane_key(name, k as i64);
-                    if self.vars.get(&key).copied().unwrap_or(0) > 0 {
-                        packed |= 1 << k;
+                for (i, key) in keys.iter().enumerate() {
+                    if self.vars.get(key).copied().unwrap_or(0) > 0 {
+                        packed |= 1 << i;
                     }
                 }
                 Ok(packed)
+            }
+            // 裸のスライスは整数として読めない(読みは pack で明示する。issue #148)。
+            Expr::Slice { line, name, hi, lo } => {
+                let s = format!("{}[{}:{}]", name, expr_to_string(hi), expr_to_string(lo));
+                fail(
+                    *line,
+                    format!(
+                        "a bus slice '{}' cannot be read as an integer; \
+                         pack the lanes with 'pack({})'",
+                        s, s
+                    ),
+                )
             }
             Expr::Bin { line, op, a, b } => {
                 if op == "&&" {
@@ -2564,7 +2671,8 @@ impl<'a> ModuleExec<'a> {
     /// 0/15 に自動トグルさせる。周期の先頭は Low で、位相 P は「すでに P tick 経過した状態で
     /// 開始」(周期で mod 正規化)。clock() 自体は時刻を進めず、後続の `#n`/`wait`/`#until` が
     /// tick を刻む間にトグルする(パルス代入と同型)。同じ var への通常代入で解除される。
-    /// 第 1 引数はスカラ var・バス var のレーン・バス var 全体(全レーンへブロードキャスト)。
+    /// 第 1 引数はスカラ var・バス var のレーン / スライス・バス var 全体
+    /// (レーン列へのブロードキャスト)。
     fn do_clock(&mut self, line: i32, call: &CallData) -> RvResult<()> {
         if call.has_fmt || call.args.len() < 2 || call.args.len() > 4 {
             return fail(
@@ -2574,36 +2682,18 @@ impl<'a> ModuleExec<'a> {
             );
         }
         // 対象キー列を代入(SimStmt::Assign)と同じ規則で解決する:
-        // レーン指定 / バス全体ブロードキャスト / スカラ。
+        // レーン / スライス指定 / バス全体ブロードキャスト / スカラ(issue #148)。
         let keys: Vec<String> = match &call.args[0] {
-            Expr::Var { name, index: Some(e), .. } => {
-                let w = match self.bus_width(name) {
-                    Some(w) => w as i64,
-                    None => {
-                        return fail(
-                            line,
-                            format!("'{}' is not a bus var; cannot index it", name),
-                        )
-                    }
+            Expr::Var { name, index, .. } => {
+                let sel = match index {
+                    Some(e) => TargetSel::Lane(e),
+                    None => TargetSel::All,
                 };
-                let k = self.eval_e(e)?;
-                if k < 0 || k >= w {
-                    return fail(
-                        line,
-                        format!("bus var index out of range: {}[{}] (width {})", name, k, w),
-                    );
-                }
-                vec![Self::lane_key(name, k)]
+                self.sim_target_keys(line, name, sel)?
             }
-            Expr::Var { name, index: None, .. } => match self.bus_width(name) {
-                Some(w) => (0..w).map(|k| Self::lane_key(name, k as i64)).collect(),
-                None => {
-                    if !self.vars.contains_key(name) {
-                        return fail(line, format!("undeclared variable: {}", name));
-                    }
-                    vec![name.clone()]
-                }
-            },
+            Expr::Slice { name, hi, lo, .. } => {
+                self.sim_target_keys(line, name, TargetSel::Slice(hi, lo))?
+            }
             _ => return fail(line, "clock(...): first argument must be a var name"),
         };
         let hi = self.eval_e(&call.args[1])?;
@@ -3371,50 +3461,15 @@ impl<'a> ModuleExec<'a> {
             SimStmt::Assign {
                 line,
                 target,
-                index,
+                sel,
                 value,
                 pulse,
             } => {
                 let v = self.eval_e(value)?;
-                // 代入先キーを決める: name[idx] / バス全体ブロードキャスト / スカラ。
-                let keys: Vec<String> = match index {
-                    Some(e) => {
-                        let w = match self.bus_width(target) {
-                            Some(w) => w as i64,
-                            None => {
-                                return fail(
-                                    *line,
-                                    format!("'{}' is not a bus var; cannot index it", target),
-                                )
-                            }
-                        };
-                        let k = self.eval_e(e)?;
-                        if k < 0 || k >= w {
-                            return fail(
-                                *line,
-                                format!(
-                                    "bus var index out of range: {}[{}] (width {})",
-                                    target, k, w
-                                ),
-                            );
-                        }
-                        vec![Self::lane_key(target, k)]
-                    }
-                    None => match self.bus_width(target) {
-                        // バス全体への代入は全レーンへブロードキャスト。パルス代入も同じ
-                        // キー列に乗せる(値 v・幅 w を一度評価して全レーンへ同値で予約)。
-                        Some(w) => (0..w).map(|k| Self::lane_key(target, k as i64)).collect(),
-                        None => {
-                            if !self.vars.contains_key(target) {
-                                return fail(
-                                    *line,
-                                    format!("undeclared variable: {}", target),
-                                );
-                            }
-                            vec![target.clone()]
-                        }
-                    },
-                };
+                // 代入先キー列を解決する: レーン / スライス / バス全体ブロードキャスト /
+                // スカラ(#141 の原則)。パルス代入も同じキー列に乗せる(値 v・幅 w を
+                // 一度評価して全キーへ同値で予約)。
+                let keys = self.sim_target_keys(*line, target, sel.into())?;
                 for key in &keys {
                     self.vars.insert(key.clone(), v);
                     // var への代入は、その var に掛かっていたクロックを解除する。
@@ -3444,29 +3499,42 @@ impl<'a> ModuleExec<'a> {
             SimStmt::Unpack {
                 line,
                 target,
+                sel,
                 value,
             } => {
-                let w = match self.bus_width(target) {
-                    Some(w) => w,
-                    None if self.vars.contains_key(target) => {
-                        return fail(
-                            *line,
-                            format!(
-                                "unpack(...) target must be a bus var; '{}' is a scalar var \
-                                 (assign the value directly)",
-                                target
-                            ),
-                        )
+                let keys = match sel {
+                    SimSel::All => {
+                        // 全体形はバス var 限定(スカラ var は直接代入を誘導)。
+                        // スライス形の非バス / 未宣言は sim_target_keys が検査する。
+                        if !self.var_buses.contains_key(target) {
+                            return if self.vars.contains_key(target) {
+                                fail(
+                                    *line,
+                                    format!(
+                                        "unpack(...) target must be a bus var; '{}' is a \
+                                         scalar var (assign the value directly)",
+                                        target
+                                    ),
+                                )
+                            } else {
+                                fail(*line, format!("undeclared variable: {}", target))
+                            };
+                        }
+                        self.sim_target_keys(*line, target, TargetSel::All)?
                     }
-                    None => return fail(*line, format!("undeclared variable: {}", target)),
+                    SimSel::Slice(..) => self.sim_target_keys(*line, target, sel.into())?,
+                    // 単一レーン target はパーサが拒否する(SimSel は Assign と共用)。
+                    SimSel::Lane(_) => unreachable!("parser rejects lane target for unpack"),
                 };
+                let w = keys.len() as i64;
                 if w > 63 {
+                    let what = match sel {
+                        SimSel::All => format!("bus var '{}' width {}", target, w),
+                        _ => format!("slice width {}", w),
+                    };
                     return fail(
                         *line,
-                        format!(
-                            "unpack: bus var '{}' width {} > 63 does not fit in one integer",
-                            target, w
-                        ),
+                        format!("unpack: {} > 63 does not fit in one integer", what),
                     );
                 }
                 let v = self.eval_e(value)?;
@@ -3477,13 +3545,17 @@ impl<'a> ModuleExec<'a> {
                 // 上位ビットを意図的に落とすときは明示マスクを書く。w = 63 は i64 の
                 // 非負全域が収まるので検査不要(1 << 63 のあふれ回避を兼ねる)。
                 if w < 63 && v >= (1i64 << w) {
+                    let what = match sel {
+                        SimSel::All => format!("bus var '{}'", target),
+                        _ => format!("the target slice of '{}'", target),
+                    };
                     return fail(
                         *line,
                         format!(
-                            "unpack: value {} does not fit in bus var '{}' (width {}); \
+                            "unpack: value {} does not fit in {} (width {}); \
                              mask it explicitly (e.g. 'unpack(v % {})')",
                             v,
-                            target,
+                            what,
                             w,
                             1i64 << w
                         ),
@@ -3491,12 +3563,13 @@ impl<'a> ModuleExec<'a> {
                 }
                 // 通常代入のブロードキャストと同じく、書いたレーンのクロックと
                 // 保留中パルスを解除する(値だけレーン別で、規則は §7.6 に揃える)。
-                for k in 0..w {
-                    let key = Self::lane_key(target, k as i64);
-                    let bit = (v >> k) & 1;
+                // ビットは対象レーン列の位置対応(位置 i = ビット i)。スライスの並びは
+                // §6.3 と同じで、降順スライスはビット反転になる(§7.9、issue #148)。
+                for (i, key) in keys.iter().enumerate() {
+                    let bit = (v >> i) & 1;
                     self.vars.insert(key.clone(), bit * 15);
-                    self.clocks.remove(&key);
-                    self.pulses.remove(&key);
+                    self.clocks.remove(key);
+                    self.pulses.remove(key);
                 }
             }
             SimStmt::CallBind {
@@ -3525,7 +3598,7 @@ impl<'a> ModuleExec<'a> {
                     // ここへ来るのはタプル束縛 `(a, b) = unpack(v);` だけ。
                     return fail(
                         *line,
-                        "unpack() writes one whole bus var; use 'x = unpack(v);' \
+                        "unpack() writes one target; use 'x = unpack(v);' \
                          not a tuple binding",
                     );
                 } else if callee == "pack" {
@@ -3645,7 +3718,18 @@ fn expr_to_string(e: &Expr) -> String {
         Expr::Bin { op, a, b, .. } => {
             format!("({} {} {})", expr_to_string(a), op, expr_to_string(b))
         }
-        Expr::Pack { name, .. } => format!("pack({})", name),
+        Expr::Pack { name, slice, .. } => match slice {
+            Some((hi, lo)) => format!(
+                "pack({}[{}:{}])",
+                name,
+                expr_to_string(hi),
+                expr_to_string(lo)
+            ),
+            None => format!("pack({})", name),
+        },
+        Expr::Slice { name, hi, lo, .. } => {
+            format!("{}[{}:{}]", name, expr_to_string(hi), expr_to_string(lo))
+        }
     }
 }
 

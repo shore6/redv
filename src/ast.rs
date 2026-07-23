@@ -252,11 +252,24 @@ pub enum Expr {
         op: String,
         a: Box<Expr>,
     },
-    /// `pack(name)` — バス var の全レーンを「非ゼロ = 1」で第 k ビットへ合成した整数
-    /// (§7.9)。引数は添字なしのバス var 名のみ(レーン / スライスは issue #148 の範囲)。
+    /// `pack(name)` / `pack(name[hi:lo])` — バス var のレーン列を「非ゼロ = 1」で
+    /// 合成した整数(§7.9)。`slice` が `Some((hi, lo))` ならスライスのレーン列
+    /// (§6.3 の並び。位置 i がビット i、降順はビット反転)、`None` は全レーン
+    /// (レーン k がビット k)。単一レーン `pack(x[k])` はパース時エラー(issue #148)。
     Pack {
         line: i32,
         name: String,
+        slice: Option<(Box<Expr>, Box<Expr>)>,
+    },
+    /// `name[hi:lo]` — バス var のスライス参照(issue #148)。単独では整数として
+    /// 評価できず(eval が pack へ誘導するエラーを出す)、`pack(...)` の引数と
+    /// `clock(...)` の第 1 引数などスライスを受ける文脈がパターンマッチで消費する。
+    /// 添字は実行時評価の整数式(§7.6。ループ変数可)。
+    Slice {
+        line: i32,
+        name: String,
+        hi: Box<Expr>,
+        lo: Box<Expr>,
     },
 }
 
@@ -270,7 +283,8 @@ impl Expr {
             | Expr::Time { line }
             | Expr::Bin { line, .. }
             | Expr::Un { line, .. }
-            | Expr::Pack { line, .. } => *line,
+            | Expr::Pack { line, .. }
+            | Expr::Slice { line, .. } => *line,
         }
     }
 }
@@ -284,6 +298,17 @@ pub struct CallData {
     pub args: Vec<Expr>,
 }
 
+/// sim 代入系(通常 / パルス代入・`unpack`)の対象選択。添字は実行時評価の整数式
+/// (§7.6。ループ変数可)で、logic 束縛の `Sel`(定数式 `IdxExpr`)とは解決時期が違う。
+/// `All` はスカラ var、またはバス var の全レーン(#141 の「全体 = 全レーンへの
+/// ブロードキャスト」)。`Slice` は §6.3 と同じ並び(hi >= lo で降順)のレーン列。
+#[derive(Debug, Clone)]
+pub enum SimSel {
+    All,
+    Lane(Box<Expr>),
+    Slice(Box<Expr>, Box<Expr>),
+}
+
 #[derive(Debug, Clone)]
 pub enum SimStmt {
     /// var 宣言。各エントリは (名前, 初期化式, バス幅)。`width` が `Some(n)` なら
@@ -292,25 +317,30 @@ pub enum SimStmt {
         line: i32,
         decls: Vec<(String, Option<Expr>, Option<i32>)>,
     },
-    /// `target[index] = value [~ width]` — var への代入。
+    /// `target[sel] = value [~ width]` — var への代入。
     ///
-    /// `index` が `Some(e)` なら **バス var のレーン** `target[e]` への代入。`None` で
-    /// `target` がバス var の場合は **全レーンへブロードキャスト**(value を各レーンに代入)。
+    /// `sel` が `Lane(e)` なら **バス var のレーン** `target[e]`、`Slice(hi, lo)` なら
+    /// **スライスの各レーン**への一括代入(issue #148)。`All` で `target` がバス var の
+    /// 場合は **全レーンへブロードキャスト**(value を各レーンに代入)。
     /// `pulse` が `Some(width)` のとき **パルス代入**: 代入後 `width` tick 経過すると
     /// 自動的に `target` を 0 に戻す(`width` は実行されたあらゆる tick を数える)。
     Assign {
         line: i32,
         target: String,
-        index: Option<Box<Expr>>,
+        sel: SimSel,
         value: Expr,
         pulse: Option<Expr>,
     },
-    /// `target = unpack(value);` — 整数 value の第 k ビット(0/1)をバス var `target` の
-    /// レーン k へ 0/15 で展開する(§7.9)。通常代入と同じく対象レーンのパルス予約と
-    /// クロックを解除する。target は添字なしのバス var 名のみ。
+    /// `target = unpack(value);` / `target[hi:lo] = unpack(value);` — 整数 value の
+    /// 第 i ビット(0/1)を対象レーン列の位置 i へ 0/15 で展開する(§7.9)。
+    /// 全体形はレーン k がビット k、スライス形は §6.3 の並びで位置対応
+    /// (降順はビット反転。issue #148)。通常代入と同じく対象レーンのパルス予約と
+    /// クロックを解除する。`sel` は `All`(バス var 全体)または `Slice`
+    /// (単一レーンはパース時エラー)。
     Unpack {
         line: i32,
         target: String,
+        sel: SimSel,
         value: Expr,
     },
     /// `(t1, t2, ...) = callee#(P=v, ...)(args)` — sim から logic をインスタンス化する束縛。

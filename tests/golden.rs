@@ -103,6 +103,15 @@ fn pack_unpack() {
     run_golden("pack_unpack");
 }
 
+/// sim バス var のスライス操作(issue #148): 代入 `x[hi:lo] = v;` は対象レーンへの
+/// ブロードキャスト(パルス代入・clock() も同型)、読みは `pack(x[hi:lo])` で明示、
+/// `x[hi:lo] = unpack(v);` は部分幅ビット展開。スライスの並びは回路側 §6.3 と同じ
+/// 「位置 i = ビット i」で、降順はビット反転になることも確認する。
+#[test]
+fn sim_bus_slice() {
+    run_golden("sim_bus_slice");
+}
+
 /// 0tick リピータ(`r0`): 遅延ゼロの組合せ増幅器。r1 と反応タイミングが 1 tick ずれる(issue #37)。
 #[test]
 fn repeater_0tick() {
@@ -1207,6 +1216,60 @@ fn bus_ports_misuse_is_error() {
         ),
     ] {
         let (code, stderr) = run_source(&format!("busport_{tag}"), src);
+        assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
+        assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
+    }
+}
+
+/// sim バス var スライスの **エラー**(issue #148)。裸のスライス読みは pack へ誘導、
+/// 単一レーンの pack / unpack・範囲外・非バスは専用メッセージで落ちる。
+#[test]
+fn sim_slice_misuse_is_error() {
+    for (tag, src, want) in [
+        // 裸のスライスは式として読めない(pack へ誘導。従来は "expected ']'" の構文エラー)
+        (
+            "bare_slice_read",
+            "module m{ var[4] x; var y; sim{ x=0; y = x[3:0]; } }",
+            "cannot be read as an integer; pack the lanes with 'pack(x[3:0])'",
+        ),
+        // pack の単一レーンは従来どおりエラー(直接 x[k] で読める)
+        (
+            "pack_lane",
+            "module m{ var[4] x; sim{ x=0; expect(pack(x[0]), 0); } }",
+            "read a single lane directly",
+        ),
+        // スライス添字の範囲外(実行時評価)
+        (
+            "slice_oor",
+            "module m{ var[4] x; sim{ x[5:0] = 1; } }",
+            "bus var index out of range: x[5] (width 4)",
+        ),
+        // スカラ var へのスライス
+        (
+            "slice_on_scalar",
+            "module m{ var x; sim{ x[1:0] = 1; } }",
+            "is not a bus var; cannot index it",
+        ),
+        // unpack の単一レーン target
+        (
+            "unpack_lane",
+            "module m{ var[4] x; sim{ x[0] = unpack(1); } }",
+            "not a single lane",
+        ),
+        // 部分幅 unpack のあふれ(幅はスライス基準)
+        (
+            "unpack_slice_overflow",
+            "module m{ var[4] x; sim{ x[1:0] = unpack(9); } }",
+            "does not fit in the target slice of 'x' (width 2)",
+        ),
+        // scan のスライス target は従来どおりエラー(issue #147 の合意を維持)
+        (
+            "scan_slice",
+            "module m{ var[4] x; sim{ x[1:0] = scan(); } }",
+            "scan() cannot target a bus slice",
+        ),
+    ] {
+        let (code, stderr) = run_source(&format!("simslice_{tag}"), src);
         assert_eq!(code, Some(1), "{tag}: expected failure, stderr:\n{stderr}");
         assert!(stderr.contains(want), "{tag}: unexpected stderr:\n{stderr}");
     }

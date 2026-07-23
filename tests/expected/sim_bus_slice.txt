@@ -1,0 +1,6 @@
+low2   in=11 out=11
+unpack in=100 out=100
+pulse  t1 in=110
+pulse  t3 in=0
+clock  t2 in=11
+clock  t4 in=0

@@ -278,6 +278,10 @@ impl Parser {
             Expr::Pack { line, .. } => {
                 fail(*line, "pack(...) is not allowed in a constant expression")
             }
+            Expr::Slice { line, name, .. } => fail(
+                *line,
+                format!("cannot slice '{}' in a constant expression", name),
+            ),
             Expr::Bin { line, op, a, b } => {
                 let a = self.eval_const(a)?;
                 let b = self.eval_const(b)?;
@@ -371,6 +375,12 @@ impl Parser {
             Expr::Un { a, .. } => Self::expr_refs_logic_param(a, params),
             Expr::Bin { a, b, .. } => {
                 Self::expr_refs_logic_param(a, params) || Self::expr_refs_logic_param(b, params)
+            }
+            // スライス自体は幅式で不可(eval_const が拒否)だが、参照判定は保守的に添字も見る。
+            Expr::Slice { name, hi, lo, .. } => {
+                params.contains(name)
+                    || Self::expr_refs_logic_param(hi, params)
+                    || Self::expr_refs_logic_param(lo, params)
             }
         }
     }
@@ -1074,6 +1084,18 @@ impl Parser {
         Ok(IdxExpr::Lit(n as i32))
     }
 
+    /// `IdxExpr` を実行時評価の式へ戻す(`idx_expr_of` の逆向き)。sim の unpack のように
+    /// 添字を実行時評価へ揃える経路で、定数畳み込み済みの `Lit` を `Expr::Num` に包む。
+    fn idx_to_expr(ie: &IdxExpr, ln: i32) -> Expr {
+        match ie {
+            IdxExpr::Lit(n) => Expr::Num {
+                line: ln,
+                num: *n as i64,
+            },
+            IdxExpr::Expr(e) => e.clone(),
+        }
+    }
+
     // ---- module ------------------------------------------------------------
 
     fn parse_module(&mut self, prog: &mut Program) -> RvResult<()> {
@@ -1148,20 +1170,27 @@ impl Parser {
     fn parse_assign_no_semi(&mut self) -> RvResult<SimStmt> {
         let ln = self.cur().line;
         let target = self.expect_ident("assignment target")?;
-        let index = if self.is_punct("[") {
+        let sel = if self.is_punct("[") {
             self.i += 1;
             let e = self.parse_expr()?;
-            self.expect_punct("]")?;
-            Some(Box::new(e))
+            if self.is_punct(":") {
+                self.i += 1;
+                let lo = self.parse_expr()?;
+                self.expect_punct("]")?;
+                SimSel::Slice(Box::new(e), Box::new(lo))
+            } else {
+                self.expect_punct("]")?;
+                SimSel::Lane(Box::new(e))
+            }
         } else {
-            None
+            SimSel::All
         };
         self.expect_punct("=")?;
         let value = self.parse_expr()?;
         Ok(SimStmt::Assign {
             line: ln,
             target,
-            index,
+            sel,
             value,
             pulse: None,
         })
@@ -1305,44 +1334,58 @@ impl Parser {
                 let call = self.parse_call()?;
                 return Ok(SimStmt::Call { line: ln, call });
             }
-            // バス var のレーン代入 `name[idx] = value [~ pulse];`、または
-            // レーン / スライスへの logic 束縛 `name[k] = g(...);` / `name[hi:lo] = g(...);`
-            // (issue #118。従来はどちらも構文エラーだったトークン列への純加算)。
+            // バス var のレーン / スライス代入 `name[idx] = value [~ pulse];` /
+            // `name[hi:lo] = value [~ pulse];`(issue #148)、またはレーン / スライスへの
+            // logic 束縛 `name[k] = g(...);` / `name[hi:lo] = g(...);`
+            // (issue #118。従来はいずれも構文エラーだったトークン列への純加算)。
             if self.peek(1).k == Tk::Punct && self.peek(1).s == "[" {
                 self.i += 1; // name
                 self.expect_punct("[")?;
                 let idx = self.parse_expr()?;
-                // スライスは logic 束縛 target 専用(§6.3 は端点 / 束縛 target のみ)。
                 if self.is_punct(":") {
                     self.i += 1;
                     let lo = self.parse_expr()?;
                     self.expect_punct("]")?;
                     self.expect_punct("=")?;
-                    if !self.at_callee_invocation() {
-                        return fail(
-                            ln,
-                            "a bus slice '[..:..]' can only be the target of a logic call \
-                             binding (e.g. 'y[3:0] = g(x);')",
-                        );
+                    if self.at_callee_invocation() {
+                        // scan / unpack はインスタンス束縛ではない(毎回の代入)ので、
+                        // 添字を定数畳み込みせず実行時式のまま渡す(issue #147 / #148)。
+                        // 畳み込むと var 添字が先に「unknown constant」で落ちて本質
+                        // (scan はスライス不可 / unpack はスライス可)が伝わらない。
+                        let sel = if self.cur().s == "scan" || self.cur().s == "unpack" {
+                            Sel::Slice(IdxExpr::Expr(idx), IdxExpr::Expr(lo))
+                        } else {
+                            Sel::Slice(self.idx_expr_of(idx, ln)?, self.idx_expr_of(lo, ln)?)
+                        };
+                        return self
+                            .parse_call_bind_rest(ln, BindTarget::Ref(BindRef { name, sel }));
                     }
-                    // scan のスライス target は interp が専用エラーを出す(issue #147)。
-                    // ここで定数畳み込みすると var 添字が先に「unknown constant」で落ちて
-                    // 本質(スライス不可)が伝わらないため、式のまま素通しする。
-                    let sel = if self.cur().s == "scan" {
-                        Sel::Slice(IdxExpr::Expr(idx), IdxExpr::Expr(lo))
+                    // スライスへの通常 / パルス代入(issue #148):
+                    // 対象レーンへのブロードキャスト(#141 の原則の部分版)。
+                    let value = self.parse_expr()?;
+                    let pulse = if self.is_punct("~") {
+                        self.i += 1;
+                        Some(self.parse_expr()?)
                     } else {
-                        Sel::Slice(self.idx_expr_of(idx, ln)?, self.idx_expr_of(lo, ln)?)
+                        None
                     };
-                    return self.parse_call_bind_rest(ln, BindTarget::Ref(BindRef { name, sel }));
+                    self.expect_punct(";")?;
+                    return Ok(SimStmt::Assign {
+                        line: ln,
+                        target: name,
+                        sel: SimSel::Slice(Box::new(idx), Box::new(lo)),
+                        value,
+                        pulse,
+                    });
                 }
                 self.expect_punct("]")?;
                 self.expect_punct("=")?;
                 // レーンへの logic 束縛(issue #118)。束縛は静的なので添字は定数式に限る
                 // (実行時 var 添字が使える通常のレーン代入と違う点)。
-                // 例外は scan(issue #147): 束縛ではなく毎回の代入なので、通常の
-                // レーン代入と同じく実行時式のまま渡す(ループ変数添字を許す)。
+                // 例外は scan / unpack: 束縛ではなく毎回の代入なので、通常の
+                // レーン代入と同じく実行時式のまま渡す(issue #147 / #148)。
                 if self.at_callee_invocation() {
-                    let sel = if self.cur().s == "scan" {
+                    let sel = if self.cur().s == "scan" || self.cur().s == "unpack" {
                         Sel::Lane(IdxExpr::Expr(idx))
                     } else {
                         Sel::Lane(self.idx_expr_of(idx, ln)?)
@@ -1360,7 +1403,7 @@ impl Parser {
                 return Ok(SimStmt::Assign {
                     line: ln,
                     target: name,
-                    index: Some(Box::new(idx)),
+                    sel: SimSel::Lane(Box::new(idx)),
                     value,
                     pulse,
                 });
@@ -1391,7 +1434,7 @@ impl Parser {
                 return Ok(SimStmt::Assign {
                     line: ln,
                     target: name,
-                    index: None,
+                    sel: SimSel::All,
                     value,
                     pulse,
                 });
@@ -1419,7 +1462,8 @@ impl Parser {
         let call_params = self.parse_logic_call_params()?; // `#(...)` があれば消費
         self.expect_punct("(")?;
         // `x = unpack(v);`(§7.9)— 引数は InstArg でなく通常の整数式なのでここで分岐する。
-        // target はレーン / スライス / 連結を取らない(展開は常に全レーンへ書く)。
+        // target は全体またはスライス(issue #148)。単一レーン / 連結は取らない
+        // (1 レーンへのビット展開は意味を成さず、`x[k] = v;` の直接代入で書ける)。
         if callee == "unpack" {
             if !call_params.is_empty() {
                 return fail(ln, "unpack() does not take generic '#(...)' parameters");
@@ -1427,19 +1471,39 @@ impl Parser {
             let value = self.parse_expr()?;
             self.expect_punct(")")?;
             self.expect_punct(";")?;
-            let r = match &target {
-                BindTarget::Ref(r) if matches!(r.sel, Sel::All) => r,
-                _ => {
+            let (name, sel) = match &target {
+                BindTarget::Ref(r) => match &r.sel {
+                    Sel::All => (r.name.clone(), SimSel::All),
+                    // 添字はタプル形 `(x[3:0]) = unpack(v);` 経由だと定数畳み込み済み
+                    // (`IdxExpr::Lit`)のことがあるため、Expr へ戻して実行時評価に揃える。
+                    Sel::Slice(hi, lo) => (
+                        r.name.clone(),
+                        SimSel::Slice(
+                            Box::new(Self::idx_to_expr(hi, ln)),
+                            Box::new(Self::idx_to_expr(lo, ln)),
+                        ),
+                    ),
+                    Sel::Lane(_) => {
+                        return fail(
+                            ln,
+                            "unpack(...) writes whole lanes; target a bus var or a slice \
+                             (e.g. 'x = unpack(v);' / 'x[3:0] = unpack(v);'), \
+                             not a single lane",
+                        )
+                    }
+                },
+                BindTarget::Concat(_) => {
                     return fail(
                         ln,
-                        "unpack(...) writes all lanes; target a whole bus var \
-                         (e.g. 'x = unpack(v);')",
+                        "unpack(...) cannot target a concatenation; \
+                         target a bus var or a slice (e.g. 'x[3:0] = unpack(v);')",
                     )
                 }
             };
             return Ok(SimStmt::Unpack {
                 line: ln,
-                target: r.name.clone(),
+                target: name,
+                sel,
                 value,
             });
         }
@@ -1617,18 +1681,33 @@ impl Parser {
         {
             self.i += 2; // pack (
             let name = self.expect_ident("bus var name in pack(...)")?;
+            // スライス `pack(x[hi:lo])` は対象レーン列の合成(issue #148)。
+            // 単一レーンは pack する意味がない(`x[k]` で直接読める)ので従来どおりエラー。
+            let mut slice = None;
             if self.is_punct("[") {
-                return fail(
-                    ln,
-                    format!(
-                        "pack(...) takes a whole bus var (e.g. 'pack({})'); \
-                         read a single lane directly with '{}[k]'",
-                        name, name
-                    ),
-                );
+                self.i += 1;
+                let hi = self.parse_expr()?;
+                if !self.is_punct(":") {
+                    return fail(
+                        ln,
+                        format!(
+                            "pack(...) takes a whole bus var or a slice (e.g. 'pack({})' / \
+                             'pack({}[3:0])'); read a single lane directly with '{}[k]'",
+                            name, name, name
+                        ),
+                    );
+                }
+                self.i += 1;
+                let lo = self.parse_expr()?;
+                self.expect_punct("]")?;
+                slice = Some((Box::new(hi), Box::new(lo)));
             }
             self.expect_punct(")")?;
-            return Ok(Expr::Pack { line: ln, name });
+            return Ok(Expr::Pack {
+                line: ln,
+                name,
+                slice,
+            });
         }
         // `unpack(v)` は文(`x = unpack(v);`)専用。式の中では誘導付きで弾く。
         if self.cur().k == Tk::Ident
@@ -1645,9 +1724,23 @@ impl Parser {
             let name = self.cur().s.clone();
             self.i += 1;
             // バス var のレーン参照 `name[expr]`(添字は実行時に評価)。
+            // `:` が続けばスライス `name[hi:lo]`(issue #148)。単独では読めないが、
+            // 専用の評価時エラー(pack へ誘導)と pack / clock の引数受理のために
+            // ここで一般に受理する(従来は "expected ']'" の構文エラーだった)。
             let index = if self.is_punct("[") {
                 self.i += 1;
                 let e = self.parse_expr()?;
+                if self.is_punct(":") {
+                    self.i += 1;
+                    let lo = self.parse_expr()?;
+                    self.expect_punct("]")?;
+                    return Ok(Expr::Slice {
+                        line: ln,
+                        name,
+                        hi: Box::new(e),
+                        lo: Box::new(lo),
+                    });
+                }
                 self.expect_punct("]")?;
                 Some(Box::new(e))
             } else {
