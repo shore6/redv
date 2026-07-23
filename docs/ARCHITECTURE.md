@@ -450,6 +450,14 @@ target はスカラ var かバス var の単一レーン(issue #147)。logic 束
 sim 内で `pack` を logic 呼び出しの callee として使うことはできなくなる(scan / clock と同じ
 builtin 名の遮蔽)。
 
+sim 代入系の対象(スカラ / レーン / スライス / バス全体)は `sim_target_keys` が var キー列へ
+解決し、通常 / パルス代入(`SimStmt::Assign` の `SimSel`)・`do_clock`・unpack・pack が共用する
+(issue #148。「対象キー列へ展開してから一律に処理」の共通化)。添字は `eval_e` の実行時評価で、
+スライスは §6.3 と同じ並び(hi >= lo で降順)のキー列になる。並びが意味を持つのは pack / unpack
+のビット位置対応(位置 i = ビット i。降順はビット反転)だけで、ブロードキャスト系は集合として使う。
+裸のスライス式(`Expr::Slice`)は `eval_e` が pack へ誘導する専用エラーを出し、pack の引数と
+`clock()` の第 1 引数だけがパターンマッチで消費する。scan は #147 の合意どおりスライスを弾く。
+
 ---
 
 ## 6. データモデルの要点

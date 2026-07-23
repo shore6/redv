@@ -105,6 +105,7 @@ For the full list, see [docs/LANGUAGE.en.md §12](docs/LANGUAGE.en.md).
 | `examples/stdmem_generic.rv` | Generic widths in stdmem: `s_register#(W=4)` and friends widen the data path to 4 bits |
 | `examples/assert_selfcheck.rv` | Self-checking testbench: `assert` / `expect` return the result via exit code |
 | `examples/pack_unpack.rv` | Integer ⇔ bus bit conversion (`x = unpack(v);` / `pack(x)`) for exhaustive checks against a reference model |
+| `examples/sim_bus_slice.rv` | Slices on sim bus vars: assignment / pulse / clock / pack / unpack over a lane range |
 | `examples/lint_demo.rv` | Demo that fires all 5 design-rule-check (lint) warnings |
 | `examples/vcd_demo.rv` | Demo of dumping the waveform as VCD via `--vcd` |
 | `examples/vcd_generic.rv` | Demo of observing generic logic instance ports in the trace / VCD |

@@ -1,0 +1,59 @@
+/* sim バス var のスライス操作(§7.6 / §7.9、issue #148)。
+   - 代入 `x[hi:lo] = v;` は対象レーンへのブロードキャスト(パルス代入・clock も同型)
+   - 読みは pack で明示する: `pack(x[hi:lo])` はスライスのレーン列を位置 i = ビット i で合成
+   - スライスの並びは回路側 §6.3 と同じで、降順 `x[3:0]` はビット反転になる
+   - `x[hi:lo] = unpack(v);` は部分幅のビット展開(こちらも位置対応) */
+logic buf4(input[4] x, output[4] y)
+{
+    x - r - y;                        // 各レーンにリピータ = 1 tick 遅れのバッファ
+}
+
+module test_sim_bus_slice
+{
+    var[4] a;
+    var[4] y;
+    sim {
+        a = 0;
+        y = buf4(a);
+        #init
+
+        // 下位 2 レーンだけ一括で立てる(残りは 0 のまま)
+        a[1:0] = 15;
+        #2
+        monitor("low2   in=%b out=%b\n", pack(a), pack(y));
+
+        // 部分幅 unpack: 上位 2 レーンへ 0b10 を展開
+        // (降順 [3:2] なので位置対応は a[3] = ビット 0、a[2] = ビット 1 → a = 0b0100)
+        a = 0;
+        a[3:2] = unpack(0b10);
+        #2
+        monitor("unpack in=%b out=%b\n", pack(a), pack(y));
+
+        // pack の昇順 / 降順: 昇順はレーン k = ビット k、降順はビット反転
+        a = unpack(0b0011);
+        #2
+        expect(pack(y[0:3]), 0b0011);
+        expect(pack(y[3:0]), 0b1100);
+
+        // スライスの添字は実行時評価(ループ変数可)。窓をずらして 2 レーンずつ検証する
+        var i;
+        a = unpack(0b1111);
+        #2
+        for (i = 0; i < 3; i = i + 1) {
+            expect(pack(y[i+1:i]), 0b11);
+        }
+
+        // パルス代入とクロックもスライスに掛かる(状態はレーン単位)
+        a = 0;
+        a[2:1] = 15 ~ 2;              // 2 tick だけ中央 2 レーンを立てる
+        #1
+        monitor("pulse  t1 in=%b\n", pack(a));
+        #2
+        monitor("pulse  t3 in=%b\n", pack(a));
+        clock(a[1:0], 2);             // 下位 2 レーンだけ周期 4 のクロック
+        #2
+        monitor("clock  t2 in=%b\n", pack(a));
+        #2
+        monitor("clock  t4 in=%b\n", pack(a));
+    }
+}
