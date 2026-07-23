@@ -619,6 +619,7 @@ The whole-bus name supplies lanes in ascending index order `[0..N)` (same as a r
 Use a slice `x[hi:lo]` to control the bit order explicitly.
 
 Slices and concatenations can appear at chain endpoints and in logic call arguments / bind targets (§5.4, §5.5, §7.3).
+Bus vars in sim also accept slices (assignment, pack / unpack, and clock; §7.6, §7.9).
 They cannot appear in intermediate chunks or in a component assignment `=`.
 Concatenation elements may not carry `.side` or nest as `{{..}}` (in call arguments / targets, nested calls are also not allowed).
 Out-of-range indices and slices on non-bus names are errors.
@@ -913,15 +914,17 @@ However, variables bound to the circuit are clamped to 0–15 on input applicati
 ```rv
 var[4] x;
 x[0] = 15;                     // Per-lane assignment (the index is a runtime integer expression)
+x[2:1] = 7;                    // Bulk assignment to each lane of a slice
 x = 0;                         // Broadcast to all lanes (one-shot clear)
 ```
 
 Bus var usage rules:
 
 - Per-lane read/write uses the form `x[k]` (the index is a runtime expression; `for`-loop variables are fine)
-- Using the bare name `x` in a scalar expression is an error (a lane must be specified; to compose the lanes into one integer, use `pack(x)`, §7.9)
+- A slice `x[hi:lo]` can be an assignment target (a broadcast to each lane). The indices are runtime integer expressions like lane indices, and the range is the same inclusive interval as §6.3
+- Using the bare name `x` or a bare slice `x[hi:lo]` in a scalar expression is an error (composing the lanes into one integer must be explicit: `pack(x)` / `pack(x[hi:lo])`, §7.9)
 - `x = expr;` broadcasts to all lanes (`x = 0;` clears them in one shot)
-- `x = unpack(v);` expands the integer `v` bit-by-bit onto the lanes (§7.9)
+- `x = unpack(v);` expands the integer `v` bit-by-bit onto the lanes (the slice form `x[hi:lo] = unpack(v);` also works; §7.9)
 
 ### 7.7 Pulse Assignment and Clock Generation
 
@@ -937,8 +940,8 @@ x = 10 ~ 3;                    // Hold x = 10 for 3 ticks, then x = 0
 `w` is an integer ≥ 1 (an expression is fine; it is evaluated at assignment time).
 The tick count covers any ticks the sim executes (`#n` / `wait(n)` / `#init`).
 
-The target is a scalar var, a lane of a bus var (`x[0] = v ~ w;`), or a whole bus var.
-A pulse assignment to a whole bus var assigns the value to every lane and schedules "reset to 0 after `w` ticks" on each lane, following the same rule as the regular-assignment broadcast (§7.6).
+The target is a scalar var, a lane of a bus var (`x[0] = v ~ w;`), a slice (`x[2:1] = v ~ w;`), or a whole bus var.
+A pulse assignment to a whole bus var or a slice assigns the value to the target lanes and schedules "reset to 0 after `w` ticks" on each lane, following the same rule as the regular-assignment broadcast (§7.6).
 The value and the width are evaluated once; every lane receives the same value and the same width.
 The reservations are held per lane, so a regular assignment to one lane cancels only that lane's reservation (`examples/bus_pulse.rv`).
 
@@ -959,8 +962,8 @@ Omitting `M` makes it equal to `N`, so the classic form `clock(var, N)` runs at 
 `P` is an integer ≥ 0 (expressions allowed); values ≥ the period N + M are normalized by mod.
 `P = M` points at the start of High, giving a High-starting clock.
 
-The first argument is a scalar var, a lane of a bus var (`clock(x[0], N)`), or a whole bus var (`clock(x, N)`).
-A whole bus var broadcasts to every lane, just like pulse assignment, putting a clock of the same period and phase on each lane.
+The first argument is a scalar var, a lane of a bus var (`clock(x[0], N)`), a slice (`clock(x[1:0], N)`), or a whole bus var (`clock(x, N)`).
+A whole bus var and a slice broadcast to the target lanes, just like pulse assignment, putting a clock of the same period and phase on each lane.
 Clocks are held per lane, so a later single-lane `clock(x[k], ...)` re-clocks just that lane.
 Shifting the phase per lane yields a multi-phase clock (`examples/clock_duty.rv`).
 
@@ -1013,7 +1016,7 @@ expect(pack(a), 5);            // reads each lane as 0/1 and returns the compose
 
 **Expansion (`x = unpack(v);`)** is a statement.
 It writes bit k (0 / 1) of the integer expression `v` to lane `x[k]` as 0 / 15.
-The target must be a bare bus var name; scalar vars, lanes, and slices are not accepted.
+The target is a bare bus var name or a slice `x[hi:lo]` (see below); scalar vars and single lanes are not accepted.
 Like the broadcast of a regular assignment (§7.6), it cancels pending pulses (§7.7.1) and clocks (§7.7.2) on the lanes it writes.
 
 A negative `v`, or `v >= 2^W` (W = bus width), is an error.
@@ -1028,7 +1031,14 @@ Using a bare bus var by itself in an expression is still an error (§7.6).
 `pack` returns a plain integer, so `monitor("%b\n", pack(x))` prints 1 bit per lane in binary.
 Passing a bus var directly to monitor composes nibbles instead (§7.4.1, 4 bits per lane) — a different conversion rule.
 
-Bus vars wider than 63 lanes do not fit in an i64 and are an error for both `pack` and `unpack`.
+**The slice forms (`pack(x[hi:lo])` and `x[hi:lo] = unpack(v);`)** take the same lane list as §6.3 (descending when `hi >= lo`), and position i of the list corresponds to bit i (`examples/sim_bus_slice.rv`).
+An ascending `pack(x[0:3])` maps lane k to bit k like the whole-bus form, while a descending `pack(x[3:0])` reverses the bits.
+Binding a slice to a bus input port on the circuit side fills the port's lanes in the same order (reversing the order reverses the bit order, §6.3); this rule keeps the sim-side `pack` consistent with reading that port.
+Slice indices are runtime integer expressions like lane indices (§7.6), so `for`-loop variables are fine.
+A single-lane `pack(x[k])` is an error (read `x[k]` directly).
+
+Bus vars wider than 63 lanes do not fit in an i64 and are an error for the whole-bus forms of `pack` and `unpack`.
+The slice forms are judged by the sliced width (the unpack overflow check as well), so a slice of at most 63 lanes works even on a wider bus var.
 
 ---
 
@@ -1489,6 +1499,7 @@ All of them run with `cargo run -- examples/foo.rv` and are exercised by the gol
 | `examples/pulse.rv` | Pulse assignment (`a = v ~ w;`) auto-resets a var to 0 after `w` ticks |
 | `examples/bus_pulse.rv` | Whole-bus pulse assignment: schedule all lanes at once, cancel per lane |
 | `examples/pack_unpack.rv` | Integer ⇔ bus bit conversion (`x = unpack(v);` / `pack(x)`) for exhaustive checks against a reference model (§7.9) |
+| `examples/sim_bus_slice.rv` | Slices on sim bus vars: assignment / pulse / clock / pack / unpack over a lane range (§7.6, §7.9) |
 | `examples/lint_demo.rv` | Fires all 5 design-rule-check (lint) warnings; `-W error` turns them into a non-zero exit (§10.4) |
 
 ### 12.4 Buses and `param`
